@@ -1,0 +1,364 @@
+{
+  "sections": [{
+    "text": "Model-based reinforcement learning (RL) algorithms can attain excellent sample efficiency, but often lag behind the best model-free algorithms in terms of asymptotic performance. This is especially true with high-capacity parametric function approximators, such as deep networks. In this paper, we study how to bridge this gap, by employing uncertainty-aware dynamics models. We propose a new algorithm called probabilistic ensembles with trajectory sampling (PETS) that combines uncertainty-aware deep network dynamics models with sampling-based uncertainty propagation. Our comparison to state-of-the-art model-based and model-free deep RL algorithms shows that our approach matches the asymptotic performance of model-free algorithms on several challenging benchmark tasks, while requiring significantly fewer samples (e.g., 8 and 125 times fewer samples than Soft Actor Critic and Proximal Policy Optimization respectively on the half-cheetah task)."
+  }, {
+    "heading": "1 Introduction",
+    "text": "Reinforcement learning (RL) algorithms provide for an automated framework for decision making and control: by specifying a high-level objective function, an RL algorithm can, in principle, automatically learn a control policy that satisfies this objective. This has the potential to automate a range of applications, such as autonomous vehicles and interactive conversational agents. However, current model-free reinforcement learning algorithms are quite expensive to train, which often limits their application to simulated domains [Mnih et al., 2015, Lillicrap et al., 2016, Schulman et al., 2017], with a few exceptions [Kober and Peters, 2009, Levine et al., 2016]. A promising direction for reducing sample complexity is to explore model-based reinforcement learning (MBRL) methods, which proceed by first acquiring a predictive model of the world, and then using that model to make decisions [Atkeson and Santamaría, 1997, Kocijan et al., 2004, Deisenroth et al., 2014]. MBRL is appealing because the dynamics model is reward-independent and therefore can generalize to new tasks in the same environment, and it can easily benefit from all of the advances in deep supervised learning to utilize high-capacity models. However, the asymptotic performance of MBRL methods on common benchmark tasks generally lags behind model-free methods. That is, although MBRL methods tend to learn more quickly, they also tend to converge to less optimal solutions.\nIn this paper, we take a step toward narrowing the gap between model-based and model-free RL methods. Our approach is based on several observations that, though relatively simple, are critical for good performance. We first observe that model capacity is a critical ingredient in the success of MBRL methods: while efficient models such as Gaussian processes can learn extremely quickly, they struggle to represent very complex and discontinuous dynamical systems [Calandra et al., 2016]. By contrast, neural network (NN) models can scale to large datasets with high-dimensional inputs, and can represent such systems more effectively. However, NNs struggle with the opposite problem:\n32nd Conference on Neural Information Processing Systems (NIPS 2018), Montréal, Canada.\nar X\niv :1\n80 5.\n12 11\n4v 2\n[ cs\n.L G\n] 2\nN ov\nto learn fast means to learn with few data and NNs tend to overfit on small datasets, making poor predictions far into the future. For this reason, MBRL with NNs has proven exceptionally challenging.\nOur second observation is that this issue can, to a large extent, be mitigated by properly incorporating uncertainty into the dynamics model. While a number of prior works have explored uncertainty-aware deep neural network models [Neal, 1995, Lakshminarayanan et al., 2017], including in the context of RL [Gal et al., 2016, Depeweg et al., 2016], our work is, to our knowledge, the first to bring these components together in a deep MBRL framework that reaches the asymptotic performance of state-of-the-art model-free RL methods on benchmark control tasks.\nOur main contribution is an MBRL algorithm called probabilistic ensembles with trajectory sampling (PETS)1 summarized in Figure 1 with high-capacity NN models that incorporate uncertainty via an ensemble of bootstrapped models, where each model encodes distributions (as opposed to point predictions), rivaling the performance of model-free methods on standard benchmark control tasks at a fraction of the sample complexity. An advantage of PETS over prior probabilistic MBRL algorithms is an ability to isolate two distinct classes of uncertainty: aleatoric (inherent system stochasticity) and epistemic (subjective uncertainty, due to limited data). Isolating epistemic uncertainty is especially useful for directing exploration [Thrun, 1992], although we leave this for future work. Finally, we present a systematic analysis of how incorporating uncertainty into MBRL with NNs affects performance, during both model training and planning. We show, that PETS’ particular treatment of uncertainty significantly reduces the amount of data required to learn a task, e.g., eight times fewer data on half-cheetah compared to the model-free Soft Actor Critic algorithm [Haarnoja et al., 2018]."
+  }, {
+    "heading": "2 Related work",
+    "text": "Model choice in MBRL is delicate: we desire effective learning in both low-data regimes (at the beginning) and high-data regimes (in the later stages of the learning process). For this reason, Bayesian nonparametric models, such as Gaussian processes (GPs), are often the model of choice in MBRL, especially in low-dimensional problems where data efficiency is critical [Kocijan et al., 2004, Ko et al., 2007, Nguyen-Tuong et al., 2008, Grancharova et al., 2008, Deisenroth et al., 2014, Kamthe and Deisenroth, 2018]. However, such models introduce additional assumptions on the system, such as the smoothness assumption inherent in GPs with squared-exponential kernels [Rasmussen and Kuss, 2003]. Parametric function approximators have also been used extensively in MBRL [Hernandaz and Arkun, 1990, Miller et al., 1990, Lin, 1992, Draeger et al., 1995], but were largely supplanted by Bayesian models in recent years. Methods based on local models, such as guided policy search algorithms [Levine et al., 2016, Finn et al., 2016, Chebotar et al., 2017], can efficiently train NN policies, but use time-varying linear models, which only locally model the system dynamics. Recent improvements in parametric function approximators, such as NNs, suggest that such methods are worth revisiting [Baranes and Oudeyer, 2013, Fu et al., 2016, Punjani and Abbeel, 2015, Lenz et al., 2015, Agrawal et al., 2016, Gal et al., 2016, Depeweg et al., 2016, Williams et al., 2017, Nagabandi et al., 2017]. Unlike Gaussian processes, NNs have constant-time inference and tractable training in the large data regime, and have the potential to represent more complex functions, including non-\n1Code available https://github.com/kchua/handful-of-trials\nsmooth dynamics that are often present in robotics [Fu et al., 2016, Mordatch et al., 2016, Nagabandi et al., 2017]. However, most works that use NNs focus on deterministic models, consequently suffering from overfitting in the early stages of learning. For this reason, our approach is able to achieve even higher data-efficiency than prior deterministic MBRL methods such as Nagabandi et al. [2017].\nConstructing good Bayesian NN models remains an open problem [MacKay, 1992, Neal, 1995, Osband, 2016, Guo et al., 2017], although recent promising work exists on incorporating dropout [Gal et al., 2017], ensembles [Osband et al., 2016, Lakshminarayanan et al., 2017], and α-divergence [Hernández-Lobato et al., 2016]. Such probabilistic NNs have previously been used for control, including using dropout Gal et al. [2016], Higuera et al. [2018] and α-divergence Depeweg et al. [2016]. In contrast to these prior methods, our experiments focus on more complex tasks with challenging dynamics – including contact discontinuities – and we compare directly to prior model-based and model-free methods on standard benchmark problems, where our method exhibits asymptotic performance that is comparable to model-free approaches."
+  }, {
+    "heading": "3 Model-based reinforcement learning",
+    "text": "We now detail the MBRL framework and the notation used. Adhering to the Markov decision process formulation [Bellman, 1957], we denote the state s ∈ Rds and the actions a ∈ Rda of the system, the reward function r(s,a), and we consider the dynamic systems governed by the transition function fθ : Rds+da 7→ Rds such that given the current state st and current input at, the next state st+1 is given by st+1 = f (st,at). For probabilistic dynamics, we represent the conditional distribution of the next state given the current state and action as some parameterized distribution family: fθ(st+1|st,at) = Pr(st+1|st,at;θ), overloading notation. Learning forward dynamics is thus the task of fitting an approximation f̃ of the true transition function f , given the measurements D = {(sn,an), sn+1}Nn=1 from the real system.\nOnce a dynamics model f̃ is learned, we use f̃ to predict the distribution over state-trajectories resulting from applying a sequence of actions. By computing the expected reward over statetrajectories, we can evaluate multiple candidate action sequences, and select the optimal action sequence to use. In Section 4 we discuss multiple methods for modeling the dynamics, and in Section 5 we detail how to compute the distribution over state-trajectories given a candidate action sequence."
+  }, {
+    "heading": "4 Uncertainty-aware neural network dynamics models",
+    "text": "This section describes several ways to model the task’s true (but unknown) dynamic function, including our method: an ensemble of bootstrapped probabilistic neural networks. Whilst uncertaintyaware dynamics models have been explored in a number of prior works [Gal et al., 2016, Depeweg et al., 2016], the particular details of the implementation and design decisions in regard incorporation of uncertainty have not been rigorously analyzed empirically. As a result, prior work has generally\nfound that expressive parametric models, such as deep neural networks, generally do not produce model-based RL algorithms that are competitive with their model-free counterparts in terms of asymptotic performance [Nagabandi et al., 2017], and often even found that simpler time-varying linear models can outperform expressive neural network models [Levine et al., 2016, Gu et al., 2016].\nAny MBRL algorithm must select a class of model to predict the dynamics. This choice is often crucial for an MBRL algorithm, as even small bias can significantly influence the quality of the corresponding controller [Atkeson and Santamaría, 1997, Abbeel et al., 2006]. A major challenge is building a model that performs well in low and high data regimes: in the early stages of training, data is scarce, and highly expressive function approximators are liable to overfit; In the later stages of training, data is plentiful, but for systems with complex dynamics, simple function approximators might underfit. While Bayesian models such as GPs perform well in low-data regimes, they do not scale favorably\nwith dimensionality and often use kernels ill-suited for discontinuous dynamics [Calandra et al., 2016], which is typical of robots interacting through contacts.\nIn this paper, we study how expressive NNs can be incorporated into MBRL. To account for uncertainty, we study NNs that model two types of uncertainty. The first type, aleatoric uncertainty, arises from inherent stochasticities of a system, e.g. observation noise and process noise. Aleatoric uncertainty can be captured by outputting the parameters of a parameterized distribution, while still training the network discriminatively. The second type – epistemic uncertainty – corresponds to subjective uncertainty about the dynamics function, due to a lack of sufficient data to uniquely determine the underlying system exactly. In the limit of infinite data, epistemic uncertainty should vanish, but for datasets of finite size, subjective uncertainty remains when predicting transitions. It is precisely the subjective epistemic uncertainty which Bayesian modeling excels at, which helps mitigate overfitting. Below, we describe how we use combinations of ‘probabilistic networks’ to capture aleatoric uncertainty and ‘ensembles’ to capture epistemic uncertainty. Each combination is summarized in Table 1.\nProbabilistic neural networks (P) We define a probabilistic NN as a network whose output neurons simply parameterize a probability distribution function, capturing aleatoric uncertainty, and should not be confused with Bayesian inference. We use the negative log prediction probability as our loss function lossP(θ) = − ∑N n=1 log f̃θ(sn+1|sn,an). For example, we might define our predictive model to output a Gaussian distribution with diagonal covariances parameterized by θ and conditioned on sn and an, i.e.: f̃ = Pr(st+1|st,at) = N (µθ(st,at),Σθ(st,at)). Then the loss becomes\nlossGauss(θ)= N∑ n=1 [µθ(sn,an)−sn+1]>Σ−1θ (sn,an)[µθ(sn,an)−sn+1]+log detΣθ(sn,an). (1)\nSuch network outputs, which in our particular case parameterizes a Gaussian distribution, models aleatoric uncertainty, otherwise known as heteroscedastic noise (meaning the output distribution is a function of the input). However, it does not model epistemic uncertainty, which cannot be captured with purely discriminative training. Choosing a Gaussian distribution is a common choice for continuous-valued states, and reasonable if we assume that any stochasticity in the system is unimodal. However, in general, any tractable distribution class can be used. To provide for an expressive dynamics model, we can represent the parameters of this distribution (e.g., the mean and covariance of a Gaussian) as nonlinear, parametric functions of the current state and action, which can be arbitrarily complex but deterministic. This makes it feasible to incorporate NNs into a probabilistic dynamics model even for high-dimensional and continuous states and actions. Finally, an under-appreciated detail of probabilistic networks is that their variance has arbitrary values for out-of-distribution inputs, which can disrupt planning. We discuss how to mitigate this issue in Appendix A.1.\nDeterministic neural networks (D) For comparison, we define a deterministic NN as a specialcase probabilistic network that outputs delta distributions centered around point predictions denoted as f̃θ(st,at): f̃θ(st+1|st,at) = Pr(st+1|st,at) = δ(st+1 − f̃θ(st,at)), trained using the MSE loss: lossD(θ) = ∑N n=1 ‖sn+1 − f̃θ(sn,an)‖. Although MSE can be interpreted as lossP(θ) with a Gaussian model of fixed unit variance, in practice this variance cannot be used for uncertainty-aware propagation, since it does not correspond to any notion of uncertainty (e.g., a deterministic model with infinite data would be adding variance to particles for no good reason).\nEnsembles (DE and PE) A principled means to capture epistemic uncertainty is with Bayesian inference. Whilst accurate Bayesian NN inference is possible with sufficient compute [Neal, 1995], approximate inference methods [Blundell et al., 2015, Gal et al., 2017, Hernández-Lobato and Adams, 2015] have enjoyed recent popularity given their simpler implementation and faster training times. Ensembles of bootstrapped models are even simpler still: given a base model, no additional (hyper-)parameters need be tuned, whilst still providing reasonable uncertainty estimates [Efron and Tibshirani, 1994, Osband, 2016, Kurutach et al., 2018]. We consider ensembles of B-many bootstrap models, using θb to refer to the parameters of our bth model f̃θb . Ensembles can be composed of deterministic models (DE) or probabilistic models (PE) – as done by Lakshminarayanan et al. [2017] – both of which define predictive probability distributions: f̃θ = 1B ∑B b=1 f̃θb . A visual example is provided in Appendix A.2. Each of our bootstrap models have their unique dataset Db, generated by\nsampling (with replacement) N times the dynamics dataset recorded so far D, where N is the size of D. We found B = 5 sufficient for all our experiments. To validate the number of layers and neurons of our models, we can visualize one-step predictions (e.g. Appendix A.3)."
+  }, {
+    "heading": "5 Planning and control with learned dynamics",
+    "text": "This section describes different ways uncertainty can be incorporated into planning using probabilistic dynamics models. Once a model f̃θ is learned, we can use it for control by predicting the future outcomes of candidate policies or actions and then selecting the particular candidate that is predicted to result in the highest reward. MBRL planning in discrete time over long time horizons is generally performed by using the dynamics model to recursively predict how an estimated Markov state will evolve from one time step to the next, e.g.: st+2 ∼ Pr(st+2|st+1,at+1) where st+1 ∼ Pr(st+1|st,at). When planning, we might consider each action at to be a function of state, forming a policy π : st → at, a function to optimize. Alternatively, we can plan and optimize for a sequence of actions, a process called model predictive control (MPC) [Camacho and Alba, 2013]. We use MPC in our own experiments for several reasons, including implementation simplicity, lower computational burden (no gradients), and no requirement to specify the task-horizon in advance, whilst achieving the same data-efficiency as Gal et al. [2016] who used a Bayesian NN with a policy to learn the cart-pole task in 2000 time steps. Our full algorithm is summarized in Section 6.\nGiven the state of the system st at time t, the prediction horizon T of the MPC controller, and an action sequence at:t+T . = {at, . . . ,at+T }; the probabilistic dynamics model f̃ induces a distribution over the resulting trajectories st:t+T . At each time step t, the MPC controller applies the first action at of the sequence of optimized actions arg maxat:t+T ∑t+T τ=t Ef̃ [r(sτ ,aτ )]. A common technique to compute the optimal action sequence is a random sampling shooting method, due to its parallelizability and ease of implementation. Nagabandi et al. [2017] use deterministic NN models and MPC with random shooting to achieve data efficient control in higher dimensional tasks than what is feasible for GPs to model. Our work improves upon Nagabandi et al. [2017]’s data efficiency in two ways: First, we capture uncertainty in modeling and planning, to prevent overfitting in the low-data regime. Second, we use CEM [Botev et al., 2013] instead of random-shooting, which samples actions from a distribution closer to previous action samples that yielded high reward.\nComputing the expected trajectory reward using recursive state prediction in closed-form is generally intractable. Multiple approaches to approximate uncertainty propagation can be found in the literature [Girard et al., 2002, Quiñonero-Candela et al., 2003]. These approaches can be categorized by how they represent the state distribution: deterministic, particle, and parametric methods. Deterministic methods use the mean prediction and ignore the uncertainty, particle methods propagate a set of Monte Carlo samples, and parametric methods include Gaussian or Gaussian mixture models, etc. Although parametric distributions have been successfully used in MBRL [Deisenroth et al., 2014], experimental results [Kupcsik et al., 2013] suggest that particle approaches can be competitive both computationally and in terms of accuracy, without making strong assumptions about the distribution used. Hence, we use particle-based propagation, specifically suited to our PE dynamics model which distinguishes two types of uncertainty, detailed in Section 5.1. Unfortunately, little prior work has empirically compared the design decisions involved in choosing the particular propagation method. Thus, we compare against several baselines in Section 5.2. Visual examples are provided in Appendix A.4."
+  }, {
+    "heading": "5.1 Our state propagation method: trajectory sampling (TS)",
+    "text": "Our method to predict plausible state trajectories begins by creating P particles from the current state, spt=0 = s0 ∀ p. Each particle is then propagated by: s p t+1 ∼ f̃θb(p,t)(s p t ,at), according to a particular bootstrap b(p, t) in{1, . . . , B}, where B is the number of bootstrap models in the ensemble. A particle’s bootstrap index can potentially change as a function of time t. We consider two TS variants:\n• TS1 refers to particles uniformly re-sampling a bootstrap per time step. If we were to consider an ensemble as a Bayesian model, the particles would be effectively continually re-sampling from the approximate marginal posterior of plausible dynamics. We consider TS1’s bootstrap re-sampling to place a soft restriction on trajectory multimodality: particles separation cannot be attributed to the compounding effects of differing bootstraps using TS1.\n• TS∞ refers to particle bootstraps never changing during a trial. An ensemble is a collection of plausible models, which together represent the subjective uncertainty in function space of the true dynamics function f , which we assume is time invariant. TS∞ captures such time invariance since each particle’s bootstrap index is made consistent over time. An advantage of using TS∞ is that aleatoric and epistemic uncertainties are separable [Depeweg et al., 2018]. Specifically, aleatoric state variance is the average variance of particles of same bootstrap, whilst epistemic state variance is the variance of the average of particles of same bootstrap indexes. Epistemic is the ‘learnable’ type of uncertainty, useful for directed exploration [Thrun, 1992]. Without a way to distinguish epistemic uncertainty from aleatoric, an exploration algorithm (e.g. Bayesian optimization) might mistakingly choose actions with high predicted reward-variance ‘hoping to learn something’ when in fact such variance is caused by persistent and irreducible system stochasticity offering zero exploration value.\nBoth TS variants can capture multi-modal distributions and can be used with any probabilistic model. We found P = 20 and B = 5 sufficient in all our experiments."
+  }, {
+    "heading": "5.2 Baseline state propagation methods for comparison",
+    "text": "To validate our state propagation method, in the experiments of Section 7.2 we compare against four alternative state propagation methods, which we now discuss.\nExpectation (E) To judge the importance of our TS method using multiple particles to represent a distribution we compare against the aforementioned deterministic propagation technique. The simplest way to plan is iteratively propagating the expected prediction at each time step (ignoring uncertainty) st+1 = E[f̃θ(st,at)]. An advantage of this approach over TS is reduced computation and simple implementation: only a single particle is propagated. The main disadvantage of choosing E over TS is that small model biases can compound quickly over time, with no way to tell the quality of the state estimate.\nMoment matching (MM) Whilst TS’s particles can represent multimodal distributions, forcing a unimodal distribution via moment matching (MM) can (in some cases) benefit MBRL data efficiency [Gal et al., 2016]. Although unclear why, Gal et al. [2016] (who use Gaussian MM) hypothesize this effect may be caused by smoothing of the loss surface and implicitly penalizing multi-modal distributions (which often only occur with uncontrolled systems). To test this hypothesis we use Gaussian MM as a baseline and assume independence between bootstraps and particles for simplicity spt+1 iid∼ N ( Ep,b [ sp,bt+1 ] ,Vp,b [ sp,bt+1 ]) , where sp,bt+1 ∼ f̃θb(s p t ,at). Future work might\nconsider other distributions too, such as the Laplace distribution.\nDistribution sampling (DS) The previous MM approach made a strong unimodal assumption about state distributions: the state distribution at each time step was re-cast to Gaussian. A softer restriction on multimodality – between MM and TS – is to moment match w.r.t. the bootstraps only (noting the particles are otherwise independent if B = 1). This means that we effectively smooth the loss function w.r.t. epistemic uncertainty only (the uncertainty relevant to learning), whilst the aleatoric uncertainty remains free to be multimodal. We call this method distribution sampling (DS): spt+1 ∼ N ( Eb [ sp,bt+1 ] ,Vb [ sp,bt+1 ]) , with sp,bt+1 ∼ f̃θb(s p t ,at)."
+  }, {
+    "heading": "6 Algorithm summary",
+    "text": "Algorithm 1 Our model-based MPC algorithm ‘PETS’: 1: Initialize dataD with a random controller for one trial. 2: for Trial k = 1 to K do 3: Train a PE dynamics model f̃ givenD. 4: for Time t = 0 to TaskHorizon do 5: for Actions sampled at:t+T ∼CEM(·), 1 to NSamples do 6: Propagate state particles spτ using TS and f̃ |{D,at:t+T }. 7: Evaluate actions as ∑t+T τ=t 1 P ∑P p=1 r(s p τ ,aτ )\n8: Update CEM(·) distribution. 9: Execute first action a∗t (only) from optimal actions a∗t:t+T .\n10: Record outcome: D← D ∪ {st,a∗t , st+1}. Here we summarize our MBRL method PETS in Algorithm 1. We use the PE model to capture heteroskedastic aleatoric uncertainty and heteroskedastic epistemic uncertainty, which the TS planning method was able to best use. To guide the random shooting method of our MPC algorithm, we found that the CEM method learned faster (as discussed in Appendix A.8).\n7 Experimental results\nWe now evaluate the performance of our proposed MBRL algorithm called PETS using a deep neural network probabilistic dynamics model. First, we compare our approach on standard benchmark tasks against state-of-the-art model-free and modelbased approaches in Section 7.1. Then, in Section 7.2, we provide a detailed evaluation of the individual design decisions in the model and uncertainty propagation method and analyze their effect on performance. Additional considerations of horizon length, action sampling distribution, and stochastic systems are discussed in Appendix A.7. The experiment setup is shown in Figure 2, and NN architecture details are discussed in the sup-\nplementary materials, in Appendix A.6. Videos of the experiments, and code for reproducing the experiments can be found at https://sites.google.com/view/drl-in-a-handful-of-trials."
+  }, {
+    "heading": "7.1 Comparisons to prior reinforcement learning algorithms",
+    "text": "We compare our Algorithm 1 against the following reinforcement learning algorithms for continuous state-action control:\n• Proximal policy optimization (PPO): [Schulman et al., 2017] is a model-free, deep policygradient RL algorithm (we used the implementation from Dhariwal et al. [2017].)\n• Deep deterministic policy gradient (DDPG): [Lillicrap et al., 2016] is an off-policy model-free deep actor-critic algorithm (we used the implementation from Dhariwal et al. [2017].)\n• Soft actor critic (SAC): [Haarnoja et al., 2018] is a model-free deep actor-critic algorithm, which reports better data-efficiency than DDPG on MuJoCo benchmarks (we obtained authors’ data).\n• Model-based model-free hybrid (MBMF): [Nagabandi et al., 2017] is a recent deterministic deep model-based RL algorithm, which we reimplement.\n• Gaussian process dynamics model (GP): we compare against three MBRL algorithms based on GPs. GP-E learns a GP model, but only propagate the expectation. GP-DS uses the propagation method DS. GP-MM is the algorithm proposed by Kamthe and Deisenroth [2018] except that we do not update the dynamics model after each transition, but only at the end of each trial.\nThe results of the comparison are presented in Figure 3. Our method reaches performance that is similar to the asymptotic performance of the state-of-the-art model-free baseline PPO. However, PPO requires several orders of magnitude more samples to reach this point. We reach PPO’s asymptotic performance in fewer than 100 trials on all four tasks, faster than any prior model-free algorithm, and the asymptotic performance substantially exceeds that of the prior MBRL algorithm by Nagabandi et al. [2017], which corresponds to the deterministic variant of our approach (D-E). This result highlights the value of uncertainty estimation. Whilst the probabilistic baseline GP-MM slightly outperformed our method in cartpole, GP-MM scales cubically in time and quadratically state dimensionality, so was infeasible to run on the remaining higher dimensional tasks. It is worth noting that model-based deep RL algorithms have typically been considered to be efficient but incapable of achieving similar asymptotic performance as their model-free counterparts. Our results demonstrate that a purely model-based deep RL algorithm that only learns a dynamics model, omitting even a parameterized policy, can achieve comparable performance when properly incorporating uncertainty estimation during modeling and planning. In the next section, we study which specific design decisions and components of our approach are important for achieving this level of performance."
+  }, {
+    "heading": "7.2 Analyzing dynamics modeling and uncertainty propagation",
+    "text": "In this section, we compare different choices for the dynamics model in Section 4 and uncertainty propagation technique in Section 5. The results in Figure 4 first show that w.r.t. model choice, the model should consider both uncertainty types: the probabilistic ensembles (PE-XX) perform best in all tasks, except cartpole (‘X’ symbolizes any character). Close seconds are the single-probabilitytype models: probabilistic network (P-XX) and ensembles of deterministic networks (E-XX). Worst is the deterministic network (D-E).\nThese observations shed some light on the role of uncertainty in MBRL, particularly as it relates to discriminatively trained, expressive parametric models such as NNs. Our results suggest that, the quality of the model and the use of uncertainty at learning time significantly affect the performance of the MBRL algorithms tested, while the use of more advanced uncertainty propagation techniques seem to offers only minor improvements. We reconfirm that moment matching (MM) is competitive in low-dimensional tasks (consistent with [Gal et al., 2016]), however is not a reliable MBRL choice in higher dimensions, e.g. the half cheetah.\nThe analysis provided in this section summarizes the experiments we conducted to design our algorithm. It is worth noting that the individual components of our method – ensembles, probabilistic networks, and various approximate uncertainty propagation techniques – have existed in various forms in supervised learning and RL. However, as our experiments here and in the previous section show, the particular choice of these components in our algorithm achieves substantially improved results over previous state-of-the-art model-based and model-free methods, experimentally confirming both the importance of uncertainty estimation in MBRL and the potential for MBRL to achieve asymptotic performance that is comparable to the best model-free methods at a fraction of the sample complexity."
+  }, {
+    "heading": "8 Discussion & conclusion",
+    "text": "Our experiments suggest several conclusions that are relevant for further investigation in model-based reinforcement learning. First, our results show that model-based reinforcement learning with neural network dynamics models can achieve results that are competitive not only with Bayesian nonparametric models such as GPs, but also on par with model-free algorithms such as PPO and SAC in terms of asymptotic performance, while attaining substantially more efficient convergence. Although the individual components of our model-based reinforcement learning algorithms are not individually new – prior works have suggested both ensembling and outputting Gaussian distribution parameters [Lakshminarayanan et al., 2017], as well as the use of MPC for model-based RL [Nagabandi et al., 2017] – the particular combination of these components into a model-based reinforcement learning algorithm is, to our knowledge, novel, and the results provide a new state-of-the-art for model-based reinforcement learning algorithms based on high-capacity parametric models such as neural networks. The systematic investigation in our experiments was a critical ingredient in determining the precise combination of these components that attains the best performance.\nOur results indicate that the gap in asymptotic performance between model-based and model-free reinforcement learning can, at least in part, be bridged by incorporating uncertainty estimation into the model learning process. Our experiments further indicate that both epistemic and aleatoric uncertainty plays a crucial role in this process. Our analysis considers a model-based algorithm based on dynamics estimation and planning. A compelling alternative class of methods uses the model to train a parameterized policy [Ko et al., 2007, Deisenroth et al., 2014, McAllister and Rasmussen, 2017]. While the choice of using the model for planning versus policy learning is largely orthogonal to the other design choices, a promising direction for future work is to investigate how policy learning can be incorporated into our framework to amortize the cost of planning at test-time. Our initial experiments with policy learning did not yield an effective algorithm by directly propagating gradients through our uncertainty-aware models. We believe this may be due to chaotic policy gradients, whose recent analysis [Parmas et al., 2018] could help yield a policy-based PETS in future work. Finally, the observation that model-based RL can match the performance of model-free algorithms suggests that substantial further investigation of such of methods is in order, as a potential avenue for effective, sample-efficient, and practical general-purpose reinforcement learning."
+  }, {
+    "heading": "A Appendix",
+    "text": "A.1 Well behaved probabilistic networks\nAn under-appreciated detail of probabilistic networks is how the variance output is implemented with automatic differentiation. Often the real-valued output is treated as a log variance (or similar), and transformed through an exponential function (or similar) to produce a nonnegative-valued output, necessary to be interpreted as a variance. However, whilst this variance output is well behaved at points within the training distribution, its value is undefined outside the trained distribution. In fact, during the training, there is no explicit loss term that regulate the behavior of the variance outside of the training points. Thus, when this model is then evaluated at previously unseen states, as is often the case during the MBRL learning process, the outputted variance can assume any arbitrary value, and in practice we noticed how it occasionally collapse to zero, or explode toward infinity.\nThis behavior is in contrast with other models, such as GPs, where the variance is more well behaving, being bounded and Lipschitz-smooth. As a remedy, we found that in our model lower bounding and upper bounding the output variance such that they could not be lower or higher than the lowest and highest values in the training data significantly helped. To bound the variance output for a probabilistic network to be between the upper and lower bounds found during training the network on the training data, we used the following code with automatic differentiation:\nlogvar = max_logvar - tf.nn.softplus(max_logvar - logvar) logvar = min_logvar + tf.nn.softplus(logvar - min_logvar) var = tf.exp(logvar)\nwith a small regularization penalty on term on max_logvar so that it does not grow beyond the training distribution’s maximum output variance, and on the negative of min_logvar so that it does not drop below the training distribution’s minimum output variance."
+  }, {
+    "heading": "A.2 Fitting PE model to toy function",
+    "text": "As an initial test, we evaluated all previously described models by fitting to a dataset {(xi, yi)} of 2000 points from a sine function, where the xi’s are sampled uniformly from [−2π,−π] ∪ [π, 2π]. Before fitting, we introduced heteroscedastic noise by performing the transformation\n(x, y) 7→ ( x, y +N ( 0, 0.0225 ∣∣∣∣sin(32x+ π8 )∣∣∣∣)) . (2)\nThe model fit to (2) was shown in Figure 1, but reproduced here for convenience as Figure A.5.\nA.3 One-step predictions of learned models\nTo visualize and verify the accuracy of our PE model, we took all training data from the experiments and visualized the one-step predictions of the model. Since the states are high-dimensional, we resorted to plotting the output dimensions individually, sorting by the ground truth value in each dimension, seen in Figure A.6."
+  }, {
+    "heading": "A.4 Uncertainty propagation methods",
+    "text": ""
+  }, {
+    "heading": "A.5 Forward Dynamics Model",
+    "text": "Following the suggestion presented in [Deisenroth et al., 2014], instead of learning a forward dynamics in the form st+1 = f (st,at), we learn a model that predicts the difference to the current state ∆st+1 = f (st,at) such that st+1 = st + ∆st+1. Moreover, for states si that represent angles, we transform the states fed as inputs to the dynamics model to be [sin(si), cos(si)] to capture the rotational nature of the joint."
+  }, {
+    "heading": "A.6 Experimental setting",
+    "text": "For our experiments, we used four continuous-control benchmark tasks simulated via MuJoCo [Todorov et al., 2012] that vary in complexity, dimensionality, and the presence of contact forces (pictured Figure 2). The simplest is the classical cartpole swing-up benchmark (ds = 4, da = 1). To\nevaluate our model with higher dimensional dynamics and frictional contacts, we use a simulated PR2 robot in a reaching and pushing task (ds = 14, da = 7), as well as the half-cheetah (ds = 17, da = 6). Each experiment is repeated with different random seeds, and the mean and standard deviation of the cost is reported for each condition. Each neural network dynamics model consist of three fully connected layers, 500 neurons per layer (except 250 for halfcheetah), and swish activation functions [Ramachandran et al., 2017]. The weights of the networks were initially sampled from a truncated Gaussian with variance equal to the reciprocal of the number of fan-in neurons."
+  }, {
+    "heading": "A.7 Additional considerations",
+    "text": "MPC horizon length: choosing the MPC horizon T is nontrivial: ‘too short’ and MPC suffer from bias, ‘too long’ then variance. Probabilistic propagation methods are robust to horizons set ‘too long’. This effect is due to particle separation over time (e.g. Figure A.7), which reduces the dependence of actions on expected-cost further in time. The action selection procedure then effectively ignores the unpredictable with our method. Deterministic methods have no such mechanism to avoid model bias [Deisenroth et al., 2014], which compounds over longer time horizons, resulting in poor performance if the horizon is set ‘too high’ as seen in Figure A.8.\nMPC action sampling: We hypothesized the higher the state or action dimensionality, the more important that MPC action selection is guided (opposed to the uniform random shooting method, used by Nagabandi et al. [2017]). Thus we tested cross-entropy method (CEM) and random shooting for various tasks confirming this hypothesis (details Appendix A.8).\nStochastic systems: Finally we evaluate how successful probabilistic networks mitigate the detrimental effects of system stochasticity whilst learning to control. We introduced probabilistic networks as a means of capturing aleatoric uncertainty (inherent and persistent system stochasticities). Here we test how well probabilistic networks perform against deterministic networks under stochasticities in the action space. We add Gaussian noise onto the robot’s selected action, of standard deviations ranging 0-20% of action ranges permitted by MuJoCo. Figure A.9 shows that probabilistic PE models perform better and\nmore consistently under system noise. Further visualizations are provided in Appendix A.9.\nModel accuracy over time: Figure A.10 shows the evolution of a PE model’s accuracy on the halfcheetah as it collects model trails of data (see legend).\nA.8 MPC action selection\nWe study the impact of the particular choice of action optimization technique. An important criterion when selecting the optimizer is not only the optimality of the selected actions, but also the speed with which the actions can be obtained, which is especially critical for real-world control tasks that must proceed in real time2. Simple random search techniques have been proposed in prior work due to their simplicity and ease of parallelism [Nagabandi et al., 2017]. However, uniform random search [Brooks, 1958] suffers in highdimensional spaces. In addition to random search, we compare to the cross-entropy method (CEM) [Botev et al., 2013], which iteratively samples solutions from a candidate distribution that is adjusted based on the best sampled solutions. To isolate the comparison of optimizers from our dynamics model, we instead use the ground truth dynamics function (the MuJoCo simulator\nitself) to evaluate candidate action sequences. The results (Figure A.11) show that using CEM significantly outperforms random search on the half-cheetah task. We use CEM in all of the remaining experiments.\n2Such as robotics, where control frequencies below 20Hz are undesirable, meaning that a decision need to be taken in under 50ms."
+  }, {
+    "heading": "A.9 Stochastic systems:",
+    "text": "In Figure A.12f we compare and contrast the effect stochastic action noise has w.r.t. variable MBRL modeling decisions. Notice methods that PE method that propagate uncertainty are generally required for consistent performance.\nA.10 Linear model comparison:\nFigure A.13 shows that a linear model is unable to capture the halfcheetah dynamics well enough to control it, and that a nonlinear model is necessary."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Using inaccurate models in reinforcement learning",
+    "authors": ["P. Abbeel", "M. Quigley", "A.Y. Ng"],
+    "venue": "In International Conference on Machine Learning (ICML), pages",
+    "year": 2006
+  }, {
+    "title": "Learning to poke by poking: Experiential learning of intuitive physics",
+    "authors": ["P. Agrawal", "A.V. Nair", "P. Abbeel", "J. Malik", "S. Levine"],
+    "venue": "Neural Information Processing Systems (NIPS),",
+    "year": 2016
+  }, {
+    "title": "A comparison of direct and model-based reinforcement learning",
+    "authors": ["C.G. Atkeson", "J.C. Santamaría"],
+    "venue": "In International Conference on Robotics and Automation (ICRA),",
+    "year": 1997
+  }, {
+    "title": "Active learning of inverse models with intrinsically motivated goal exploration in robots",
+    "authors": ["A. Baranes", "P.-Y. Oudeyer"],
+    "venue": "Robotics and Autonomous Systems,",
+    "year": 2013
+  }, {
+    "title": "A Markovian decision process",
+    "authors": ["R. Bellman"],
+    "venue": "Journal of Mathematics and Mechanics,",
+    "year": 1957
+  }, {
+    "title": "Weight uncertainty in neural networks",
+    "authors": ["C. Blundell", "J. Cornebise", "K. Kavukcuoglu", "D. Wierstra"],
+    "venue": "International Conference on Machine Learning (ICML),",
+    "year": 2015
+  }, {
+    "title": "L’Ecuyer. The cross-entropy method for optimization",
+    "authors": ["Z.I. Botev", "D.P. Kroese", "R.Y. Rubinstein"],
+    "venue": "In Handbook of statistics,",
+    "year": 2013
+  }, {
+    "title": "A discussion of random methods for seeking maxima",
+    "authors": ["S.H. Brooks"],
+    "venue": "Operations Research,",
+    "year": 1958
+  }, {
+    "title": "Manifold Gaussian processes for regression",
+    "authors": ["R. Calandra", "J. Peters", "C.E. Rasmussen", "M.P. Deisenroth"],
+    "venue": "In International Joint Conference on Neural Networks (IJCNN),",
+    "year": 2016
+  }, {
+    "title": "Model predictive control",
+    "authors": ["E.F. Camacho", "C.B. Alba"],
+    "venue": "Springer Science & Business Media,",
+    "year": 2013
+  }, {
+    "title": "Combining model-based and model-free updates for trajectory-centric reinforcement learning",
+    "authors": ["Y. Chebotar", "K. Hausman", "M. Zhang", "G. Sukhatme", "S. Schaal", "S. Levine"],
+    "venue": "In International Conference on Machine Learning (ICML),",
+    "year": 2017
+  }, {
+    "title": "Gaussian processes for data-efficient learning in robotics and control",
+    "authors": ["M. Deisenroth", "D. Fox", "C. Rasmussen"],
+    "venue": "IEEE Transactions on Pattern Analysis and Machine Intelligence (PAMI),",
+    "year": 2014
+  }, {
+    "title": "Learning and policy search in stochastic dynamical systems with Bayesian neural networks",
+    "authors": ["S. Depeweg", "J.M. Hernández-Lobato", "F. Doshi-Velez", "S. Udluft"],
+    "year": 2016
+  }, {
+    "title": "Decomposition of uncertainty in Bayesian deep learning for efficient and risk-sensitive learning",
+    "authors": ["S. Depeweg", "J.-M. Hernandez-Lobato", "F. Doshi-Velez", "S. Udluft"],
+    "venue": "In International Conference on Machine Learning (ICML),",
+    "year": 2018
+  }, {
+    "title": "Model predictive control using neural networks",
+    "authors": ["A. Draeger", "S. Engell", "H. Ranke"],
+    "venue": "IEEE Control Systems,",
+    "year": 1995
+  }, {
+    "title": "An introduction to the bootstrap",
+    "authors": ["B. Efron", "R. Tibshirani"],
+    "venue": "CRC press,",
+    "year": 1994
+  }, {
+    "title": "Deep spatial autoencoders for visuomotor learning",
+    "authors": ["C. Finn", "X. Tan", "Y. Duan", "T. Darrell", "S. Levine", "P. Abbeel"],
+    "venue": "In International Conference on Robotics and Automation (ICRA),",
+    "year": 2016
+  }, {
+    "title": "One-shot learning of manipulation skills with online dynamics adaptation and neural network priors",
+    "authors": ["J. Fu", "S. Levine", "P. Abbeel"],
+    "venue": "In IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS),",
+    "year": 2016
+  }, {
+    "title": "Improving PILCO with Bayesian neural network dynamics models",
+    "authors": ["Y. Gal", "R. McAllister", "C. Rasmussen"],
+    "venue": "ICML Workshop on Data-Efficient Machine Learning,",
+    "year": 2016
+  }, {
+    "title": "Concrete dropout",
+    "authors": ["Y. Gal", "J. Hron", "A. Kendall"],
+    "venue": "In Neural Information Processing Systems (NIPS),",
+    "year": 2017
+  }, {
+    "title": "Multiple-step ahead prediction for non linear dynamic systems–a Gaussian process treatment with propagation of the uncertainty",
+    "authors": ["A. Girard", "C.E. Rasmussen", "J. Quinonero-Candela", "R. Murray-Smith", "O. Winther", "J. Larsen"],
+    "venue": "Neural Information Processing Systems (NIPS),",
+    "year": 2002
+  }, {
+    "title": "Explicit stochastic predictive control of combustion plants based on Gaussian process models",
+    "authors": ["A. Grancharova", "J. Kocijan", "T.A. Johansen"],
+    "year": 2008
+  }, {
+    "title": "Continuous deep Q-learning with model-based acceleration",
+    "authors": ["S. Gu", "T. Lillicrap", "I. Sutskever", "S. Levine"],
+    "venue": "In International Conference on Machine Learning (ICML),",
+    "year": 2016
+  }, {
+    "title": "On calibration of modern neural networks",
+    "authors": ["C. Guo", "G. Pleiss", "Y. Sun", "K.Q. Weinberger"],
+    "venue": "International Conference on Machine Learning (ICML),",
+    "year": 2017
+  }, {
+    "title": "Soft actor-critic: Off-policy maximum entropy deep reinforcement learning with a stochastic actor",
+    "authors": ["T. Haarnoja", "A. Zhou", "P. Abbeel", "S. Levine"],
+    "venue": "In International Conference on Machine Learning (ICML),",
+    "year": 2018
+  }, {
+    "title": "Neural network modeling and an extended DMC algorithm to control nonlinear systems",
+    "authors": ["E. Hernandaz", "Y. Arkun"],
+    "venue": "In American Control Conference,",
+    "year": 1990
+  }, {
+    "title": "Probabilistic backpropagation for scalable learning of Bayesian neural networks",
+    "authors": ["J.M. Hernández-Lobato", "R. Adams"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2015
+  }, {
+    "title": "Synthesizing neural network controllers with probabilistic model based reinforcement learning",
+    "authors": ["J.C.G. Higuera", "D. Meger", "G. Dudek"],
+    "venue": "arXiv preprint arXiv:1803.02291,",
+    "year": 2018
+  }, {
+    "title": "Data-efficient reinforcement learning with probabilistic model predictive control",
+    "authors": ["S. Kamthe", "M.P. Deisenroth"],
+    "venue": "In International Conference on Artificial Intelligence and Statistics (AISTATS),",
+    "year": 2018
+  }, {
+    "title": "Gaussian processes and reinforcement learning for identification and control of an autonomous blimp",
+    "authors": ["J. Ko", "D.J. Klein", "D. Fox", "D. Haehnel"],
+    "venue": "In IEEE International Conference on Robotics and Automation (ICRA),",
+    "year": 2007
+  }, {
+    "title": "Policy search for motor primitives in robotics. In Neural information processing systems (NIPS), pages",
+    "authors": ["J. Kober", "J. Peters"],
+    "year": 2009
+  }, {
+    "title": "Gaussian process model based predictive control",
+    "authors": ["J. Kocijan", "R. Murray-Smith", "C.E. Rasmussen", "A. Girard"],
+    "venue": "In American Control Conference,",
+    "year": 2004
+  }, {
+    "title": "Data-efficient generalization of robot skills with contextual policy search",
+    "authors": ["A.G. Kupcsik", "M.P. Deisenroth", "J. Peters", "G. Neumann"],
+    "venue": "In Conference on Artificial Intelligence (AAAI),",
+    "year": 2013
+  }, {
+    "title": "Model-ensemble trust-region policy optimization",
+    "authors": ["T. Kurutach", "I. Clavera", "Y. Duan", "A. Tamar", "P. Abbeel"],
+    "venue": "arXiv preprint arXiv:1802.10592,",
+    "year": 2018
+  }, {
+    "title": "Simple and scalable predictive uncertainty estimation using deep ensembles",
+    "authors": ["B. Lakshminarayanan", "A. Pritzel", "C. Blundell"],
+    "venue": "In Neural Information Processing Systems (NIPS),",
+    "year": 2017
+  }, {
+    "title": "DeepMPC: Learning deep latent features for model predictive control",
+    "authors": ["I. Lenz", "R. Knepper", "A. Saxena"],
+    "venue": "In Robotics Science and Systems (RSS),",
+    "year": 2015
+  }, {
+    "title": "End-to-end training of deep visuomotor policies",
+    "authors": ["S. Levine", "C. Finn", "T. Darrell", "P. Abbeel"],
+    "venue": "J. Mach. Learn. Res.,",
+    "year": 2016
+  }, {
+    "title": "Continuous control with deep reinforcement learning",
+    "authors": ["T.P. Lillicrap", "J.J. Hunt", "A. Pritzel", "N. Heess", "T. Erez", "Y. Tassa", "D. Silver", "D. Wierstra"],
+    "venue": "International Conference on Learning Representations (ICLR),",
+    "year": 2016
+  }, {
+    "title": "Reinforcement Learning for Robots Using Neural Networks",
+    "authors": ["L.-J. Lin"],
+    "venue": "PhD thesis,",
+    "year": 1992
+  }, {
+    "title": "A practical Bayesian framework for backpropagation networks",
+    "authors": ["D.J. MacKay"],
+    "venue": "Neural computation,",
+    "year": 1992
+  }, {
+    "title": "Data-efficient reinforcement learning in continuous state-action Gaussian-POMDPs",
+    "authors": ["R. McAllister", "C.E. Rasmussen"],
+    "venue": "In Neural Information Processing Systems (NIPS),",
+    "year": 2017
+  }, {
+    "title": "Real-time dynamic control of an industrial manipulator using a neural network-based learning controller",
+    "authors": ["W.T. Miller", "R.P. Hewes", "F.H. Glanz", "L.G. Kraft"],
+    "venue": "IEEE Transactions on Robotics and Automation,",
+    "year": 1990
+  }, {
+    "title": "Human-level control through deep reinforcement learning",
+    "authors": ["V. Mnih", "K. Kavukcuoglu", "D. Silver", "A.A. Rusu", "J. Veness", "M.G. Bellemare", "A. Graves", "M. Riedmiller", "A.K. Fidjeland", "G. Ostrovski"],
+    "venue": "Nature, 518(7540):529–533,",
+    "year": 2015
+  }, {
+    "title": "Combining model-based policy search with online model learning for control of physical humanoids",
+    "authors": ["I. Mordatch", "N. Mishra", "C. Eppner", "P. Abbeel"],
+    "venue": "In IEEE International Conference on Robotics and Automation (ICRA),",
+    "year": 2016
+  }, {
+    "title": "Neural network dynamics for model-based deep reinforcement learning with model-free fine-tuning",
+    "authors": ["A. Nagabandi", "G. Kahn", "R.S. Fearing", "S. Levine"],
+    "venue": "ArXiv e-prints,",
+    "year": 2017
+  }, {
+    "title": "Bayesian learning for neural networks",
+    "authors": ["R. Neal"],
+    "venue": "PhD thesis, University of Toronto,",
+    "year": 1995
+  }, {
+    "title": "Local Gaussian process regression for real time online model learning",
+    "authors": ["D. Nguyen-Tuong", "J. Peters", "M. Seeger"],
+    "venue": "In Neural Information Processing Systems (NIPS),",
+    "year": 2008
+  }, {
+    "title": "Risk versus uncertainty in deep learning: Bayes, bootstrap and the dangers of dropout",
+    "authors": ["I. Osband"],
+    "venue": "NIPS Workshop on Bayesian Deep Learning,",
+    "year": 2016
+  }, {
+    "title": "Deep exploration via bootstrapped DQN",
+    "authors": ["I. Osband", "C. Blundell", "A. Pritzel", "B. Van Roy"],
+    "venue": "In Neural Information Processing Systems (NIPS),",
+    "year": 2016
+  }, {
+    "title": "PIPPS: Flexible model-based policy search robust to the curse of chaos",
+    "authors": ["P. Parmas", "C.E. Rasmussen", "J. Peters", "K. Doya"],
+    "venue": "In International Conference on Machine Learning (ICML),",
+    "year": 2018
+  }, {
+    "title": "Deep learning helicopter dynamics models",
+    "authors": ["A. Punjani", "P. Abbeel"],
+    "venue": "In IEEE International Conference on Robotics and Automation (ICRA),",
+    "year": 2015
+  }, {
+    "title": "Propagation of uncertainty in Bayesian kernel models—application to multiple-step ahead forecasting",
+    "authors": ["J. Quiñonero-Candela", "A. Girard", "J. Larsen", "C.E. Rasmussen"],
+    "venue": "In IEEE International Conference on Acoustics, Speech and Signal Processing,",
+    "year": 2003
+  }, {
+    "title": "Searching for activation",
+    "authors": ["P. Ramachandran", "B. Zoph", "Q.V. Le"],
+    "venue": "functions. CoRR,",
+    "year": 2017
+  }, {
+    "title": "Gaussian processes in reinforcement learning",
+    "authors": ["C.E. Rasmussen", "M. Kuss"],
+    "venue": "In Neural Information Processing Systems (NIPS),",
+    "year": 2003
+  }, {
+    "title": "Proximal policy optimization algorithms",
+    "authors": ["J. Schulman", "F. Wolski", "P. Dhariwal", "A. Radford", "O. Klimov"],
+    "venue": "arXiv preprint arXiv:1707.06347,",
+    "year": 2017
+  }, {
+    "title": "Efficient exploration in reinforcement learning",
+    "authors": ["S. Thrun"],
+    "venue": "Technical Report CMU-CS-92-102,",
+    "year": 1992
+  }, {
+    "title": "Mujoco: A physics engine for model-based control",
+    "authors": ["E. Todorov", "T. Erez", "Y. Tassa"],
+    "venue": "In IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS),",
+    "year": 2012
+  }, {
+    "title": "Information theoretic MPC for model-based reinforcement learning",
+    "authors": ["G. Williams", "N. Wagener", "B. Goldfain", "P. Drews", "J.M. Rehg", "B. Boots", "E.A. Theodorou"],
+    "venue": "In International Conference on Robotics and Automation (ICRA),",
+    "year": 2017
+  }],
+  "id": "SP:f463e03f1853d4f48e0ccd0e735342492028df93",
+  "authors": [{
+    "name": "Kurtland Chua",
+    "affiliations": []
+  }, {
+    "name": "Roberto Calandra",
+    "affiliations": []
+  }, {
+    "name": "Rowan McAllister",
+    "affiliations": []
+  }, {
+    "name": "Sergey Levine",
+    "affiliations": []
+  }],
+  "abstractText": "Model-based reinforcement learning (RL) algorithms can attain excellent sample efficiency, but often lag behind the best model-free algorithms in terms of asymptotic performance. This is especially true with high-capacity parametric function approximators, such as deep networks. In this paper, we study how to bridge this gap, by employing uncertainty-aware dynamics models. We propose a new algorithm called probabilistic ensembles with trajectory sampling (PETS) that combines uncertainty-aware deep network dynamics models with sampling-based uncertainty propagation. Our comparison to state-of-the-art model-based and model-free deep RL algorithms shows that our approach matches the asymptotic performance of model-free algorithms on several challenging benchmark tasks, while requiring significantly fewer samples (e.g., 8 and 125 times fewer samples than Soft Actor Critic and Proximal Policy Optimization respectively on the half-cheetah task).",
+  "title": "Deep Reinforcement Learning in a Handful of Trials using Probabilistic Dynamics Models"
+}

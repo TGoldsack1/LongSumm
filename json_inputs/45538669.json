@@ -1,0 +1,437 @@
+{
+  "sections": [{
+    "text": "Keywords: unsupervised learning, clustering"
+  }, {
+    "heading": "1 Introduction",
+    "text": "Pre-trained convolutional neural networks, or convnets, have become the building blocks in most computer vision applications [8, 9, 50, 65]. They produce excellent general-purpose features that can be used to improve the generalization of models learned on a limited amount of data [53]. The existence of ImageNet [12], a large fully-supervised dataset, has been fueling advances in pre-training of convnets. However, Stock and Cisse [57] have recently presented empirical evidence that the performance of state-of-the-art classifiers on ImageNet is largely underestimated, and little error is left unresolved. This explains in part why the performance has been saturating despite the numerous novel architectures proposed in recent years [9, 21, 23]. As a matter of fact, ImageNet is relatively small by today’s standards; it “only” contains a million images that cover the specific domain of object classification. A natural way to move forward is to build a bigger and more diverse dataset, potentially consisting of billions of images. This, in turn, would require a tremendous amount of manual annotations, despite the expert knowledge in crowdsourcing accumulated by the community over the years [30]. Replacing labels by raw metadata leads to biases in the visual representations with unpredictable consequences [41]. This calls for methods that can be trained on internet-scale datasets with no supervision.\nUnsupervised learning has been widely studied in the Machine Learning community [19], and algorithms for clustering, dimensionality reduction or density estimation are regularly used in computer vision applications [27, 54, 60]. For example, the “bag of features” model uses clustering on handcrafted local descriptors to produce good image-level features [11]. A key reason for their success is that they can be applied on any specific domain or dataset, like satellite or medical images, or on images captured with a new modality, like depth, where annotations are not always available in quantity. Several works have shown that it was possible to adapt unsupervised methods based on density estimation or dimensionality reduction to deep models [20, 29], leading to promising all-purpose visual features [5, 15]. Despite the primeval success of clustering approaches in image classification, very few works [3, 66, 68] have been proposed to adapt them to the end-to-end training of convnets, and never at scale. An issue is that clustering methods have been primarily designed for linear models on top of fixed features, and they scarcely work if the features have to be learned simultaneously. For example, learning a convnet with k-means would lead to a trivial solution where the features are zeroed, and the clusters are collapsed into a single entity.\nIn this work, we propose a novel clustering approach for the large scale endto-end training of convnets. We show that it is possible to obtain useful generalpurpose visual features with a clustering framework. Our approach, summarized in Figure 1, consists in alternating between clustering of the image descriptors and updating the weights of the convnet by predicting the cluster assignments. For simplicity, we focus our study on k-means, but other clustering approaches can be used, like Power Iteration Clustering (PIC) [36]. The overall pipeline is sufficiently close to the standard supervised training of a convnet to reuse many common tricks [24]. Unlike self-supervised methods [13, 42, 45], clustering has the advantage of requiring little domain knowledge and no specific signal from the inputs [63, 71]. Despite its simplicity, our approach achieves significantly higher performance than previously published unsupervised methods on both ImageNet classification and transfer tasks.\nFinally, we probe the robustness of our framework by modifying the experimental protocol, in particular the training set and the convnet architecture.\nThe resulting set of experiments extends the discussion initiated by Doersch et al . [13] on the impact of these choices on the performance of unsupervised methods. We demonstrate that our approach is robust to a change of architecture. Replacing an AlexNet by a VGG [55] significantly improves the quality of the features and their subsequent transfer performance. More importantly, we discuss the use of ImageNet as a training set for unsupervised models. While it helps understanding the impact of the labels on the performance of a network, ImageNet has a particular image distribution inherited from its use for a finegrained image classification challenge: it is composed of well-balanced classes and contains a wide variety of dog breeds for example. We consider, as an alternative, random Flickr images from the YFCC100M dataset of Thomee et al . [58]. We show that our approach maintains state-of-the-art performance when trained on this uncured data distribution. Finally, current benchmarks focus on the capability of unsupervised convnets to capture class-level information. We propose to also evaluate them on image retrieval benchmarks to measure their capability to capture instance-level information.\nIn this paper, we make the following contributions: (i) a novel unsupervised method for the end-to-end learning of convnets that works with any standard clustering algorithm, like k-means, and requires minimal additional steps; (ii) state-of-the-art performance on many standard transfer tasks used in unsupervised learning; (iii) performance above the previous state of the art when trained on an uncured image distribution; (iv) a discussion about the current evaluation protocol in unsupervised feature learning."
+  }, {
+    "heading": "2 Related Work",
+    "text": "Unsupervised learning of features. Several approaches related to our work learn deep models with no supervision. Coates and Ng [10] also use k-means to pre-train convnets, but learn each layer sequentially in a bottom-up fashion, while we do it in an end-to-end fashion. Other clustering losses [3, 16, 35, 66, 68] have been considered to jointly learn convnet features and image clusters but they have never been tested on a scale to allow a thorough study on modern convnet architectures. Of particular interest, Yang et al . [68] iteratively learn convnet features and clusters with a recurrent framework. Their model offers promising performance on small datasets but may be challenging to scale to the number of images required for convnets to be competitive. Closer to our work, Bojanowski and Joulin [5] learn visual features on a large dataset with a loss that attempts to preserve the information flowing through the network [37]. Their approach discriminates between images in a similar way as examplar SVM [39], while we are simply clustering them.\nSelf-supervised learning. A popular form of unsupervised learning, called “self-supervised learning” [52], uses pretext tasks to replace the labels annotated by humans by “pseudo-labels” directly computed from the raw input data. For example, Doersch et al . [13] use the prediction of the relative position of patches\nin an image as a pretext task, while Noroozi and Favaro [42] train a network to spatially rearrange shuffled patches. Another use of spatial cues is the work of Pathak et al . [46] where missing pixels are guessed based on their surrounding. Paulin et al . [47] learn patch level Convolutional Kernel Network [38] using an image retrieval setting. Others leverage the temporal signal available in videos by predicting the camera transformation between consecutive frames [1], exploiting the temporal coherence of tracked patches [63] or segmenting video based on motion [45]. Appart from spatial and temporal coherence, many other signals have been explored: image colorization [33, 71], cross-channel prediction [72], sound [44] or instance counting [43]. More recently, several strategies for combining multiple cues have been proposed [14, 64]. Contrary to our work, these approaches are domain dependent, requiring expert knowledge to carefully design a pretext task that may lead to transferable features.\nGenerative models. Recently, unsupervised learning has been making a lot of progress on image generation. Typically, a parametrized mapping is learned between a predefined random noise and the images, with either an autoencoder [4, 22, 29, 40, 62], a generative adversarial network (GAN) [20] or more directly with a reconstruction loss [6]. Of particular interest, the discriminator of a GAN can produce visual features, but their performance are relatively disappointing [15]. Donahue et al . [15] and Dumoulin et al . [17] have shown that adding an encoder to a GAN produces visual features that are much more competitive."
+  }, {
+    "heading": "3 Method",
+    "text": "After a short introduction to the supervised learning of convnets, we describe our unsupervised approach as well as the specificities of its optimization."
+  }, {
+    "heading": "3.1 Preliminaries",
+    "text": "Modern approaches to computer vision, based on statistical learning, require good image featurization. In this context, convnets are a popular choice for mapping raw images to a vector space of fixed dimensionality. When trained on enough data, they constantly achieve the best performance on standard classification benchmarks [21, 32]. We denote by fθ the convnet mapping, where θ is the set of corresponding parameters. We refer to the vector obtained by applying this mapping to an image as feature or representation. Given a training set X = {x1, x2, . . . , xN} of N images, we want to find a parameter θ\n∗ such that the mapping fθ∗ produces good general-purpose features.\nThese parameters are traditionally learned with supervision, i.e. each image xn is associated with a label yn in {0, 1}\nk. This label represents the image’s membership to one of k possible predefined classes. A parametrized classifier gW predicts the correct labels on top of the features fθ(xn). The parameters W of the classifier and the parameter θ of the mapping are then jointly learned by\noptimizing the following problem:\nmin θ,W\n1\nN\nN ∑\nn=1\nℓ (gW (fθ(xn)) , yn) , (1)\nwhere ℓ is the multinomial logistic loss, also known as the negative log-softmax function. This cost function is minimized using mini-batch stochastic gradient descent [7] and backpropagation to compute the gradient [34]."
+  }, {
+    "heading": "3.2 Unsupervised learning by clustering",
+    "text": "When θ is sampled from a Gaussian distribution, without any learning, fθ does not produce good features. However the performance of such random features on standard transfer tasks, is far above the chance level. For example, a multilayer perceptron classifier on top of the last convolutional layer of a random AlexNet achieves 12% in accuracy on ImageNet while the chance is at 0.1% [42]. The good performance of random convnets is intimately tied to their convolutional structure which gives a strong prior on the input signal. The idea of this work is to exploit this weak signal to bootstrap the discriminative power of a convnet. We cluster the output of the convnet and use the subsequent cluster assignments as “pseudo-labels” to optimize Eq. (1). This deep clustering (DeepCluster) approach iteratively learns the features and groups them.\nClustering has been widely studied and many approaches have been developed for a variety of circumstances. In the absence of points of comparisons, we focus on a standard clustering algorithm, k-means. Preliminary results with other clustering algorithms indicates that this choice is not crucial. k-means takes a set of vectors as input, in our case the features fθ(xn) produced by the convnet, and clusters them into k distinct groups based on a geometric criterion. More precisely, it jointly learns a d× k centroid matrix C and the cluster assignments yn of each image n by solving the following problem:\nmin C∈Rd×k\n1\nN\nN ∑\nn=1\nmin yn∈{0,1}k ‖fθ(xn)− Cyn‖ 2 2 such that y⊤n 1k = 1. (2)\nSolving this problem provides a set of optimal assignments (y∗n)n≤N and a centroid matrix C∗. These assignments are then used as pseudo-labels; we make no use of the centroid matrix.\nOverall, DeepCluster alternates between clustering the features to produce pseudo-labels using Eq. (2) and updating the parameters of the convnet by predicting these pseudo-labels using Eq. (1). This type of alternating procedure is prone to trivial solutions; we describe how to avoid such degenerate solutions in the next section."
+  }, {
+    "heading": "3.3 Avoiding trivial solutions",
+    "text": "The existence of trivial solutions is not specific to the unsupervised training of neural networks, but to any method that jointly learns a discriminative classifier and the labels. Discriminative clustering suffers from this issue even when\napplied to linear models [67]. Solutions are typically based on constraining or penalizing the minimal number of points per cluster [2, 26]. These terms are computed over the whole dataset, which is not applicable to the training of convnets on large scale datasets. In this section, we briefly describe the causes of these trivial solutions and give simple and scalable workarounds.\nEmpty clusters. A discriminative model learns decision boundaries between classes. An optimal decision boundary is to assign all of the inputs to a single cluster [67]. This issue is caused by the absence of mechanisms to prevent from empty clusters and arises in linear models as much as in convnets. A common trick used in feature quantization [25] consists in automatically reassigning empty clusters during the k-means optimization. More precisely, when a cluster becomes empty, we randomly select a non-empty cluster and use its centroid with a small random perturbation as the new centroid for the empty cluster. We then reassign the points belonging to the non-empty cluster to the two resulting clusters.\nTrivial parametrization. If the vast majority of images is assigned to a few clusters, the parameters θ will exclusively discriminate between them. In the most dramatic scenario where all but one cluster are singleton, minimizing Eq. (1) leads to a trivial parametrization where the convnet will predict the same output regardless of the input. This issue also arises in supervised classification when the number of images per class is highly unbalanced. For example, metadata, like hashtags, exhibits a Zipf distribution, with a few labels dominating the whole distribution [28]. A strategy to circumvent this issue is to sample images based on a uniform distribution over the classes, or pseudo-labels. This is equivalent to weight the contribution of an input to the loss function in Eq. (1) by the inverse of the size of its assigned cluster."
+  }, {
+    "heading": "3.4 Implementation details",
+    "text": "Training data and convnet architectures. We train DeepCluster on the training set of ImageNet [12] (1, 281, 167 images distributed uniformly into 1, 000 classes). We discard the labels. For comparison with previous works, we use a standard AlexNet [32] architecture. It consists of five convolutional layers with 96, 256, 384, 384 and 256 filters; and of three fully connected layers. We remove the Local Response Normalization layers and use batch normalization [24]. We also consider a VGG-16 [55] architecture with batch normalization. Unsupervised methods often do not work directly on color and different strategies have been considered as alternatives [13, 42]. We apply a fixed linear transformation based on Sobel filters to remove color and increase local contrast [5, 47].\nOptimization. We cluster the features of the central cropped images and train the convnet with data augmentation (random horizontal flips and crops of random sizes and aspect ratios). This enforces invariance to data augmentation which is useful for feature learning [16]. The network is trained with dropout [56],\na constant step size, an ℓ2 penalization of the weights θ and a momentum of 0.9. Each mini-batch contains 256 images. For the clustering, features are PCAreduced to 256 dimensions, whitened and ℓ2-normalized. We use the k-means implementation of Johnson et al . [25]. Note that running k-means takes a third of the time because a forward pass on the full dataset is needed. One could reassign the clusters every n epochs, but we found out that our setup on ImageNet (updating the clustering every epoch) was nearly optimal. On Flickr, the concept of epoch disappears: choosing the tradeoff between the parameter updates and the cluster reassignments is more subtle. We thus kept almost the same setup as in ImageNet. We train the models for 500 epochs, which takes 12 days on a Pascal P100 GPU for AlexNet.\nHyperparameter selection. We select hyperparameters on a down-stream task, i.e., object classification on the validation set of Pascal VOC with no fine-tuning. We use the publicly available code of Krähenbühl1."
+  }, {
+    "heading": "4 Experiments",
+    "text": "In a preliminary set of experiments, we study the behavior of DeepCluster during training. We then qualitatively assess the filters learned with DeepCluster before comparing our approach to previous state-of-the-art models on standard benchmarks."
+  }, {
+    "heading": "4.1 Preliminary study",
+    "text": "We measure the information shared between two different assignments A and B of the same data by the Normalized Mutual Information (NMI), defined as:\nNMI(A;B) = I(A;B) √\nH(A)H(B)\n1 https://github.com/philkr/voc-classification\nwhere I denotes the mutual information and H the entropy. This measure can be applied to any assignment coming from the clusters or the true labels. If the two assignments A and B are independent, the NMI is equal to 0. If one of them is deterministically predictable from the other, the NMI is equal to 1.\nRelation between clusters and labels. Figure 2(a) shows the evolution of the NMI between the cluster assignments and the ImageNet labels during training. It measures the capability of the model to predict class level information. Note that we only use this measure for this analysis and not in any model selection process. The dependence between the clusters and the labels increases over time, showing that our features progressively capture information related to object classes.\nNumber of reassignments between epochs. At each epoch, we reassign the images to a new set of clusters, with no guarantee of stability. Measuring the NMI between the clusters at epoch t − 1 and t gives an insight on the actual stability of our model. Figure 2(b) shows the evolution of this measure during training. The NMI is increasing, meaning that there are less and less reassignments and the clusters are stabilizing over time. However, NMI saturates below 0.8, meaning that a significant fraction of images are regularly reassigned between epochs. In practice, this has no impact on the training and the models do not diverge.\nChoosing the number of clusters.We measure the impact of the number k of clusters used in k-means on the quality of the model. We report the same downstream task as in the hyperparameter selection process, i.e. mAP on the Pascal VOC 2007 classification validation set. We vary k on a logarithmic scale, and report results after 300 epochs in Figure 2(c). The performance after the same number of epochs for every k may not be directly comparable, but it reflects the hyper-parameter selection process used in this work. The best performance is obtained with k = 10, 000. Given that we train our model on ImageNet, one\nwould expect k = 1000 to yield the best results, but apparently some amount of over-segmentation is beneficial."
+  }, {
+    "heading": "4.2 Visualizations",
+    "text": "First layer filters. Figure 3 shows the filters from the first layer of an AlexNet trained with DeepCluster on raw RGB images and images preprocessed with a Sobel filtering. The difficulty of learning convnets on raw images has been noted before [5, 13, 42, 47]. As shown in the left panel of Fig. 3, most filters capture only color information that typically plays a little role for object classification [61]. Filters obtained with Sobel preprocessing act like edge detectors.\nProbing deeper layers. We assess the quality of a target filter by learning an input image that maximizes its activation [18, 70]. We follow the process described by Yosinki et al . [69] with a cross entropy function between the target filter and the other filters of the same layer. Figure 4 shows these synthetic images as well as the 9 top activated images from a subset of 1 million images from YFCC100M. As expected, deeper layers in the network seem to capture larger textural structures. However, some filters in the last convolutional layers seem to be simply replicating the texture already captured in previous layers, as shown on the second row of Fig. 5. This result corroborates the observation by Zhang et al . [72] that features from conv3 or conv4 are more discriminative than those from conv5.\nFinally, Figure 5 shows the top 9 activated images of some conv5 filters that seem to be semantically coherent. The filters on the top row contain information about structures that highly corrolate with object classes. The filters on the bottom row seem to trigger on style, like drawings or abstract shapes."
+  }, {
+    "heading": "4.3 Linear classification on activations",
+    "text": "Following Zhang et al . [72], we train a linear classifier on top of different frozen convolutional layers. This layer by layer comparison with supervised features exhibits where a convnet starts to be task specific, i.e. specialized in object classification. We report the results of this experiment on ImageNet and the Places dataset [73] in Table 1. We choose the hyperparameters by cross-validation on the training set. On ImageNet, DeepCluster outperforms the state of the art from conv2 to conv5 layers by 1−6%. The largest improvement is observed in the conv3 layer, while the conv1 layer performs poorly, probably because the Sobel filtering discards color. Consistently with the filter visualizations of Sec. 4.2, conv3 works better than conv5. Finally, the difference of performance between DeepCluster and a supervised AlexNet grows significantly on higher layers: at layers conv2-conv3 the difference is only around 4%, but this difference rises to 12.3% at conv5, marking where the AlexNet probably stores most of the class level information. In the supplementary material, we also report the accuracy if a MLP is trained on the last layer; DeepCluster outperforms the state of the art by 8%.\nThe same experiment on the Places dataset provides some interesting insights: like DeepCluster, a supervised model trained on ImageNet suffers from a decrease of performance for higher layers (conv4 versus conv5). Moreover,\nDeepCluster yields conv3-4 features that are comparable to those trained with ImageNet labels. This suggests that when the target task is sufficently far from the domain covered by ImageNet, labels are less important."
+  }, {
+    "heading": "4.4 Pascal VOC 2007",
+    "text": "Finally, we do a quantitative evaluation of DeepCluster on image classification, object detection and semantic segmentation on Pascal VOC. The relatively small size of the training sets on Pascal VOC (2, 500 images) makes this setup closer to a “real-world” application, where a model trained with heavy computational resources, is adapted to a task or a dataset with a small number of instances. Detection results are obtained using fast-rcnn2; segmentation results are obtained using the code of Shelhamer et al .3. For classification and detection, we report the performance on the test set of Pascal VOC 2007 and choose our hyperparameters on the validation set. For semantic segmentation, following the related work, we report the performance on the validation set of Pascal VOC 2012.\nTable 2 summarized the comparisons of DeepCluster with other featurelearning approaches on the three tasks. As for the previous experiments, we outperform previous unsupervised methods on all three tasks, in every setting. The improvement with fine-tuning over the state of the art is the largest on semantic segmentation (7.5%). On detection, DeepCluster performs only slightly better than previously published methods. Interestingly, a fine-tuned random network performs comparatively to many unsupervised methods, but performs poorly if only fc6-8 are learned. For this reason, we also report detection and\n2 https://github.com/rbgirshick/py-faster-rcnn 3 https://github.com/shelhamer/fcn.berkeleyvision.org\nsegmentation with fc6-8 for DeepCluster and a few baselines. These tasks are closer to a real application where fine-tuning is not possible. It is in this setting that the gap between our approach and the state of the art is the greater (up to 9% on classification)."
+  }, {
+    "heading": "5 Discussion",
+    "text": "The current standard for the evaluation of an unsupervised method involves the use of an AlexNet architecture trained on ImageNet and tested on class-level tasks. To understand and measure the various biases introduced by this pipeline on DeepCluster, we consider a different training set, a different architecture and an instance-level recognition task."
+  }, {
+    "heading": "5.1 ImageNet versus YFCC100M",
+    "text": "ImageNet is a dataset designed for a fine-grained object classification challenge [51]. It is object oriented, manually annotated and organised into well balanced object categories. By design, DeepCluster favors balanced clusters and, as discussed above, our number of cluster k is somewhat comparable with the number of labels in ImageNet. This may have given an unfair advantage to\nDeepCluster over other unsupervised approaches when trained on ImageNet. To measure the impact of this effect, we consider a subset of randomly-selected 1M images from the YFCC100M dataset [58] for the pre-training. Statistics on the hashtags used in YFCC100M suggests that the underlying “object classes” are severly unbalanced [28], leading to a data distribution less favorable to DeepCluster.\nTable 3 shows the difference in performance on Pascal VOC of DeepCluster pre-trained on YFCC100M compared to ImageNet. As noted by Doersch et al . [13], this dataset is not object oriented, hence the performance are expected to drop by a few percents. However, even when trained on uncured Flickr images, DeepCluster outperforms the current state of the art by a significant margin on most tasks (up to +4.3% on classification and +4.5% on semantic segmentation). We report the rest of the results in the supplementary material with similar conclusions. This experiment validates that DeepCluster is robust to a change of image distribution, leading to state-of-the-art general-purpose visual features even if this distribution is not favorable to its design."
+  }, {
+    "heading": "5.2 AlexNet versus VGG",
+    "text": "In the supervised setting, deeper architectures like VGG or ResNet [21] have a much higher accuracy on ImageNet than AlexNet. We should expect the same improvement if these architectures are used with an unsupervised approach. Table 4 compares a VGG-16 and an AlexNet trained with DeepCluster on ImageNet and tested on the Pascal VOC 2007 object detection task with fine-tuning. We also report the numbers obtained with other unsupervised approaches [13, 64]. Regardless of the approach, a deeper architecture leads to a significant improvement in performance on the target task. Training the VGG-16 with DeepCluster gives a performance above the state of the art, bringing us to only 1.4 percents below the supervised topline. Note that the difference between unsupervised and supervised approaches remains in the same ballpark for both architectures (i.e. 1.4%). Finally, the gap with a random baseline grows for larger architectures,\nTable 5: mAP on instance-level image retrieval on Oxford and Paris dataset with a VGG-16. We apply R-MAC with a resolution of 1024 pixels and 3 grid levels [59]\nMethod Oxford5K Paris6K\nImageNet labels 72.4 81.5 Random 6.9 22.0\nDoersch et al . [13] 35.4 53.1 Wang et al . [64] 42.3 58.0\nDeepCluster 61.0 72.0\njustifying the relevance of unsupervised pre-training for complex architectures when little supervised data is available."
+  }, {
+    "heading": "5.3 Evaluation on instance retrieval",
+    "text": "The previous benchmarks measure the capability of an unsupervised network to capture class level information. They do not evaluate if it can differentiate images at the instance level. To that end, we propose image retrieval as a down-stream task. We follow the experimental protocol of Tolias et al . [59] on two datasets, i.e., Oxford Buildings [48] and Paris [49]. Table 5 reports the performance of a VGG-16 trained with different approaches obtained with Sobel filtering, except for Doersch et al . [13] and Wang et al . [64]. This preprocessing improves by 5.5 points the mAP of a supervised VGG-16 on the Oxford dataset, but not on Paris. This may translate in a similar advantage for DeepCluster, but it does not account for the average differences of 19 points. Interestingly, random convnets perform particularly poorly on this task compared to pre-trained models. This suggests that image retrieval is a task where the pre-training is essential and studying it as a down-stream task could give further insights about the quality of the features produced by unsupervised approaches."
+  }, {
+    "heading": "6 Conclusion",
+    "text": "In this paper, we propose a scalable clustering approach for the unsupervised learning of convnets. It iterates between clustering with k-means the features produced by the convnet and updating its weights by predicting the cluster assignments as pseudo-labels in a discriminative loss. If trained on large dataset like ImageNet or YFCC100M, it achieves performance that are better than the previous state-of-the-art on every standard transfer task. Our approach makes little assumption about the inputs, and does not require much domain specific knowledge, making it a good candidate to learn deep representations specific to domains where annotations are scarce."
+  }],
+  "references": [{
+    "title": "Learning to see by moving",
+    "authors": ["P. Agrawal", "J. Carreira", "J. Malik"],
+    "venue": "ICCV",
+    "year": 2015
+  }, {
+    "title": "Diffrac: a discriminative and flexible framework for clustering",
+    "authors": ["F.R. Bach", "Z. Harchaoui"],
+    "venue": "NIPS",
+    "year": 2008
+  }, {
+    "title": "Cliquecnn: Deep unsupervised exemplar learning",
+    "authors": ["M.A. Bautista", "A. Sanakoyeu", "E. Tikhoncheva", "B. Ommer"],
+    "venue": "Advances in Neural Information Processing Systems. pp. 3846–3854",
+    "year": 2016
+  }, {
+    "title": "Greedy layer-wise training of deep networks",
+    "authors": ["Y. Bengio", "P. Lamblin", "D. Popovici", "H. Larochelle"],
+    "venue": "NIPS",
+    "year": 2007
+  }, {
+    "title": "Unsupervised learning by predicting noise",
+    "authors": ["P. Bojanowski", "A. Joulin"],
+    "venue": "ICML",
+    "year": 2017
+  }, {
+    "title": "Optimizing the latent space of generative networks",
+    "authors": ["P. Bojanowski", "A. Joulin", "D. Lopez-Paz", "A. Szlam"],
+    "venue": "arXiv preprint arXiv:1707.05776",
+    "year": 2017
+  }, {
+    "title": "Stochastic gradient descent tricks",
+    "authors": ["L. Bottou"],
+    "venue": "Neural networks: Tricks of the trade, pp. 421–436. Springer",
+    "year": 2012
+  }, {
+    "title": "Human pose estimation with iterative error feedback",
+    "authors": ["J. Carreira", "P. Agrawal", "K. Fragkiadaki", "J. Malik"],
+    "venue": "CVPR",
+    "year": 2016
+  }, {
+    "title": "Deeplab: Semantic image segmentation with deep convolutional nets, atrous convolution, and fully connected crfs",
+    "authors": ["L.C. Chen", "G. Papandreou", "I. Kokkinos", "K. Murphy", "A.L. Yuille"],
+    "venue": "arXiv preprint arXiv:1606.00915",
+    "year": 2016
+  }, {
+    "title": "Learning feature representations with k-means",
+    "authors": ["A. Coates", "A.Y. Ng"],
+    "venue": "Neural networks: Tricks of the trade, pp. 561–580. Springer",
+    "year": 2012
+  }, {
+    "title": "Visual categorization with bags of keypoints",
+    "authors": ["G. Csurka", "C. Dance", "L. Fan", "J. Willamowski", "C. Bray"],
+    "venue": "Workshop on statistical learning in computer vision, ECCV. vol. 1, pp. 1–2. Prague",
+    "year": 2004
+  }, {
+    "title": "Imagenet: A large-scale hierarchical image database",
+    "authors": ["J. Deng", "W. Dong", "R. Socher", "L.J. Li", "K. Li", "L. Fei-Fei"],
+    "venue": "CVPR",
+    "year": 2009
+  }, {
+    "title": "Unsupervised visual representation learning by context prediction",
+    "authors": ["C. Doersch", "A. Gupta", "A.A. Efros"],
+    "venue": "ICCV",
+    "year": 2015
+  }, {
+    "title": "Multi-task self-supervised visual learning",
+    "authors": ["C. Doersch", "A. Zisserman"],
+    "year": 2017
+  }, {
+    "title": "Adversarial feature learning",
+    "authors": ["J. Donahue", "P. Krähenbühl", "T. Darrell"],
+    "venue": "arXiv preprint arXiv:1605.09782",
+    "year": 2016
+  }, {
+    "title": "Discriminative unsupervised feature learning with convolutional neural networks",
+    "authors": ["A. Dosovitskiy", "J.T. Springenberg", "M. Riedmiller", "T. Brox"],
+    "venue": "NIPS",
+    "year": 2014
+  }, {
+    "title": "Adversarially learned inference",
+    "authors": ["V. Dumoulin", "I. Belghazi", "B. Poole", "A. Lamb", "M. Arjovsky", "O. Mastropietro", "A. Courville"],
+    "venue": "arXiv preprint arXiv:1606.00704",
+    "year": 2016
+  }, {
+    "title": "Visualizing higher-layer features of a deep network",
+    "authors": ["D. Erhan", "Y. Bengio", "A. Courville", "P. Vincent"],
+    "venue": "University of Montreal 1341, 3",
+    "year": 2009
+  }, {
+    "title": "The elements of statistical learning, vol",
+    "authors": ["J. Friedman", "T. Hastie", "R. Tibshirani"],
+    "venue": "1. Springer series in statistics New York",
+    "year": 2001
+  }, {
+    "title": "Generative adversarial nets",
+    "authors": ["I. Goodfellow", "J. Pouget-Abadie", "M. Mirza", "B. Xu", "D. Warde-Farley", "S. Ozair", "A. Courville", "Y. Bengio"],
+    "venue": "NIPS",
+    "year": 2014
+  }, {
+    "title": "Delving deep into rectifiers: Surpassing humanlevel performance on imagenet classification",
+    "authors": ["K. He", "X. Zhang", "S. Ren", "J. Sun"],
+    "venue": "ICCV",
+    "year": 2015
+  }, {
+    "title": "Unsupervised learning of invariant feature hierarchies with applications to object recognition",
+    "authors": ["F.J. Huang", "Y.L. Boureau", "Y LeCun"],
+    "venue": "CVPR",
+    "year": 2007
+  }, {
+    "title": "Densely connected convolutional networks",
+    "authors": ["G. Huang", "Z. Liu", "K.Q. Weinberger", "L. van der Maaten"],
+    "venue": "arXiv preprint arXiv:1608.06993",
+    "year": 2016
+  }, {
+    "title": "Batch normalization: Accelerating deep network training by reducing internal covariate shift",
+    "authors": ["S. Ioffe", "C. Szegedy"],
+    "venue": "ICML",
+    "year": 2015
+  }, {
+    "title": "Billion-scale similarity search with gpus",
+    "authors": ["J. Johnson", "M. Douze", "H. Jégou"],
+    "venue": "arXiv preprint arXiv:1702.08734",
+    "year": 2017
+  }, {
+    "title": "A convex relaxation for weakly supervised classifiers",
+    "authors": ["A. Joulin", "F. Bach"],
+    "venue": "arXiv preprint arXiv:1206.6413",
+    "year": 2012
+  }, {
+    "title": "Discriminative clustering for image cosegmentation",
+    "authors": ["A. Joulin", "F. Bach", "J. Ponce"],
+    "venue": "CVPR",
+    "year": 2010
+  }, {
+    "title": "Learning visual features from large weakly supervised data",
+    "authors": ["A. Joulin", "L. van der Maaten", "A. Jabri", "N. Vasilache"],
+    "venue": "ECCV",
+    "year": 2016
+  }, {
+    "title": "Auto-encoding variational bayes",
+    "authors": ["D.P. Kingma", "M. Welling"],
+    "venue": "arXiv preprint arXiv:1312.6114",
+    "year": 2013
+  }, {
+    "title": "Crowdsourcing in computer vision",
+    "authors": ["A. Kovashka", "O. Russakovsky", "L. Fei-Fei", "K Grauman"],
+    "venue": "Foundations and Trends R  © in Computer Graphics and Vision 10(3), 177–243",
+    "year": 2016
+  }, {
+    "title": "Data-dependent initializations of convolutional neural networks",
+    "authors": ["P. Krähenbühl", "C. Doersch", "J. Donahue", "T. Darrell"],
+    "venue": "arXiv preprint arXiv:1511.06856",
+    "year": 2015
+  }, {
+    "title": "Imagenet classification with deep convolutional neural networks",
+    "authors": ["A. Krizhevsky", "I. Sutskever", "G.E. Hinton"],
+    "venue": "NIPS",
+    "year": 2012
+  }, {
+    "title": "Learning representations for automatic colorization",
+    "authors": ["G. Larsson", "M. Maire", "G. Shakhnarovich"],
+    "venue": "ECCV",
+    "year": 2016
+  }, {
+    "title": "Gradient-based learning applied to document recognition",
+    "authors": ["Y. LeCun", "L. Bottou", "Y. Bengio", "P. Haffner"],
+    "venue": "Proceedings of the IEEE 86(11), 2278–2324",
+    "year": 1998
+  }, {
+    "title": "Learning deep parsimonious representations",
+    "authors": ["R. Liao", "A. Schwing", "R. Zemel", "R. Urtasun"],
+    "venue": "NIPS",
+    "year": 2016
+  }, {
+    "title": "Power iteration clustering",
+    "authors": ["F. Lin", "W.W. Cohen"],
+    "venue": "ICML",
+    "year": 2010
+  }, {
+    "title": "Towards an organizing principle for a layered perceptual network",
+    "authors": ["R. Linsker"],
+    "venue": "NIPS",
+    "year": 1988
+  }, {
+    "title": "Convolutional kernel networks",
+    "authors": ["J. Mairal", "P. Koniusz", "Z. Harchaoui", "C. Schmid"],
+    "venue": "NIPS",
+    "year": 2014
+  }, {
+    "title": "Ensemble of exemplar-svms for object detection and beyond",
+    "authors": ["T. Malisiewicz", "A. Gupta", "A.A. Efros"],
+    "venue": "ICCV",
+    "year": 2011
+  }, {
+    "title": "Stacked convolutional autoencoders for hierarchical feature extraction",
+    "authors": ["J. Masci", "U. Meier", "D. Cireşan", "J. Schmidhuber"],
+    "venue": "Artificial Neural Networks and Machine Learning pp. 52–59",
+    "year": 2011
+  }, {
+    "title": "Seeing through the human reporting bias: Visual classifiers from noisy human-centric labels",
+    "authors": ["I. Misra", "C.L. Zitnick", "M. Mitchell", "R. Girshick"],
+    "venue": "CVPR",
+    "year": 2016
+  }, {
+    "title": "Unsupervised learning of visual representations by solving jigsaw puzzles",
+    "authors": ["M. Noroozi", "P. Favaro"],
+    "venue": "ECCV",
+    "year": 2016
+  }, {
+    "title": "Representation learning by learning to count",
+    "authors": ["M. Noroozi", "H. Pirsiavash", "P. Favaro"],
+    "venue": "ICCV",
+    "year": 2017
+  }, {
+    "title": "Ambient sound provides supervision for visual learning",
+    "authors": ["A. Owens", "J. Wu", "J.H. McDermott", "W.T. Freeman", "A. Torralba"],
+    "venue": "ECCV",
+    "year": 2016
+  }, {
+    "title": "Learning features by watching objects move",
+    "authors": ["D. Pathak", "R. Girshick", "P. Dollár", "T. Darrell", "B. Hariharan"],
+    "venue": "CVPR",
+    "year": 2017
+  }, {
+    "title": "Context encoders: Feature learning by inpainting",
+    "authors": ["D. Pathak", "P. Krahenbuhl", "J. Donahue", "T. Darrell", "A.A. Efros"],
+    "venue": "CVPR",
+    "year": 2016
+  }, {
+    "title": "Local convolutional features with unsupervised training for image retrieval",
+    "authors": ["M. Paulin", "M. Douze", "Z. Harchaoui", "J. Mairal", "F. Perronin", "C. Schmid"],
+    "venue": "ICCV",
+    "year": 2015
+  }, {
+    "title": "Object retrieval with large vocabularies and fast spatial matching",
+    "authors": ["J. Philbin", "O. Chum", "M. Isard", "J. Sivic", "A. Zisserman"],
+    "venue": "CVPR",
+    "year": 2007
+  }, {
+    "title": "Lost in quantization: Improving particular object retrieval in large scale image databases",
+    "authors": ["J. Philbin", "O. Chum", "M. Isard", "J. Sivic", "A. Zisserman"],
+    "venue": "CVPR",
+    "year": 2008
+  }, {
+    "title": "Faster r-cnn: Towards real-time object detection with region proposal networks",
+    "authors": ["S. Ren", "K. He", "R. Girshick", "J. Sun"],
+    "venue": "NIPS",
+    "year": 2015
+  }, {
+    "title": "Imagenet large scale visual recognition challenge",
+    "authors": ["O. Russakovsky", "J. Deng", "H. Su", "J. Krause", "S. Satheesh", "S. Ma", "Z. Huang", "A. Karpathy", "A. Khosla", "M Bernstein"],
+    "venue": "IJCV 115(3), 211–252",
+    "year": 2015
+  }, {
+    "title": "Learning classification with unlabeled data",
+    "authors": ["V.R. de Sa"],
+    "venue": "NIPS",
+    "year": 1994
+  }, {
+    "title": "Cnn features off-theshelf: an astounding baseline for recognition",
+    "authors": ["A. Sharif Razavian", "H. Azizpour", "J. Sullivan", "S. Carlsson"],
+    "venue": "CVPR workshops",
+    "year": 2014
+  }, {
+    "title": "Normalized cuts and image segmentation",
+    "authors": ["J. Shi", "J. Malik"],
+    "venue": "TPAMI 22(8), 888–905",
+    "year": 2000
+  }, {
+    "title": "Very deep convolutional networks for large-scale image recognition",
+    "authors": ["K. Simonyan", "A. Zisserman"],
+    "venue": "arXiv preprint arXiv:1409.1556",
+    "year": 2014
+  }, {
+    "title": "Dropout: a simple way to prevent neural networks from overfitting",
+    "authors": ["N. Srivastava", "G.E. Hinton", "A. Krizhevsky", "I. Sutskever", "R. Salakhutdinov"],
+    "venue": "JMLR 15(1), 1929–1958",
+    "year": 2014
+  }, {
+    "title": "Convnets and imagenet beyond accuracy: Explanations, bias detection, adversarial examples and model criticism",
+    "authors": ["P. Stock", "M. Cisse"],
+    "venue": "arXiv preprint arXiv:1711.11443",
+    "year": 2017
+  }, {
+    "title": "The new data and new challenges in multimedia research",
+    "authors": ["B. Thomee", "D.A. Shamma", "G. Friedland", "B. Elizalde", "K. Ni", "D. Poland", "D. Borth", "L.J. Li"],
+    "venue": "arXiv preprint arXiv:1503.01817",
+    "year": 2015
+  }, {
+    "title": "Particular object retrieval with integral maxpooling of cnn activations",
+    "authors": ["G. Tolias", "R. Sicre", "H. Jégou"],
+    "venue": "arXiv preprint arXiv:1511.05879",
+    "year": 2015
+  }, {
+    "title": "Face recognition using eigenfaces",
+    "authors": ["M.A. Turk", "A.P. Pentland"],
+    "venue": "CVPR",
+    "year": 1991
+  }, {
+    "title": "Evaluating color descriptors for object and scene recognition",
+    "authors": ["K. Van De Sande", "T. Gevers", "C. Snoek"],
+    "venue": "TPAMI 32(9), 1582–1596",
+    "year": 2010
+  }, {
+    "title": "Stacked denoising autoencoders: Learning useful representations in a deep network with a local denoising criterion",
+    "authors": ["P. Vincent", "H. Larochelle", "I. Lajoie", "Y. Bengio", "P.A. Manzagol"],
+    "venue": "JMLR 11(Dec), 3371–3408",
+    "year": 2010
+  }, {
+    "title": "Unsupervised learning of visual representations using videos",
+    "authors": ["X. Wang", "A. Gupta"],
+    "venue": "ICCV",
+    "year": 2015
+  }, {
+    "title": "Transitive invariance for self-supervised visual representation learning",
+    "authors": ["X. Wang", "K. He", "A. Gupta"],
+    "venue": "arXiv preprint arXiv:1708.02901",
+    "year": 2017
+  }, {
+    "title": "Deepflow: Large displacement optical flow with deep matching",
+    "authors": ["P. Weinzaepfel", "J. Revaud", "Z. Harchaoui", "C. Schmid"],
+    "venue": "ICCV",
+    "year": 2013
+  }, {
+    "title": "Unsupervised deep embedding for clustering analysis",
+    "authors": ["J. Xie", "R. Girshick", "A. Farhadi"],
+    "venue": "ICML",
+    "year": 2016
+  }, {
+    "title": "Maximum margin clustering",
+    "authors": ["L. Xu", "J. Neufeld", "B. Larson", "D. Schuurmans"],
+    "venue": "NIPS",
+    "year": 2005
+  }, {
+    "title": "Joint unsupervised learning of deep representations and image clusters",
+    "authors": ["J. Yang", "D. Parikh", "D. Batra"],
+    "venue": "CVPR",
+    "year": 2016
+  }, {
+    "title": "Understanding neural networks through deep visualization",
+    "authors": ["J. Yosinski", "J. Clune", "A. Nguyen", "T. Fuchs", "H. Lipson"],
+    "venue": "arXiv preprint arXiv:1506.06579",
+    "year": 2015
+  }, {
+    "title": "Visualizing and understanding convolutional networks",
+    "authors": ["M.D. Zeiler", "R. Fergus"],
+    "venue": "ECCV",
+    "year": 2014
+  }, {
+    "title": "Colorful image colorization",
+    "authors": ["R. Zhang", "P. Isola", "A.A. Efros"],
+    "venue": "ECCV",
+    "year": 2016
+  }, {
+    "title": "Split-brain autoencoders: Unsupervised learning by cross-channel prediction",
+    "authors": ["R. Zhang", "P. Isola", "A.A. Efros"],
+    "venue": "arXiv preprint arXiv:1611.09842",
+    "year": 2016
+  }, {
+    "title": "Learning deep features for scene recognition using places database",
+    "authors": ["B. Zhou", "A. Lapedriza", "J. Xiao", "A. Torralba", "A. Oliva"],
+    "venue": "NIPS",
+    "year": 2014
+  }],
+  "id": "SP:281ddda8661dcac5cf9c0868ab80ff2c9cd45ba1",
+  "authors": [{
+    "name": "Mathilde Caron",
+    "affiliations": []
+  }, {
+    "name": "Piotr Bojanowski",
+    "affiliations": []
+  }, {
+    "name": "Armand Joulin",
+    "affiliations": []
+  }, {
+    "name": "Matthijs Douze",
+    "affiliations": []
+  }],
+  "abstractText": "Clustering is a class of unsupervised learning methods that has been extensively applied and studied in computer vision. Little work has been done to adapt it to the end-to-end training of visual features on large-scale datasets. In this work, we present DeepCluster, a clustering method that jointly learns the parameters of a neural network and the cluster assignments of the resulting features. DeepCluster iteratively groups the features with a standard clustering algorithm, kmeans, and uses the subsequent assignments as supervision to update the weights of the network. We apply DeepCluster to the unsupervised training of convolutional neural networks on large datasets like ImageNet and YFCC100M. The resulting model outperforms the current state of the art by a significant margin on all the standard benchmarks.",
+  "title": "Deep Clustering for Unsupervised Learning of Visual Features"
+}

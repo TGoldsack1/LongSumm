@@ -1,0 +1,272 @@
+{
+  "sections": [{
+    "heading": "1 Introduction",
+    "text": "Discovering efficient representations of discrete high dimensional concepts has been a key challenge in a variety of applications recently [3]. Using various types of neural networks, high-dimensional raw data can be transformed to continuous real-valued concept vectors that efficiently capture their latent relationship from data. Such succinct representations have been shown to improve the performance of various complex tasks across domains spanning from image processing [22, 17, 34], language modeling [4, 24], word embedding [25, 29], music information retrieval [30], sentiment analysis [31], and more recently multi-modal learning of images and text [18].\nEfficient representations for concepts is an important, if not essential, element in healthcare as well. Healthcare concepts contain rich latent relationships that cannot be represented by simple one-hot coding [28, Chapter 2.3.2]. For example, pneumonia and bronchitis are clearly more related than pneumonia and obesity. In one-hot coding, such relationship between different codes are not represented. Despite its limitation, many healthcare applications [7, 1] still use the simple sum over one-hot vectors to derive patient feature vectors. To overcome this limitation, it is common in healthcare applications, to rely on carefully designed feature representations [32, 16, 36]. However, this process often involves supervision information and ad-hoc feature engineering that requires considerable expert medical knowledge and is not scalable in general.\nRecently, studies have shown that it is possible to learn efficient representations of healthcare concepts without medical expertise and still significantly improve the performance of various\nar X\niv :1\n60 2.\n05 56\n8v 1\n[ cs\n.L G\n] 1\n7 Fe\nb 20\nhealthcare applications. Choi et al. [9] learned distributed representations of medical codes (e.g. diagnosis, medication, procedure codes) using Skip-gram [25] and applied them to heart failure prediction. Choi et al. [10] also learned the representations for medical concepts from a medical claims dataset and compared the learned representations to existing medical ontologies and code groupers. Despite these progress, learning efficient representations of healthcare concepts, however, is still an open challenge. The difficulty stems from several aspects:\n1. Healthcare data have a unique structure where the visits are temporally ordered but the medical codes within a visit form an unordered set. A sequence of visits possesses sequential relationship among them which cannot be captured by simply aggregating code-level representations. Moreover, given the demographic information for patients, the structure becomes more complex.\n2. Learned representations should be interpretable. While the interpretability of the model in the clinical domain is considered to be an essential requirement, some of the state-of-the art representation learning methods such as recurrent neural networks (RNN) are difficult to interpret.\n3. The algorithm should be scalable enough to handle real-world healthcare datasets with millions of patients and hundred millions of visits.\nTo address such challenges in healthcare concept representation learning, we propose Med2Vec and make the following contributions.\n• We propose Med2Vec, a simple and robust algorithm to efficiently learn succinct code-, and visit-level representations by using real-world electronic health record (EHR) datasets, without depending on expert medical knowledge.\n• Med2Vec learns interpretable representations and enables clinical applications to offer more than just improved performances. We conducted detailed user study with clinical experts to validate the interpretability of the resulting representation.\n• We conduct experiments to demonstrate the scalability of Med2Vec, and show that our model can be readily applied to near 30K medical codes over two large datasets with 3 million and 5.5 million visits, respectively.\n• We apply the learned representations to various real-world health problems and demonstrate the improved performance enabled by Med2Vec compared to popular baselines.\nIn the following section, we discuss related works, then describe our method in section 3. In section 4, we explain experiment design and interpretation method in detail. We present the results and discussion in section 5. Then we conclude this paper with future work in section 6."
+  }, {
+    "heading": "2 Preliminaries and Related Work",
+    "text": "In this section, we first describe the preliminary ideas used in learning representation for words. Then, we review the algorithms developed for representing healthcare data."
+  }, {
+    "heading": "2.1 Learning representation for words",
+    "text": "Representation learning of words using neural network based methods have been studied since the early 2000’s [4, 12, 27, 33]. Among these techniques, Skip-gram [25] is the basis of many concept representation learning methods, including our own. Skip-gram is able to capture the subtle relationships between words, thus outperforming the previous works in a word analogy task[23].\nGiven a sequence of words w1, w2, . . . , wT , Skip-gram learns the word representations based on the co-occurrence information of words inside a context window of a predefined size. The key principle of Skip-gram is that a word’s representation should be able to predict the neighboring words. The objective of Skip-gram is to maximize the following average log probability.\n1\nT T∑ t=1 ∑ −c≤j≤c,j 6=0 log p(wt+j |wt)\nwhere c is the size of the context window. The conditional probability is defined by the softmax function:\np(wO|wI) = exp\n( v′>wOvwI ) ∑W\nw=1 exp ( v′>w vwI ) where vw and v ′ w are the input and output vector representations of word w. W is the number of words in the vocabulary. Basically, Skip-gram tries to maximize the softmax probability of the inner product of the center word’s vector and its context word’s vectors.1\nPennington et al. proposed GloVe, [29] which learns another word representations by using a similar principle as Skip-gram. GloVe uses the global word co-occurrence matrix to learn the word representations. Since the global co-occurrence matrix is often sparse, GloVe can be computationally less demanding than Skip-gram, which is a neural network model using the sliding context window. On the other hand, GloVe employs a weighting function that could require a considerable amount tuning effort.\n1Mikolov et al. [25] also use hierarchical softmax and negative sampling to speed up the learning process. We focus on the original simple formulation.\nBeyond one level representation like Skip-gram and GloVe, researchers also proposed hierarchical learning representations for the text corpus, which has some analogy to our healthcare setting with two level concepts namely: codes and visits. Le and Mikolov [20] proposes to learn representations for paragraphs and words simultaneously by treating paragraphs as one of the words. However, their algorithm assigns a fixed set of vectors for both words and paragraphs in the training data. Moreover, their approach does not capture the sequential order among paragraphs. Skip-thought [19] proposes an encoder-decoder structure: an encoder (Gated Recurrent Units (GRU) in their case) learns a representation for a sentence that is able to regenerate its surrounding sentences (via GRU again). Skip-thought cannot be applied directly to EHR data because unlike words in sentences, the codes in a visit are unordered. Also, the interpretation of Skip-thought model is difficult, as they rely on complex RNNs."
+  }, {
+    "heading": "2.2 Representation learning in healthcare",
+    "text": "Recently researchers start to explore the possibility of efficient representation learning in the medical domain.\nMedical text analysis Minarro et al. [26] learns the representations of medical terms by applying Skip-gram to various medical text collected from PubMed, Merck Manuals, Medscape and Wikipedia. De Vine et al. [13] learns the representations of UMLS concepts from free-text patient records and medical journal abstracts. They first replaced the words in documents to UMLS concepts, then applied Skip-gram to learn the distributed representations of the concepts. However, none of them studied longitudinal EHR data with a large number of medical codes.\nStructured visit records analysis Choi et al. [9], and Choi et al. [10] both learned the distributed representation of medical codes (e.g. diagnosis, medication, procedure codes) from structured longitudinal visit records of patients using Skip-gram. In addition, the authors demonstrated that simply aggregating the learned representation of medical codes to create a visit representation leads to improved predictive performance. However, simply aggregating the code representations is not the optimal method to generate a visit representation as it completely ignores the temporal relations across adjacent visits. We believe that taking advantage of the two-level information (the co-occurrence of codes within a visit and the sequential nature of visits) and the demographic information of patients will give us better representation for both medical codes and patient visits.\nChoi et al. [8] trained a recurrent neural networks (RNN) model to analyze the longitudinal patient records in a temporal order, and predict the diagnosis and medication codes the patient will receive in the future. In [8], the hidden layer of the RNN can be seen as the representation of the patient status over time. However, despite its outstanding performance, RNNs are difficult to interpret."
+  }, {
+    "heading": "3 Method",
+    "text": "In this section, we describe the proposed algorithm Med2Vec. We start by mathematically formulating the EHR data structure and our goal. Then we describe our approach in a top-down fashion. We also explain how to interpret the learned representations. We conclude this section with complexity analysis.\nEHR structure and our notation We denote the set of all medical codes c1, c2, . . . , c|C| in our EHR dataset by C with size |C|. EHR data for each patient is in the form of a sequence of visits V1, . . . , VT where each visit contains a subset of medical codes Vt ⊆ C. Without loss of generality, all algorithms will be presented for a single patient to avoid cluttered notations. The goal of Med2Vec is to learn two types of representations:\nCode representations We aim to learn an embedding function fC : C 7→ Rm+ that maps every code in the set of all medical codes C to non-negative real-valued vectors of dimension m. The non-negativity constraint is introduced to improve interpretability, as discussed in details in Section 3.5.\nVisit representations Our second task is to learn another embedding function fV : V 7→ Rn that maps every visit (a set of medical codes) to a real-valued vector of dimension n. The set V is the power set of the set of codes C."
+  }, {
+    "heading": "3.1 Med2Vec architecture",
+    "text": "Figure 2 depicts the architecture of Med2Vec. Given a visit Vt, we use a multi-layer perceptron (MLP) to to generate the corresponding visit representation vt. First, visit Vt is represented by a binary vector xt ∈ {0, 1}|C| where the i-th entry is 1 only if ci ∈ Vt. Then xt is converted to an intermediate visit representation ut ∈ Rm as follows,\nut = ReLU(Wcxt + bc) (1)\nusing the code weight matrix Wc ∈ Rm×|C| and the bias vector bc ∈ Rm. The rectified linear unit is defines as ReLU(v) = max(v,0). Note that max() applies element-wise to vectors. We use\nthe rectified linear unit (ReLU) as the activation function to enable interpretability, which will be discussed in section 3.3.\nWe concatenate the demographic information dt ∈ Rd, where d is the size of the demographic information vector, to the intermediate visit representation ut and create the final visit representation vt ∈ Rn as follows,\nvt = ReLU(Wv[ut,dt] + bv)\nusing the visit weight matrix Wv ∈ Rn×(m+d) and the bias vector bv ∈ Rn, where n is the predefined size of the visit representation. We use ReLU once again as the activation function. We discuss our efficient training procedure of the parameters Wc, bc,Wv and bv in the next subsection."
+  }, {
+    "heading": "3.2 Learning from the visit-level information",
+    "text": "As mentioned in the introduction, the sequential information of visits can be exploited for learning efficient representations of visits and potentially codes. We train the MLP using a very straightforward intuition as follows: a visit describes a state in a continuous process that is a patient’s clinical experience. Therefore, given a visit representation, we should be able to predict what has happened in the past, and what will happen in the future. Specifically, given a visit representation vt, we train a softmax classifier that predicts the medical codes of the visits within a context window. We minimize the cross entropy error as follows,\nmin Ws,bs\n1 T T∑ t=1 ∑ −w≤i≤w,i6=0 −xt+i> log ŷt − (1− xt+i)> log(1− ŷt), (2)\nwhere ŷt = exp(Wsvt + bs)∑|C|\nj=1 exp(Ws[j, :]vt + bs[j])\nwhere Ws ∈ R|C|×n and bs ∈ R|C| are the weight matrix and bias vector for the softmax classifier, w the predefined context window size, exp the element-wise exponential function, and 1 denotes an all one vector. We have used MATLAB’s notation for selecting a row in Ws and a coordinate of bs."
+  }, {
+    "heading": "3.3 Learning from the code-level information",
+    "text": "As we described in the introduction, healthcare datasets contain two-level information: visit-level sequence information and code-level co-occurrence information. Since the loss function in Eq. (2) can efficiently capture the sequence level information, now we need to find a way to use the second source of information, i.e., the intra-visit co-occurrence of the codes.\nA natural choice to capture the code co-occurrence information is to use Skip-gram. The main idea would be that the representations for the codes that occur in the same visit should predict each other. To embed Skip-gram in Med2Vec, we can train Wc ∈ Rm×|C| (which also produces intermediate visit level representations) so that the i-th column of Wc will be the representation for the i-th medical code among total |C| codes. Note that given the unordered nature of the codes inside a visit, unlike the original Skip-gram, we do not distinguish between the “input” medical code and the “output” medical code. In text, it is sensible to assume that a word can serve a different role as a center word and a context word, whereas in EHR datasets, we cannot classify codes as center or context codes. It is also desirable to learn the representations of different types of\ncodes (e.g. diagnosis, medication, procedure code) in the same latent space so that we can capture the hidden relationships between them.\nHowever, precise interpretation of Skip-gram codes will be difficult as Wc will have positive and negative values. For intuitive interpretation, we should learn code representations with non-negative values. Note that in Eq.(1), if the binary vector xt is a one-hot vector, then the intermediate visit representation ut becomes a code representation. Therefore, using the Skip-gram algorithm, we train the non-negative weight ReLU(Wc) instead of Wc. This will not only use the intra-visit co-occurrence information, but also guarantee non-negative code representations. Moreover, ReLU produces sparse code representations, which further facilitates easier interpretation of the codes.\nThe code representations to be learned is denoted as a matrix W ′c = ReLU(Wc) ∈ Rm×|C|. From a sequence of visits V1, V2, . . . , VT , the code-level representations can be learned by maximizing the following log-likelihood,\nmin W ′c\n1\nT T∑ t=1 ∑ i:ci∈Vt ∑ j:cj∈Vt,j 6=i log p(cj |ci), (3)\nwhere p(cj |ci) = exp\n( W ′c[:, j] >W ′c[:, i] )\n∑|C| k=1 exp ( W ′c[:, k] >W ′c[:, i] ) . (4)"
+  }, {
+    "heading": "3.4 Unified training",
+    "text": "The single unified framework can be obtained by adding the two objective functions (3) and (2) as follows,\nargmin W ,b\n1\nT T∑ t=1 { − ∑\ni:ci∈Vt ∑ j:cj∈Vt,j 6=i log p(cj |ci)\n+ ∑\n−w≤k≤w,k 6=0 −x>t+k log ŷt − (1− xt+k)> log(1− ŷt) } By combining the two objective functions we learn both code representations and visit representations from the same source of patient visit records, exploiting both intra-visit co-occurrence information as well as inter-visit sequential information at the same time."
+  }, {
+    "heading": "3.5 Interpretation of learned representations",
+    "text": "While the original Skip-gram learns code representations that have interesting properties such as additivity, in healthcare we need stronger interpretability. We need to be able to associate clinical meaning to each dimension of both code and visit representations. Interpreting the learned representations is based on analyzing each coordinate in both code and visit embedding spaces.\nInterpreting code representations If information is properly embedded into a lower dimensional non-negative space, each coordinate of the lower dimension can be readily interpreted. Nonnegative matrix factorization (NMF) is a good example. Since we trained ReLU(Wc) ∈ Rm×|C|, a non-negative matrix, to represent the medical codes, we can employ a simple method to interpret\nthe meaning of each coordinate of the m-dimensional code embedding space. We can find the top k codes that have the largest values for the i-th coordinate of the code embedding space as follows,\nargsort(Wc[i, :])[1 : k]\nwhere argsort returns the indices of a vector that index its values in a descending order. By studying the returned medical codes, we can view each coordinate as a disease group. Detailed examples are given in section 5.1\nInterpreting visit representations To interpret the learned visit vectors, we can use the same principle we used for interpreting the code representation. For the i-th coordinate of the n-dimensional visit embedding space, we can find the top k coordinates of the code embedding space that have the strongest values as follows,\nargsort(Wv[i, :])[1 : k]\nwhere we use the same argsort as before. Once we obtain a set of code coordinates, we can use the knowledge learned from interpreting the code representations to understand how each visit coordinate is associated with a group of diseases. This simple interpretation is possible because the intermediate visit representation ut is a non-negative vector, due to the ReLU activation function.\nIn the experiments, we also tried to find the input vector xt that most activates the target visit coordinate [14, 21]. However, the results were very sensitive to the initial value of xt, and even averaging over multiple samples were producing unreliable results."
+  }, {
+    "heading": "3.6 Complexity analysis",
+    "text": "We first analyze the computational complexity of the code-level objective function Eq. (3). Without loss of generality, we assume the visit records of all patients are concatenated into a single sequence of visits. Then the complexity for Eq. (3) is as follows,\nO(TM2|C|m)\nwhere T is the number of visits, M2 is the average of squared number of medical codes within a visit, |C| the number of unique medical codes, m the size of the code representation. The M2 factor comes from iterating over all possible pairs of codes within a visit. The complexity of the visit-level objective function Eq.(2) is as follows,\nO(Tw(|C|(m+ n) +mn))\nwhere w is the size of the context window, n the size of the visit representation. The added terms come from generating a visit representation via MLP. Since size of code representation m and size of visit representation n generally have the same order of magnitude, we can replace n with m. Furthermore, m is generally smaller than |C| by at least two orders of magnitude. Therefore the overall complexity of Med2Vec can be simplified as follows.\nO(T |C|m(M2 + w))\nHere we notice that M2 is generally larger than w. In our work, the average number of codes M per visit for two datasets are 7.88 and 3.19 according to Tables 1, respectively, whereas we select\nthe window size w to be at most 5 in our experiments. Therefore the complexity of Med2Vec is dominated by the code representation learning process, for which we use the Skip-gram algorithm. This means that exploiting visit-level information to learn efficient representations for both visits and codes does not incur much additional cost."
+  }, {
+    "heading": "4 Experiments",
+    "text": "In this section, we evaluate the performance of Med2Vec in both public and proprietary datasets. First we describe the datasets. Then we describe evaluation strategies for code and visit representations, along with implementation details. Then we present the experiment results of code and visit representations with discussion. We conclude with convergence and scalability study. We make the source code of Med2Vec publicly available at https://github.com/mp2893/med2vec."
+  }, {
+    "heading": "4.1 Dataset description",
+    "text": "We evaluate performance of Med2Vec on a dataset provided by Children’s Healthcare of Atlanta (CHOA)2. We extract visit records from the dataset, where each visit contains several medical codes (e.g. diagnosis, medication, procedure codes). The diagnosis codes follow ICD-9 codes, the medication codes are denoted by National Drug Codes (NDC), and the procedure codes follow Category I of Current Procedural Terminology (CPT). We exclude patients who had less that two visits to showcase Med2Vec’s ability to use sequential information of visits. The basic statistics of the dataset are summarized in Table 1. The data are fully de-identified and do not include any personal health information (PHI).\nWe divide the dataset into two groups in a 4:1 ratio. The former is used to train Med2Vec. The latter is held off for evaluating the visit-level representations, where we train models to predict visit-related labels. The details of the evaluation will be provided in the following subsections.\nWe also use CMS dataset, a publicly available3 synthetic EHR dataset. The basic information of CMS is also given in Table 1. Compared to CHOA dataset, the CMS dataset has more patients\n2http://www.choa.org/ 3https://www.cms.gov/Medicare/Quality-Initiatives-Patient-Assessment-Instruments/OASIS/DataSet.\nhtml\nbut fewer unique medical codes. The average number of codes per visit is also smaller than that of CHOA dataset. Since CMS dataset is synthetic, we use it only for testing the scalability of Med2Vec and baseline models in section 4.7."
+  }, {
+    "heading": "4.2 Evaluation Strategy of code representations",
+    "text": "Qualitative evaluation by medical experts For a comprehensive qualitative evaluation, we perform a relatedness test by selecting 100 most frequent diagnosis codes and their 5 closest diagnoses, medications and procedures in terms of cosine similarity. This allow us to know if the learned representations effectively capture the latent relationships among them. Two medical experts from CHOA check each item and assign related, possible and unrelated labels.\nQuantitative evaluation with baselines We use medical code groupers to quantitatively evaluate the code representations. Code groupers are used to collapse individual medical codes into clinically meaningful categories. For example, Clinical Classifications Software (CCS) groups ICD9 diagnosis codes into 283 categories such as tuberculosis, bacterial infection, and viral infection.\nWe apply K-means clustering to the learned code representations and calculate the normalized mutual information (NMI) based on the group label of each code. We use the CCS as the ground truth for evaluating the code representation for diagnosis. For medication code evaluation, we use American Hospital Formulary Service (AHFS) pharmacologic-therapeutic classification, which groups NDC codes into 165 categories. For procedure code evaluation, we use the second-level grouping of CPT category I, which groups CPT codes into 115 categories.Thus, we set the number of clusters k to 283, 165, 115 respectively for the diagnosis, medication, procedure code evaluation, which matches the numbers of groups from individual groupers.\nFor baselines, we use popular methods that efficiently exploit co-occurrence information. Skipgram (which is used in learning representations of medical concepts by [10, 9]) is trained using Eq. (3). GloVe will be trained on the co-occurrence matrix of medical codes, for which we counted the codes co-occurring within a visit. Additionally, we also report well-known baselines such as singular value decomposition on the co-occurrence matrix."
+  }, {
+    "heading": "4.3 Evaluation strategy of visit representation",
+    "text": "We evaluate the quality of the visit representations by performing two visit-level prediction tasks: predicting the future visit and predicting the present status. The former will evaluate a visit representation’s potential effectiveness in predictive healthcare while the latter will evaluate the how well it captures the information in the given visit. The details of the two tasks are given below. Predicting future medical codes: We predict the medical codes that will occur in the next visit using the visit representations. Specifically, given two consecutive visits Vi and Vj , the medical codes c ∈ Vj will be the target y, the medical codes c ∈ Vi will be the input x, and we use softmax to predict y given x. The predictive performance will be measured by Top-k Recall, which mimics the differential diagnosis conducted by doctors. We set k = 30 to cover even the complex cases of CHOA dataset, as over 167,000 visits are assigned with more than 20 medical codes according to Table 1. We predict the grouped medical codes, obtained by the medical groupers used in Section 4.2.\nPredicting Clinical Risk Groups (CRG) level: A patient’s CRG level indicates his severity level. It ranges from 1 to 9, including 5a and 5b. The CRG levels can be divided into two groups: non-severe (CRG 1-5a) and severe (CRG 5b-9). Given a visit, we use logistic regression to predict the binary CRG class associated with the visit. We use Area Under The Curve (AUC) to measure the classification accuracy, as it is more robust to class imbalance in data.\nBaselines For baselines, we use the following methods. Binary vector model (One-hot+): In order to compare with the raw input data, we use the binary vector xt as the visit representation. Stacked autoencoder (SA): Stacked autoencoder is one of the most popular unsupervised representation learning algorithms [35]. Using the binary vector xt concatenated with patient demographic information as the input, we train a 3-layer stacked autoencoder (SA) [5] to minimize the reconstruction error. The trained SA will then be used to generate visit representations. Sum of Skip-gram vectors (Skip-gram+): We first learn the code-level representations with Skip-gram only (Eq. (3)). Then for the visit-level representation, we simply add the representations of the codes within the visit. This approach was proven very effective for heart failure prediction in [9]. We append patient demographic information at the end. Sum of GloVe vectors (GloVe+): We perform the same process as Skip-gram+, but use GloVe vectors instead of Skip-gram vectors. We use the recommended hyperparameter setting from [29].\nEvaluation details We use the held-off dataset, which was not used to learn the code and visit representations, to perform the two prediction tasks. The held-off dataset contains 672,110 visits assigned with CRG levels. In order to train the predictors, we divide the held-off data to training and testing folds with ration 4:1. Both softmax and logistic regression are trained for 10 epochs on the training fold. We perform 5-fold cross validation for each task to tune the regularization parameter. For all baseline models and Med2Vec, we use age, sex and ethnicity as the demographic information in the input data."
+  }, {
+    "heading": "4.4 Implementation and training details",
+    "text": "For learning code and visit representations using Med2Vec and all baselines, we use Adadelta [37] in a mini-batch fashion. For Skip-gram, SA and Med2Vec, we use 1,000 visits4 per batch. For GloVe, we use 1,000 non-zero entries of the co-occurrence matrix per batch. The optimization terminates after a fixed number of epochs. In section 4.6, we show the relationship between training epochs and the performance. We also show the convergence behavior of Med2Vec and the baselines in section 4.7.\nMed2Vec, Skip-gram, GloVe and SA are implemented with Theano 0.7.0 [6]. K-means clustering for the code-level evaluation and SVD are performed using Scikit-learn 0.14.1. Softmax and logistic regression models for the visit-level evaluation are implemented with Keras 0.3.1, and trained for 10 epochs. All tasks are executed on a machine equipped with Intel Xeon E5-2697v3, 256GB memory and two Nvidia K80 Tesla cards.\nWe train multiple models using various hyperparameter settings. For all models we vary the size of the code representations m (or the size of the hidden layer for SA), and the number of\n4for efficient computation, we preprocessed the EHR dataset so that the visit records of all patients are concatenated into a single sequence of visits.\nTable 2: Average score of the medical codes from the relatedness test. 2 was assigned for related,\n1 for possible and 0 for unrelated\n10 epochs.\nModel Diagnosis Medication Procedure SVD (σV >) 0.1824 0.0843 0.1781 Skip-gram 0.2251 0.1216 0.2432 GloVe 0.4205 0.2163 0.3499 Med2Vec 0.2328 0.1089 0.21\ntraining epochs. Additionally for Med2Vec, we vary the size of the visit representations n, and the size of the visit context window w.\nTo alleviate the curse of dimensionality when training the softmax classifier (Eq.(2)) of Med2Vec, we always use the medical code groupers of section 4.2 so that the softmax classifier is trained to predict the grouped medical codes instead of the exact medical codes. To confirm the impact of this strategy, we train an additional Med2Vec without using the medical code groupers."
+  }, {
+    "heading": "4.5 Results of the code-level evaluation",
+    "text": "Table 2 shows the average score of the medical codes from the qualitative code evaluation. On average, Med2Vec successfully captures the relationship between medical codes. However, Med2Vec seems to have a hard time capturing proper representation of medications. This is due to the precise nature the medication prescription. For example, Med2Vec calculated that Ofloxacin, an antibiotic sometimes used to treat middle-ear infection, was related to sensorineural hearling loss (SNHL), an inner-ear problem. On the surface level, this is a wrong relationship. But Med2Vec can be seen as capturing the deeper relationship between medical concepts that is not always clear on the surface level.\nTable 3 shows the clustering NMI of diagnosis, medication and procedure codes, measured for various models. Med2Vec shows more or less similar conformity to the existing groupers as Skipgram. SVD shows the weakest conformity among all models. GloVe exhibits significantly stronger conformity than any other models. Exploiting the global co-occurrence matrix seems to help learn code representations where similar codes are closer to each other in terms of Euclidean distance.\nHowever, the degree of conformity of the code representations to the groupers does not necessarily indicate how well the code representations capture the hidden relationships. For example, CCS categorizes ICD9 224.4 Benign neoplasm of cornea as CCS 47 Other and unspecified benign neoplasm, and ICD9 370.00 Unspecified corneal ulcer as CCS 91 Other eye disorders. But the two diagnosis codes are both eye related problems, and they could be considered related in that sense. Therefore we recommend the readers use the evaluation results for comparing the performance between Med2Vec and other baselines, rather than for measuring the absolute performance.\nIn the following visit-level evaluation, we show that the code representations’ strong conformity\nto the existing groupers alone does not directly transfer to good visit representations."
+  }, {
+    "heading": "4.6 Results of the visit-level evaluation",
+    "text": "The first row of Figure 3 shows the Recall@30 for predicting the future medical codes. First, in all of the experiments, Med2Vec achieves the highest performance, despite the fact that it is constrained to be positive and interpretable. The second observation is that Med2Vec’s performance is robust to choice of the hyperparameters in a wide range of values. Comparing to a more volatile performance of Skip-gram, we can see that including the visit information in training not only improves the performance, but also stabilizes it too.\nAnother fascinating aspect of the results is the overfitting pattern in different algorithms. Increasing the code representation size degrades the performance of all of the algorithms, as it leads to overfitting. Similar behavior can be seen as we train GloVe+ for more epochs which suggests early stopping technique should be used in representation learning [2]. For Med2Vec, increasing the visit representation size n seems to have the strongest influence to its predictive performance.\nThe bottom row of figures in Figure 3 shows the AUC for predicting the CRG class of the given visit. The overfitting patterns are not as prominent as the previous task. This is due to the different nature of the two prediction tasks. While the goal of CRG prediction is to predict a value related to the current visit, predicting the future codes is taking a step away from the current visit. This different nature of the two tasks also contributes to the better performance of One-hot+ on the CRG prediction. One-hot+ contains the entire information of the given visit, although in a very high-dimensional space. Therefore predicting the CRG level, which has a tight relationship with the medical codes within a visit, is an easier task for One-hot+ than predicting the future codes.\nTable 4 shows the performance comparison between two different Med2Vec models. The top model is trained with the grouped codes as explained in section 4.4, while the bottom models is trained with the exact codes. Considering the marginal difference of the CRG prediction AUC, it is evident that our strategy to alleviate the curse of dimensionality was beneficial. Moreover, using the grouped codes will improve the training speed as the softmax function will require less computation."
+  }, {
+    "heading": "4.7 Convergence behavior and scalability",
+    "text": "We first compare the convergence behavior of Med2Vec with Skip-gram (Eq. (3)), GloVe and SA. For SA, we measure the convergence behavior of a single-layer. We train the models for 50 epochs and plot the normalized difference of the loss value Lt−Lt−1Lt , where Lt denotes the loss value at time t. To study the scalability of the models, we use both CHOA dataset and CMS dataset. We vary the size of the training data and plot the time taken for each model to run one epoch.\nThe left figure of Fig 4 shows the convergence behavior of all models when trained on the CHOA dataset. SA shows the most stable convergence behavior, which is natural given that we used a single-layer SA, a much less complex model compared to GloVe, Skip-gram and Med2Vec. All models except SA seem to reach convergence after 10 epochs of training. Note that Med2Vec shows similar, if not better convergence behavior compared to Skip-gram even with added complexity.\nThe center figure of Fig 4 shows the minutes taken to train all models for one epoch using the CHOA dataset. As we have analzyed in section ssec:complexity, Med2Vec takes essentially the same time to train for one epoch. Both Skip-gram and Med2Vec, however, takes longer than SA and GloVe. This is mainly due to having the softmax function for training the code representations. GloVe, which is trained on the very sparse co-occurrence matrix naturally takes the least time to train.\nThe right figure of Fig 4 shows the training time when using the CMS dataset. Note that Med2Vec and Skip-gram takes similar time to train as SA. This is due to the smaller number of codes per visit, which is the computationally dominating factor of both Med2Vec and Skip-gram. GloVe takes less time as the number of unique codes are smaller in the CMS dataset. SA, on the other hand, takes more time because the number of visits have doubled while the the number of unique codes is about 73% of that of the CHOA dataset."
+  }, {
+    "heading": "5 Interpretation",
+    "text": "Given the importance of interpretability in healthcare, we demonstrate three stages of interpretability for our model in collaboration with the medical experts from CHOA. First, to analyze the learned code representations we show top five medical codes for each of six coordinates of the code embedding space and explain the characteristic of each coordinate. This way, we show how we can annotate each dimension of the code embedding space with clinical concepts. The six coordinates are specifically chosen so that they can be used in the later stages. Second, we demonstrate the interpretability of Med2Vec’s visit representations by analyzing the meaning of two coordinates in the visit embedding space.\nFinally, we extend the interpretability of Med2Vec to a real-world task, the CRG prediction, and analyze the medical codes that have strong influence on the CRG level. Once we learn the logistic regression weight wLR for the CRG prediction, we can extract knowledge from the learned weights by analyzing the visit coordinates to which the weights are strongly connected.\nInstead of analyzing the visit coordinates, however, we propose an approximate way of directly finding out which code coordinate plays an important role in predicting the CRG class. Our goal is to find ut such that maximizes the output activation as follows 5\nu?t = argmax ut,‖ut‖2=1,ut 0 [ReLU(Wvut + bv)] >wLR (5)\nGiven the fact that ReLU(·) is an increasing function (not-strictly though), we make an approximation and find the solution without the ReLU(·) term. The approximate solution can be found in closed form u?t ∝ (W>v wLR)+. Finally, we calculate the element-wise product of u?t and max(Wc + bc). This is to take into account the fact that each code coordinate has different\n5As we are interested in influential codes, we assume the demographic information vector is zero vector and omit it for ease of notation.\nmaximum value. Therefore, instead of simply selecting the code coordinate with the strongest connection to the CRG level, we consider each coordinate’s maximum ability to activate the positive CRG prediction.\nThe resulting vector will show the maximum influence each code coordinate can have on the CRG prediction."
+  }, {
+    "heading": "5.1 Results",
+    "text": "Table 5 shows top ten codes with the largest value in each of the six coordinates of the code embedding space. The coordinate 112 is clearly related to sickle-cell disease and organ transplant. The two are closely related in that sickle cell disease can be treated with bone-marrow transplant. Prograf is a medication used for preventing organ rejection. Coordinate 152 groups medical codes related to sports-related injuries, specifically broken bones. Coordinate 141 is related to brain injuries and hearing loss due to the brain injuries. Neurofibromatosis(NF) is also related to this coordinate because it can cause tumors along the nerves in the brain. Cystic fibrosis(CF) seems to be a weak link in this group as it is only related to NF in the sense that both NF and CF are genetically inherited. Coordinate 184 clearly represents medical codes related to epilepsy. Epilepsy is often accompanied by convulsions, which can cause joint pain. Cerebral artery occlusion is related epilepsy in the sense that epileptic seizures can be a manifestation of cerebral arterial occlusive diseases[11]. Also, both blood in feces and the joint pain can be attributed to Henoch–Schönlein\npurpura, a disease primarily found in children. Coordinate 190 groups diseases that are caused by congenital chromosome anomalies, especially the autosome. Acquired hypothyroidism seems to be an outlier of this coordinate. Coordinate 199 is strongly related to congenital paralysis. Baclofen is a medication used as a muscle relaxer. Quadraplegia patients can have weakened respiratory function due to impaired abdominal muscles[15], in which case tracheostomy could be required.\nWe now analyze two visit coordinates: coordinate 50 and 41. Both visit coordinates have the strongest connection to the logistic regression learned for the CRG prediction. For visit coordinate 50, the two strongest code coordinates connected to it are code coordinates 112 and 152. Then naturally, from our analysis above, we can easily see that visit coordinate 50 is strongly activated by sickle-cell disease and sports-related injuries. For visit coordinate 41, code coordinates 141 and 184 have the strongest connection. Again from the analysis above, we can directly infer that visit coordinate 41 can be seen as a patient group consisting of brain damage & hearing loss patients and epilepsy patients. By repeating this process, we can find the code coordinates that are likely to strongly influence the CRG level.\nHowever, finding the influential code coordinates for CRG level can be achieved without analyzing the visit representation if we use Eq.(5). Applying Eq.(5) to the logistic regression weight of the CRG prediction, we learned that code coordinates 190 and 199 are the two strongest influencer of the CRG level. Using the analysis from above, we can naturally conclude that patients suffering from congenital chromosome anomalies or congenital paralysis are most likely to be considered to be in severe states, which is obviously true in any clinical setting."
+  }, {
+    "heading": "6 Conclusion",
+    "text": "In this paper, we proposed Med2Vec, a scalable two layer neural network for learning lower dimensional representations for medical concepts. Med2Vec incorporates both code co-occurence information and visit sequence information of the EHR data which improves the accuracy of both code and visit representations. Throughout several experiments, we successfully demonstrated the superior performance of Med2Vec in two predictive tasks and provided clinical interpretation of the learned representations."
+  }, {
+    "heading": "7 Acknowledgments",
+    "text": "This work was supported by the National Science Foundation, award IIS- #1418511 and CCF#1533768, Children’s Healthcare of Atlanta, CDC I-SMILE project, Google Faculty Award, AWS Research Award, Microsoft Azure Research Award and UCB."
+  }],
+  "year": 2016,
+  "references": [{
+    "title": "Learning deep architectures for ai",
+    "authors": ["Y. Bengio"],
+    "venue": "Foundations and Trends R © in Machine Learning",
+    "year": 2009
+  }, {
+    "title": "Representation learning: A review and new perspectives",
+    "authors": ["Y. Bengio", "A. Courville", "P. Vincent"],
+    "venue": "PAMI",
+    "year": 2013
+  }, {
+    "title": "A neural probabilistic language model",
+    "authors": ["Y. Bengio", "R. Ducharme", "P. Vincent", "C. Janvin"],
+    "venue": "JMLR",
+    "year": 2003
+  }, {
+    "title": "et al",
+    "authors": ["Y. Bengio", "P. Lamblin", "D. Popovici", "H. Larochelle"],
+    "venue": "Greedy layer-wise training of deep networks. NIPS",
+    "year": 2007
+  }, {
+    "title": "Theano: a cpu and gpu math expression compiler",
+    "authors": ["J. Bergstra", "O. Breuleux", "F. Bastien", "P. Lamblin", "R. Pascanu", "G. Desjardins", "J. Turian", "D. Warde-Farley", "Y. Bengio"],
+    "venue": "Proceedings of SciPy",
+    "year": 2010
+  }, {
+    "title": "Cloud-based predictive modeling system and its application to asthma readmission prediction",
+    "authors": ["R. Chen", "H. Su", "Y. Zhen", "M. Khalilia", "D. Hirsch", "M. Thompson", "T. Davis", "Y. Peng", "S. Lin", "J. Tejedor-Sojo", "E. Searles", "J. Sun"],
+    "venue": "AMIA. AMIA",
+    "year": 2015
+  }, {
+    "title": "Doctor ai: Predicting clinical events via recurrent neural networks",
+    "authors": ["E. Choi", "M.T. Bahadori", "J. Sun"],
+    "venue": "arXiv preprint arXiv:1511.05942",
+    "year": 2015
+  }, {
+    "title": "Medical concept representation learning from electronic health records and its application on heart failure prediction",
+    "authors": ["E. Choi", "A. Schuetz", "W.F. Stewart", "J. Sun"],
+    "venue": "arXiv preprint arXiv:1602.03686",
+    "year": 2016
+  }, {
+    "title": "Learning low-dimensional representations of medical concepts. 2016",
+    "authors": ["Y. Choi", "C.Y.-I. Chiu", "D. Sontag"],
+    "year": 2016
+  }, {
+    "title": "Epileptic seizures in cerebral arterial occlusive disease",
+    "authors": ["L. Cocito", "E. Favale", "L. Reni"],
+    "venue": "Stroke",
+    "year": 1982
+  }, {
+    "title": "A unified architecture for natural language processing: Deep neural networks with multitask learning",
+    "authors": ["R. Collobert", "J. Weston"],
+    "venue": "ICML",
+    "year": 2008
+  }, {
+    "title": "Medical semantic similarity with a neural language model",
+    "authors": ["L. De Vine", "G. Zuccon", "B. Koopman", "L. Sitbon", "P. Bruza"],
+    "venue": "KDD",
+    "year": 2014
+  }, {
+    "title": "Visualizing higher-layer features of a deep network",
+    "authors": ["D. Erhan", "Y. Bengio", "A. Courville", "P. Vincent"],
+    "venue": "University of Montreal",
+    "year": 2009
+  }, {
+    "title": "Lung volumes and mechanics of breathing in tetraplegics",
+    "authors": ["J. Forner"],
+    "venue": "Spinal Cord, 18(4):258– 266",
+    "year": 1980
+  }, {
+    "title": "Unfolding physiological state: Mortality modelling in intensive care units",
+    "authors": ["M. Ghassemi", "T. Naumann", "F. Doshi-Velez", "N. Brimmer", "R. Joshi", "A. Rumshisky", "P. Szolovits"],
+    "venue": "KDD",
+    "year": 2014
+  }, {
+    "title": "A fast learning algorithm for deep belief nets",
+    "authors": ["G.E. Hinton", "S. Osindero", "Y.-W. Teh"],
+    "venue": "Neural computation",
+    "year": 2006
+  }, {
+    "title": "A multiplicative model for learning distributed text-based attribute representations",
+    "authors": ["R. Kiros", "R. Zemel", "R.R. Salakhutdinov"],
+    "venue": "NIPS",
+    "year": 2014
+  }, {
+    "title": "Skip-thought vectors",
+    "authors": ["R. Kiros", "Y. Zhu", "R. Salakhutdinov", "R.S. Zemel", "A. Torralba", "R. Urtasun", "S. Fidler"],
+    "venue": "NIPS",
+    "year": 2015
+  }, {
+    "title": "Distributed representations of sentences and documents",
+    "authors": ["Q. Le", "T. Mikolov"],
+    "venue": "ICML",
+    "year": 2014
+  }, {
+    "title": "Building high-level features using large scale unsupervised learning",
+    "authors": ["Q.V. Le"],
+    "venue": "ICASSP",
+    "year": 2013
+  }, {
+    "title": "Gradient-based learning applied to document recognition",
+    "authors": ["Y. LeCun", "L. Bottou", "Y. Bengio", "P. Haffner"],
+    "venue": "Proceedings of the IEEE",
+    "year": 1998
+  }, {
+    "title": "Efficient estimation of word representations in vector space",
+    "authors": ["T. Mikolov", "K. Chen", "G. Corrado", "J. Dean"],
+    "venue": "arXiv preprint arXiv:1301.3781",
+    "year": 2013
+  }, {
+    "title": "Recurrent neural network based language model",
+    "authors": ["T. Mikolov", "M. Karafiát", "L. Burget", "J. Cernockỳ", "S. Khudanpur"],
+    "venue": "INTERSPEECH",
+    "year": 2010
+  }, {
+    "title": "Distributed representations of words and phrases and their compositionality",
+    "authors": ["T. Mikolov", "I. Sutskever", "K. Chen", "G.S. Corrado", "J. Dean"],
+    "venue": "NIPS",
+    "year": 2013
+  }, {
+    "title": "Exploring the application of deep learning techniques on medical text corpora",
+    "authors": ["J.A. Minarro-Giménez", "O. Maŕın-Alonso", "M. Samwald"],
+    "venue": "Studies in health technology and informatics",
+    "year": 2013
+  }, {
+    "title": "A scalable hierarchical distributed language model",
+    "authors": ["A. Mnih", "G.E. Hinton"],
+    "venue": "NIPS",
+    "year": 2009
+  }, {
+    "title": "Machine learning: a probabilistic perspective",
+    "authors": ["K.P. Murphy"],
+    "venue": "MIT press",
+    "year": 2012
+  }, {
+    "title": "Glove: Global vectors for word representation",
+    "authors": ["J. Pennington", "R. Socher", "C.D. Manning"],
+    "venue": "EMNLP",
+    "year": 2014
+  }, {
+    "title": "Improved musical onset detection with convolutional neural networks",
+    "authors": ["J. Schluter", "S. Bock"],
+    "venue": "ICASSP",
+    "year": 2014
+  }, {
+    "title": "Recursive deep models for semantic compositionality over a sentiment treebank",
+    "authors": ["R. Socher", "A. Perelygin", "J.Y. Wu", "J. Chuang", "C.D. Manning", "A.Y. Ng", "C. Potts"],
+    "venue": "EMNLP",
+    "year": 2013
+  }, {
+    "title": "Supervised patient similarity measure of heterogeneous patient records",
+    "authors": ["J. Sun", "F. Wang", "J. Hu", "S. Edabollahi"],
+    "venue": "KDD Explorations",
+    "year": 2012
+  }, {
+    "title": "Word representations: a simple and general method for semi-supervised learning",
+    "authors": ["J. Turian", "L. Ratinov", "Y. Bengio"],
+    "venue": "ACL",
+    "year": 2010
+  }, {
+    "title": "Extracting and composing robust features with denoising autoencoders",
+    "authors": ["P. Vincent", "H. Larochelle", "Y. Bengio", "P.-A. Manzagol"],
+    "venue": "ICML",
+    "year": 2008
+  }, {
+    "title": "Stacked denoising autoencoders: Learning useful representations in a deep network with a local denoising criterion",
+    "authors": ["P. Vincent", "H. Larochelle", "I. Lajoie", "Y. Bengio", "P.-A. Manzagol"],
+    "venue": "JMLR",
+    "year": 2010
+  }, {
+    "title": "C",
+    "authors": ["Y. Wang", "K. Ng", "R.J. Byrd", "J. Hu", "S. Ebadollahi", "Z. Daar"],
+    "venue": "deFilippi, S. R. Steinhubl, and W. F. Stewart. Early detection of heart failure with varying prediction windows by structured and unstructured data in electronic health records. In EMBC",
+    "year": 2015
+  }, {
+    "title": "Adadelta: An adaptive learning rate method",
+    "authors": ["M.D. Zeiler"],
+    "venue": "arXiv preprint arXiv:1212.5701",
+    "year": 2012
+  }],
+  "id": "SP:efa023cd875b030926b55530cb941e1806eb968b",
+  "authors": [{
+    "name": "Edward Choi",
+    "affiliations": []
+  }, {
+    "name": "Mohammad Taha Bahadori",
+    "affiliations": []
+  }, {
+    "name": "Elizabeth Searles",
+    "affiliations": []
+  }, {
+    "name": "Catherine Coffey",
+    "affiliations": []
+  }, {
+    "name": "Jimeng Sun",
+    "affiliations": []
+  }],
+  "abstractText": "Learning efficient representations for concepts has been proven to be an important basis for many applications such as machine translation or document classification. Proper representations of medical concepts such as diagnosis, medication, procedure codes and visits will have broad applications in healthcare analytics. However, in Electronic Health Records (EHR) the visit sequences of patients include multiple concepts (diagnosis, procedure, and medication codes) per visit. This structure provides two types of relational information, namely sequential order of visits and co-occurrence of the codes within each visit. In this work, we propose Med2Vec, which not only learns distributed representations for both medical codes and visits from a large EHR dataset with over 3 million visits, but also allows us to interpret the learned representations confirmed positively by clinical experts. In the experiments, Med2Vec displays significant improvement in key medical applications compared to popular baselines such as Skipgram, GloVe and stacked autoencoder, while providing clinically meaningful interpretation.",
+  "title": "Multi-layer Representation Learning for Medical Concepts"
+}

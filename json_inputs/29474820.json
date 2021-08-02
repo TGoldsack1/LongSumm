@@ -1,0 +1,205 @@
+{
+  "sections": [{
+    "text": "Distributed computing remains inaccessible to a large number of users, in spite of many open source platforms and extensive commercial offerings. While distributed computation frameworks have moved beyond a simple map-reduce model, many users are still left to struggle with complex cluster management and configuration tools, even for running simple embarrassingly parallel jobs. We argue that stateless functions represent a viable platform for these users, eliminating cluster management overhead, fulfilling the promise of elasticity. Furthermore, using our prototype implementation, PyWren, we show that this model is general enough to implement a number of distributed computing models, such as BSP, efficiently. Extrapolating from recent trends in network bandwidth and the advent of disaggregated storage, we suggest that stateless functions are a natural fit for data processing in future computing environments."
+  }, {
+    "heading": "1 Introduction",
+    "text": "Despite a decade of availability, the twin promises of scale and elasticity [2] remain out of reach for a large number of cloud computing users. Academic and commerciallysuccessful platforms (Apache Hadoop, Apache Spark) with tremendous corporate backing (Amazon, Microsoft, Google) still present high barriers to entry for the average data scientist or scientific computing user. In fact, taking advantage of elasticity remains challenging for even sophisticated users, as the majority of these frameworks were designed to first target on-premise installations at large scale. On commercial cloud platforms, a novice user confronts a dizzying array of potential decisions: one must ahead of time decide on instance type, cluster size, pricing model, programming model, and task granularity.\nSuch challenges are particularly surprising considering that the vast number of data analytic and scientific computing workloads remain embarrassingly parallel. Hyperparameter tuning for machine learning, Monte Carlo simulation for computational physics, and featurization for data science all fit well into a traditional map-reduce\nframework. Yet even at UC Berkeley, we have found via informal surveys that the majority of machine learning graduate students have never written a cluster computing job due to complexity of setting up cloud platforms.\nIn this paper we argue that a serverless execution model with stateless functions can enable radically-simpler, fundamentally elastic, and more user-friendly distributed data processing systems. In this model, we have one simple primitive: users submit functions that are executed in a remote container; the functions are stateless as all the state for the function, including input, output is accessed from shared remote storage. Surprisingly, we find that the performance degradation from using such an approach is negligible for many workloads and thus, our simple primitive is in fact general enough to implement a number of higherlevel data processing abstractions, including MapReduce and parameter servers.\nRecently cloud providers (e.g., AWS Lambda, Google Cloud Functions) and open source projects (e.g., OpenLambda [16], OpenWhisk [30]) have developed infrastructure to run event-driven, stateless functions as microservices. In this model, a function is deployed once and is invoked repeatedly whenever new inputs arrive and elastically scales with input size. Our key insight is that we can dynamically inject code into these functions, which combined with remote storage, allows us to build a data processing system that inherits the elasticity of the serverless model while addressing the simplicity for end users.\nWe describe a prototype system, PyWren1, developed in Python with AWS Lambda. By employing only stateless functions, PyWren helps users avoid the significant developer and management overhead that has until now been a necessary prerequisite. The complexity of state management can instead be captured by a global scheduler and fast remote storage. With PyWren, we seek to understand the trade-offs of using stateless functions for large scale data analytics and specifically what is the impact of solely using remote storage for inputs and outputs. We find that we can achieve around 30-40 MB/s write and read performance per core to a remote bulk object store (S3), matching the per-core performance of a single local\n1PyWren is available at https://pywren.io\nar X\niv :1\n70 2.\n04 02\n4v 2\n[ cs\n.D C\n] 7\nJ un\n2 01\n7\nSSD on typical EC2 nodes. Further we find that this scales to 60-80 GB/s to S3 across 2800 simultaneous functions, showing that existing remote storage systems may not be a significant bottleneck.\nUsing this as a building block we implement image processing pipelines where we extract per-image features during a map phase via unmodified Python code. We also show how we can implement BSP-style applications on PyWren and that a word count job on 83M items is only 17% slower than PySpark running on dedicated servers. Shuffle-intensive workloads are also feasible as we show PyWren can sort 1TB data in 3.4 minutes. However, we do identify storage throughput as a major bottleneck for larger shuffles. Finally we discuss how parameter servers, a common construct in distributed ML [23] can be used with this model. We conclude the paper with some remaining systems challenges, including launch overhead, storage performance and scalable scheduling."
+  }, {
+    "heading": "2 Is the cloud usable?",
+    "text": "Most software, especially in scientific and analytics applications, is not written by computer scientists [18, 26], and it is many of these users who have been left out of the cloud revolution.\nThe layers of abstraction present in distributed data processing platforms are complex and difficult to correctly configure. For example, PySpark, arguably one of the easier to use platforms, runs on top of Spark [49] (written in Scala) which interoperates and is closely coupled with HDFS [42] (written in Java), Yarn [46] (Java again), and the JVM. The JVM in turn is generally run on virtualized Linux servers. Merely negotiating the memory limit interplay between the JVM heap and the host operating system is an art form [10, 45, 44]. These systems often promote “ease of use” by showing powerful functionality with a few lines of code, but this ease of use means little without mastering the configuration of the layers below.\nIn addition to the software configuration issues, cloud users are also immediately faced with tremendous planning and workload management before they even begin running a job. AWS offers 70 instances types across 14 geographical datacenters – all with subtly different pricing. This complexity is such that recent research has focused on algorithmic optimization of workload tradeoffs [17, 47]. While several products such as Databricks and Qubole simplify cluster management, the users still need to explicitly start and terminate clusters, and pick the number and type of instances.\nFinally, the vast majority of scientific workloads could take advantage of dynamic market-based pricing of servers, such as AWS spot instances – but computing spot instance pricing is challenging, and additionally most of the above-mentioned frameworks make it difficult to han-\ndle machine preemption. To avoid the risk of losing intermediate data, users must be careful to either regularly checkpoint their data or run the master and a certain number of workers on non-spot instances. This adds another layer of management complexity which makes elasticity hard to obtain in practice."
+  }, {
+    "heading": "2.1 What users want",
+    "text": "Our proposal in this paper was motivated by a professor of computer graphics at UC Berkeley asking us “Why is there no cloud button?” He outlined how his students simply wish they could easily “push a button” and have their code – existing, optimized, single-machine code – running on the cloud. Thus, our fundamental goal here is to allow as many users as possible to take existing, legacy code and run it in parallel, exploiting elasticity. In an ideal world, users would simply be able to run their desired code across a large number of machines, bottlenecked only by serial performance. Executing 100 or 10000 fiveminute jobs should take roughly five minutes, with minimal start-up and tear-down overhead.\nFurther, in our experience far more users are capable of writing reasonably-performant single-threaded code, using numerical linear algebra libraries (e.g., OpenBLAS, Intel’s MKL), than writing complex distributed-systems code. Correspondingly the goal for these users is not to get the best parallel performance, but rather to get vastly better performance than available on their laptop or workstation while taking minimal development time.\nFor compute-bound workloads, it is more useful to parallelize across functions rather than within each function; to say sweep over a wide range of parameters (such as machine learning hyperparameter optimization) or try a large number of random initial seeds (Monte Carlo simulations of physical systems). For these users, a simple function interface that captures sufficient local state, performs computation remotely, and returns the result is more than adequate. For data-bound workloads, a large number of users would be served by a simpler version of the existing map-reduce framework where outputs can be easily persisted on object storage.\nThus, a number of compute-bound and data-bound workloads can be captured by having a simple abstraction that allows users to run arbitrary functions in the cloud without setting up and configuring servers/frameworks etc. We next discuss why such an abstraction is viable now and the components necessary for such a design."
+  }, {
+    "heading": "3 A Modest Proposal",
+    "text": "Many of the problems with current cloud computing abstractions stem from the fact that they are designed for a server-oriented resource model. Having servers as the unit\nof abstraction ties together multiple resources like memory, CPU and network bandwidth. Further servers are also often long running and hence require DevOps support for maintenance. Our proposal is to instead use a serverless architecture with stateless functions as the unifying abstraction for data processing. Using stateless functions will simplify programming and deployment for end users. In this section we present the high level components for designing data processing systems on a serverless architecture. While other proposals [4] have looked at implementing data processing systems on serverless infrastructure, we propose a simple API that is tightly integrated with existing libraries and also study performance tradeoffs of this approach by using our prototype implementation on a number of workloads."
+  }, {
+    "heading": "3.1 Systems Components",
+    "text": "The main components necessary for executing stateless functions include a low overhead execution runtime, a fast scheduler and high performance remote storage as shown in Figure 1. Users submit single-threaded functions to a global scheduler and while submitting the function they can also annotate the runtime dependencies required. Once the scheduler determines where a function is supposed to run, an appropriate container is created for the duration of execution. While the container maybe reused to improve performance none of the state created by the function will be retained across invocations. Thus, in such a model all the inputs to functions and all output from functions need to be persisted on remote storage and we include client libraries to access both high-throughput and low latency shared storage systems.\nFault Tolerance: Stateless functions allow simple fault tolerance semantics. When a function fails, we restart it (at possibly a different location) and execute on the same input. We only need atomic writes to remote storage for tracking which functions have succeeded. Assuming that functions are idempotent we obtain similar fault tolerance guarantees as existing systems.\nSimplicity: As evidenced by our discussion above, our architecture is very simple and only consists of the minimum infrastructure required for executing functions. We do not include any distributed data structures or dataflow primitives in our design. We believe that this simplicity is necessary in order to make simple workloads like embar-\nrassingly parallel jobs easy to use. More complex abstractions like dataflow or BSP can be implemented on top and we discuss this in Section 3.3.\nWhy now? While the model described above is closely related to systems like Linda [6], Celias [15] and database trigger-based systems [35, 34], these systems have not been widely adopted. We believe that this model is viable now given existing infrastructure and technology trends. While the developer has no control of where a stateless function runs (e.g., the developer cannot specify that a stateless function should run on the node storing the function’s input), the benefits of colocating computation and data – a major design goal for prior systems like Hadoop, Spark and Dryad – have diminished.\nPrior work has shown that hard disk locality does not provide significant performance benefits [12]. To see whether the recent datacenter migration from hard disks to SSDs has changed this conclusion, we benchmarked the I/O throughput of storing data on a local SSD of an AWS EC2 instance vs. storing data on S3. Our results, in Table 1, show that currently that writing to remote storage is faster than a single SSD but using multiple SSDs can yield better performance. However, technology trends [14, 41, 9] indicate that the gap between network bandwidth and storage I/O bandwidth is narrowing, and many recently published proposals for rack-scale computers feature disaggregated storage [20, 3] and even disaggregated memory [13]. All these trends suggest diminishing performance benefits from colocating compute with data in the future."
+  }, {
+    "heading": "3.2 PyWren: A Prototype",
+    "text": "We developed PyWren2 to rapidly evaluate these ideas, exposing a seamless map primitive from Python on top of AWS Lambda. While Lambda was designed to run event-driven microservices (such as resizing a single useruploaded image) at scale, by dynamically extracting code from S3 we make each Lambda invocation run a different function. Currently AWS Lambda provides a very restricted containerized runtime with a maximum 300 seconds of execution time, 1.5 GB of RAM, 512 MB of local storage and no root access, but we believe these limits will\n2A wren is much smaller than a Condor\nbe increased as AWS Lambda is used for more general purpose applications.\nPyWren serializes a Python function using cloudpickle [7], capturing all relevant information as well as most modules that are not present in the server runtime3. This eliminates the majority of user overhead about deployment, packaging, and code versioning. We submit the serialized function along with each serialized datum by placing them into globally unique keys in S3, and then invoke a common Lambda function. On the server side, we invoke the relevant function on the relevant datum, both extracted from S3. The result of the function invocation is serialized and placed back into S3 at a pre-specified key, and job completion is signaled by the existence of this key. In this way, we are able to reuse one registered Lambda function to execute different user Python functions and mitigate the high latency for function registration, while executing functions that exceed Lambda’s code size limit.\nMap for everyone: As discussed in Section 2, many scientific and analytic workloads are embarrassingly parallel. The map primitive provided by PyWren makes addressing these use cases easy – serializing all local state necessary for computation, transparently invoking functions remotely and returning when complete. Calling map launches as many stateless functions as there are elements in the list that one is mapping over. An important aspect to note here is that this API mirrors the existing Python API for parallel processing and thus, unlike other serverless MapReduce frameworks [4], this integrates easily with existing libraries for data processing and visualization.\nMicrobenchmarks: Using PyWren we ran a number of benchmarks(Figures 2,3,4) to determine the impact of solely using remote storage for IO, and how this scales with worker count. In terms of compute, we ran a matrix multiply kernel within each Lambda and find that\n3While there are limitations in the serialization method (including an inability to transfer arbitrary python C extensions), we find this can be overcome using libraries from package managers such as Anaconda.\nwe get 18 GFLOPS per core and that this unsurprisingly scales to more than 40 TFLOPS while using 2800 workers. To measure remote I/O throughput we benchmarked the read, write bandwidth to S3 and our benchmarks show that we can get on average 30 MB/s write and 40 MB/s read per Lambda and that this also scales to more than 60 GB/s write and 80 GB/s read. Assuming that 16 such Lambdas are as powerful as a single server, we find that the performance from Lambda matches the S3 performance shown in Table 1. To measure the overheads for small updates, we also benchmarked 128-byte synchronous put/gets to two c3.8xlarge instances running in-memory Redis. We match the performance reported in prior benchmarks [37] and get less than 1ms la-\ntency up to 1000 workers. Applications: In our research group we have had students use PyWren for applications as diverse as computational imaging, scientific instrument design, solar physics, and object recognition. Working with heliphysicists at NASA’s Solar Dynamics Observatory, we have used PyWren for extracting relevant features across 16TB of solar imaging data for solar flare prediction. Working with applied physics colleagues, we have used PyWren to design novel types of microscope point-spread functions for 3d superresolution microscopy. This necessitates rapid and repeat evaluation of a complex physics-based optical model inside an inner loop."
+  }, {
+    "heading": "3.3 Generality for the rest of us ?",
+    "text": "While the map primitive in PyWren covers a number of applications, it prohibits any coordination among the various tasks. We next look at how stateless functions along with high performance storage can also be used as a flexible building block to develop more complex abstractions.\nMap + monolithic Reduce The first abstraction we consider is one where output from all the map operations is collected on to one machine (similar to gather in HPC literature) for further processing. We find this pattern covers a number of classical machine learning workloads which consist of a featurization (or ETL) stage that converts large input data into features and then a learning stage where the model is built using SVMs or linear classifiers. In such workloads, the featurization requires parallel processing but the generated features are often small and fit on a single large machine [5]. These applications can be implemented using a map that runs using stateless functions followed by a learning stage that runs on a single multi-core server using efficient multi-core libraries [28]. The wide array of machine choices in the cloud means that this approach can handle learning problems with features up to 2TB in size [48].\nAs an example application we took off-the-shelf image featurization code [8] and performed cropping, scaling, and GIST image featurization [29] of the 1.28M images in the ImageNet LargeScale Visual Recognition Challenge [39]. We run the end-to-end featurization using 3000 workers on AWS Lambda. and store the features on S3. This takes 113 seconds and following that we run a monolithic reduce on a single r4.16xlarge instance.\nFetching the features from S3 to this instance only takes 22s and building a linear classifier using NumPy and Intel MKL libraries takes 4.3s. Thus, we see that this model is a good fit where a high degree of parallelism is initially required to do ETL / featurization but a single node is sufficient (and most efficient [25]) for model building.\nMapReduce: For more general purpose coordination, a commonly used programming model is the bulksynchronous processing (BSP) model. To implement the BSP model, in addition to parallel task execution, we need to perform data shuffles across stages. The availability of high-bandwidth remote storage provides an natural mechanism to implement such shuffles. Using S3 to store shuffle data, we implemented a word count program in PyWren. On the Amazon reviews [24] dataset consisting of 83.68M product reviews split across 333 partitions, this program took 98.6s. We ran a similar program using PySpark. Using 85 r3.xlarge instances, each having 4 cores to match the parallelism we had with PyWren, the Spark job took 84s. The slow down is from the lack of parallel shuffle block reads in PyWren and some stragglers while writing/reading from S3. Despite that we see that PyWren is only around 17% slower than Spark and our timings do not include the 5-10 minutes it takes to start the Spark instances.\nWe also run the Daytona sort benchmark [43] on 1TB input, to see how PyWren handles a shuffle-intensive workload. We implemented the Terasort [33] algorithm to perform sort in two stages: a partition stage that rangepartitions the input and writes out to intermediate storage, and a merge stage that, for each partition, merges and sorts all intermediate data for that partition and writes out the sorted output. Due to the resource limitation on each Lambda worker, we need at least 2500 tasks for each stage. This results in 25002, or 6,250,000 intermediate files to shuffle in between. While S3 does provide abundant I/O bandwidth to Lambda, it falls short on sustaining high request throughput. Therefore, we use S3 only for storing input and writing output and deploy a Redis cluster (with cache.m4.10xlarge nodes) for intermediate storage. Figure 6 shows the end-to-end performance with varying numbers of concurrent Lambda workers and Redis shards, with breakdown of task time. We see that higher level of parallelism does greatly improve job performance (up to 500 workers) until Redis throughput becomes a bottleneck. From 500 to 1000 workers, the Redis I/O time increases by 42%. Fully leveraging this parallelism requires more Redis shards, as shown by the 44% improvement with 30 shards. Interestingly, adding more resources does not necessarily increase total cost due to the reduction in latency with scale (Figure 5).4 Supporting a larger sort, e.g., 100TB , does become quite challeng-\n4Lambda bills in 100ms increments. Redis is charged per hour and is prorated here to seconds per CloudSort benchmark rules [43].\ning, as the number of intermediate files increases quadratically. We plan to investigate more efficient solutions.\nParameter Servers: Finally using low-latency, high throughput key-value stores like Redis, RAMCloud [38] we can also implement parameter-server [1, 23] style applications in PyWren. For example, we can implement HOGWILD! stochastic gradient descent by having each function compute the gradients based on the latest version of shared model. Since the only coordination across functions happens through the parameter server, such applications fit very well into the stateless function model. Further we can use existing support for server-side scripting [36] in key value stores to implement features like range updates and flexible consistency models [23]. However, currently this model is not easy to use as unlike S3, the ElasticCache service requires users to select a cache server type and capacity."
+  }, {
+    "heading": "4 Discussion",
+    "text": "While we studied the performance provided by existing infrastructure in the previous section, there are a number of systems aspects that need to be addressed to enable high performance data processing.\nResource balance: One of the primary challenges in a serverless design is in how a function’s resource usage is allocated and as we mentioned in §3.2, the existing limits are quite low. The fact that the functions are stateless and need to transfer both input and output over the network can help cloud providers come up with some natural heuristics. For example if we consider the current constraints of AWS Lambda we see that each Lambda has around 35 MB/s bandwidth to S3 and can thus fill up its memory of 1.5GB in around 40s. Assuming it takes 40s to write output, we can see that the running time of 300s is appropriately proportioned for around 80s of I/O and 220s of compute. As memory capacity and network bandwidths grow, this rule can be used to automatically determine memory capacity given a target running time.\nPricing At the time of writing Lambda is priced at ∼$0.06 per GB-hour of execution, measured in 100msincrements. Lambda is thus only ∼2× more expensive than on-demand instances. This cost premium seems worthwhile given substantially finer-grained billing, much greater elasticity, and the fact that many dedicated clusters are often running at 50% utilization. Another benefit that stems from PyWren’s disaggregated architecture is that cost estimation or even cost prediction becomes much simpler. In the future we plan to explore techniques that can automatically predict the cost of a computation.\nScalable Scheduling: A number of cluster scheduling papers [40, 32, 31, 21] have looked at providing low latency scheduling for data parallel frameworks running on servers. However, to implement such scheduling frame-\nworks on top of stateless functions, we need to handle the fact that information about the cluster status (i.e., which containers are free, input locations) is only available to the infrastructure provider, while the structure of the job (i.e. how functions depend on each other) is only available to the user. In the future we plan to study what information needs to exposed by cloud providers and if scheduling techniques like offers [19] can handle this separation.\nDistributed Storage: With the separation of storage and compute in the PyWren programming model, a number of performance challenges translate into the need for more efficient distributed storage systems. Our benchmarks in §3.2 showed the limitations of current systems, especially for supporting large shuffle-intensive workloads, and we plan to study how we can enable a flatdatacenter storage system in terms of latency and bandwidth [27]. Further, our existing benchmarks also show the limitation of not lacking API support for append in systems like S3 and we plan to develop a common API for storage backends that power serverless computation.\nLaunch Overheads: Finally one of the main drawbacks in our current implementation is that function invocation can take up to 20-30 seconds (∼10% of the execution time) without any caching. This is partly due to lambda invocation rate limits imposed by AWS and partly due to the time taken to setup our custom python runtime. We plan to study if techniques used to make VM forks cheaper [22], like caching containers or layering filesystems can be used to improve latency. We also plan to see if the scheduler can be modified to queue functions before their inputs are ready to handle launch overheads.\nOther applications: While we discussed data analytics applications that fit well with the serverless model, there are some applications that do not fit today. Applications that use specialized hardware like GPUs or FPGAs are not supported by AWS Lambda, but we envision that more general hardware support will be available in the future. However, for applications like particle simulations, which require a lot of coordination between long running processes, the PyWren model of using stateless functions with remote storage might not be a good fit. Finally, while we primarily focused on existing analytics applications in this paper, the serverless model has also been used successfully in other domains like video compression [11]."
+  }, {
+    "heading": "5 Conclusion",
+    "text": "The server-oriented focus of existing data processing systems in the cloud presents a high barrier for a number of users. In this paper we propose that using stateless functions with remote storage, we can build a data processing system that inherits the elasticity, simplicity of the serverless model while providing a flexible building block for more complex abstractions."
+  }],
+  "year": 2017,
+  "references": [{
+    "title": "Tensorflow: A system for large-scale machine learning",
+    "authors": ["M. ABADI", "P. BARHAM", "J. CHEN", "Z. CHEN", "A. DAVIS", "J. DEAN", "M. DEVIN", "S. GHEMAWAT", "G. IRVING", "M ISARD"],
+    "year": 2016
+  }, {
+    "title": "A view of cloud computing",
+    "authors": ["M. ARMBRUST", "A. FOX", "R. GRIFFITH", "A.D. JOSEPH", "R. KATZ", "A. KONWINSKI", "G. LEE", "D. PAT- TERSON", "A. RABKIN", "I STOICA"],
+    "venue": "CACM 53,",
+    "year": 2010
+  }, {
+    "title": "Firebox: A hardware building block for 2020 warehouse-scale computers",
+    "authors": ["K. ASANOVIC", "D. PATTERSON"],
+    "year": 2014
+  }, {
+    "title": "Big data analytics with small footprint: Squaring the cloud",
+    "authors": ["J. CANNY", "H. ZHAO"],
+    "venue": "KDD",
+    "year": 2013
+  }, {
+    "title": "Evaluation of gist descriptors for web-scale image search",
+    "authors": ["M. DOUZE", "H. JÉGOU", "H. SANDHAWALIA", "L. AM- SALEG", "C. SCHMID"],
+    "venue": "In ACM International Conference on Image and Video Retrieval",
+    "year": 2009
+  }, {
+    "title": "Interruptible tasks: Treating memory pressure as interrupts for highly scalable dataparallel programs",
+    "authors": ["L. FANG", "K. NGUYEN", "G. XU", "B. DEMSKY", "LU"],
+    "year": 2015
+  }, {
+    "title": "Encoding, Fast and Slow: Low- Latency Video Processing Using Thousands of Tiny Threads",
+    "authors": ["S. FOULADI", "R.S. WAHBY", "B. SHACKLETT", "K.V. BALASUBRAMANIAM", "W. ZENG", "R. BHALERAO", "A. SIVARAMAN", "G. PORTER", "K. WINSTEIN"],
+    "year": 2017
+  }, {
+    "title": "Disk-Locality in Datacenter Computing Considered Irrelevant",
+    "authors": ["G. ANANTHANARAYANAN", "A. GHODSI", "S. SHENKER", "I. STOICA"],
+    "venue": "In Proc. HotOS",
+    "year": 2011
+  }, {
+    "title": "RAT- NASAMY, S., AND SHENKER, S. Network requirements for resource disaggregation",
+    "authors": ["P.X. GAO", "A. NARAYAN", "S. KARANDIKAR", "J. CARREIRA", "S. HAN", "R. AGARWAL"],
+    "year": 2016
+  }, {
+    "title": "Network support for resource disaggregation in next-generation datacenters",
+    "authors": ["S. HAN", "N. EGI", "A. PANDA", "S. RATNASAMY", "G. SHI", "S. SHENKER"],
+    "venue": "HotNets",
+    "year": 2013
+  }, {
+    "title": "Large-scale computation not at the cost of expressiveness",
+    "authors": ["S. HAN", "S. RATNASAMY"],
+    "venue": "HotOS",
+    "year": 2013
+  }, {
+    "title": "Serverless computation with OpenLambda",
+    "authors": ["S. HENDRICKSON", "S. STURDEVANT", "T. HARTER", "V. VENKATARAMANI", "A.C. ARPACI-DUSSEAU", "R.H. ARPACI-DUSSEAU"],
+    "venue": "HotCloud",
+    "year": 2016
+  }, {
+    "title": "Starfish: A self-tuning system for big data analytics",
+    "authors": ["H. HERODOTOU", "H. LIM", "G. LUO", "N. BORISOV", "L. DONG", "F.B. CETIN", "S. BABU"],
+    "year": 2011
+  }, {
+    "title": "AND STOICA, I. Mesos: A Platform for Fine- Grained Resource Sharing in the Data Center",
+    "authors": ["B. HINDMAN", "A. KONWINSKI", "M. ZAHARIA", "A. GHODSI", "A. JOSEPH", "R. KATZ", "S. SHENKER"],
+    "venue": "In Proc. NSDI",
+    "year": 2011
+  }, {
+    "title": "AND GOLDBERG, A. Quincy: Fair Scheduling for Distributed Computing Clusters",
+    "authors": ["M. ISARD", "V. PRABHAKARAN", "J. CURREY", "U. WIEDER", "K. TALWAR"],
+    "venue": "In Proc. SOSP",
+    "year": 2009
+  }, {
+    "title": "Snowflock: Rapid virtual machine cloning for cloud computing",
+    "authors": ["H.A. LAGAR-CAVILLA", "J.A. WHITNEY", "A.M. SCAN- NELL", "P. PATCHIN", "S.M. RUMBLE", "E. DE LARA", "M. BRUDNO", "M. SATYA- NARAYANAN"],
+    "year": 2009
+  }, {
+    "title": "Scaling distributed machine learning with the parameter server",
+    "authors": ["M. LI", "D.G. ANDERSEN", "J.W. PARK", "A.J. SMOLA", "A. AHMED", "V. JOSIFOVSKI", "J. LONG", "E.J. SHEKITA", "SU", "B.-Y"],
+    "year": 2014
+  }, {
+    "title": "Image-based recommendations on styles and substitutes",
+    "authors": ["J. MCAULEY", "C. TARGETT", "Q. SHI", "A. VAN DEN HENGEL"],
+    "year": 2015
+  }, {
+    "title": "Scalability! but at what COST",
+    "authors": ["F. MCSHERRY", "M. ISARD", "D.G. MURRAY"],
+    "venue": "HotOS",
+    "year": 2015
+  }, {
+    "title": "Software Use in Astronomy: an Informal Survey",
+    "authors": ["I. MOMCHEVA", "E. TOLLERUD"],
+    "year": 2015
+  }, {
+    "title": "Flat datacenter storage",
+    "authors": ["E.B. NIGHTINGALE", "J. ELSON", "J. FAN", "O. HOF- MANN", "J. HOWELL", "Y. SUZUE"],
+    "year": 2012
+  }, {
+    "title": "Hogwild: A lock-free approach to parallelizing stochastic gradient descent",
+    "authors": ["F. NIU", "B. RECHT", "C. RE", "S. WRIGHT"],
+    "year": 2011
+  }, {
+    "title": "Modeling the shape of the scene: A holistic representation of the spatial envelope",
+    "authors": ["A. OLIVA", "A. TORRALBA"],
+    "venue": "International Journal of computer vision 42,",
+    "year": 2001
+  }, {
+    "title": "The case for tiny tasks in compute clusters",
+    "authors": ["K. OUSTERHOUT", "A. PANDA", "J. ROSEN", "S. VENKATARAMAN", "R. XIN", "S. RATNASAMY", "S. SHENKER", "I. STOICA"],
+    "venue": "HotOS",
+    "year": 2013
+  }, {
+    "title": "AND STOICA, I. Sparrow: distributed, low latency scheduling",
+    "authors": ["K. OUSTERHOUT", "P. WENDELL", "M. ZAHARIA"],
+    "year": 2013
+  }, {
+    "title": "Large-scale incremental processing using distributed transactions and notifications",
+    "authors": ["D. PENG", "F. DABEK"],
+    "year": 2010
+  }, {
+    "title": "Building fast, distributed programs with partitioned tables",
+    "authors": ["R. POWER", "LI", "J. Piccolo"],
+    "year": 2010
+  }, {
+    "title": "It’s Time for Low Latency",
+    "authors": ["S.M. RUMBLE", "D. ONGARO", "R. STUTSMAN", "M. ROSENBLUM", "J.K. OUSTERHOUT"],
+    "venue": "In Proc. HotOS",
+    "year": 2011
+  }, {
+    "title": "Omega: flexible, scalable schedulers for large compute clusters",
+    "authors": ["M. SCHWARZKOPF", "A. KONWINSKI", "M. ABD-EL- MALEK", "J. WILKES"],
+    "venue": "In Proc. EuroSys",
+    "year": 2013
+  }, {
+    "title": "Latency trends. http: //colin-scott.github.io/blog/2012/ 12/24/latency-trends",
+    "authors": ["C. SCOTT"],
+    "year": 2012
+  }, {
+    "title": "The Hadoop Distributed File System. In Mass storage systems and technologies",
+    "authors": ["K. SHVACHKO", "H. KUANG", "S. RADIA", "R. CHANSLER"],
+    "year": 2010
+  }, {
+    "title": "Apache Hadoop YARN: Yet another resource negotiator",
+    "authors": ["V.K. VAVILAPALLI", "A.C. MURTHY", "C. DOU- GLAS", "S. AGARWAL", "M. KONAR", "R. EVANS", "T. GRAVES", "J. LOWE", "H. SHAH", "S SETH"],
+    "venue": "SoCC",
+    "year": 2013
+  }, {
+    "title": "Efficient performance prediction for large-scale advanced analytics",
+    "authors": ["S. VENKATARAMAN", "Z. YANG", "M. FRANKLIN", "B. RECHT", "STOICA", "I. Ernest"],
+    "year": 2016
+  }, {
+    "title": "Resilient Distributed Datasets: A Fault-Tolerant Abstraction for In-Memory Cluster Computing",
+    "authors": ["M. ZAHARIA", "M. CHOWDHURY", "T. DAS", "A. DAVE", "J. MA", "M. MCCAULEY", "M. FRANKLIN", "S. SHENKER", "I. STOICA"],
+    "venue": "In Proc. NSDI",
+    "year": 2011
+  }],
+  "id": "SP:56df56dbab7e0b022a51e5a038c1119fcd36f137",
+  "authors": [{
+    "name": "Eric Jonas",
+    "affiliations": []
+  }, {
+    "name": "Qifan Pu",
+    "affiliations": []
+  }, {
+    "name": "Shivaram Venkataraman",
+    "affiliations": []
+  }, {
+    "name": "Ion Stoica",
+    "affiliations": []
+  }, {
+    "name": "Benjamin Recht",
+    "affiliations": []
+  }],
+  "abstractText": "Distributed computing remains inaccessible to a large number of users, in spite of many open source platforms and extensive commercial offerings. While distributed computation frameworks have moved beyond a simple map-reduce model, many users are still left to struggle with complex cluster management and configuration tools, even for running simple embarrassingly parallel jobs. We argue that stateless functions represent a viable platform for these users, eliminating cluster management overhead, fulfilling the promise of elasticity. Furthermore, using our prototype implementation, PyWren, we show that this model is general enough to implement a number of distributed computing models, such as BSP, efficiently. Extrapolating from recent trends in network bandwidth and the advent of disaggregated storage, we suggest that stateless functions are a natural fit for data processing in future computing environments.",
+  "title": "Occupy the Cloud: Distributed Computing for the 99%"
+}

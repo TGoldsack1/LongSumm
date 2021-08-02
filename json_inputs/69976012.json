@@ -1,0 +1,273 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Learning representations has proven to be an essential problem for deep learning and its many success stories. The majority of problems tackled by deep learning are instancebased and take the form of mapping a fixed-dimensional input tensor to its corresponding target value (Krizhevsky et al., 2012; Graves et al., 2013).\nFor some applications, we are required to process setstructured data. Multiple instance learning (Dietterich et al.,\n1Department of Statistics, University of Oxford, United Kingdom 2AITRICS, Republic of Korea 3Kakao Corporation, Republic of Korea 4Department of Computer Science and Engineering, POSTECH, Republic of Korea 5Oxford Robotics Institute, University of Oxford, United Kingdom. Correspondence to: Juho Lee <juho.lee@stats.ox.ac.uk>.\nProceedings of the 36 th International Conference on Machine Learning, Long Beach, California, PMLR 97, 2019. Copyright 2019 by the author(s).\n1997; Maron & Lozano-Pérez, 1998) is an example of such a set-input problem, where a set of instances is given as an input and the corresponding target is a label for the entire set. Other problems such as 3D shape recognition (Wu et al., 2015; Shi et al., 2015; Su et al., 2015; Charles et al., 2017), sequence ordering (Vinyals et al., 2016), and various set operations (Muandet et al., 2012; Oliva et al., 2013; Edwards & Storkey, 2017; Zaheer et al., 2017) can also be viewed as the set-input problems. Moreover, many meta-learning (Thrun & Pratt, 1998; Schmidhuber, 1987) problems which learn using different, but related tasks may also be treated as setinput tasks where an input set corresponds to the training dataset of a single task. For example, few-shot image classification (Finn et al., 2017; Snell et al., 2017; Lee & Choi, 2018) operates by building a classifier using a support set of images, which is evaluated with query images.\nA model for set-input problems should satisfy two critical requirements. First, it should be permutation invariant — the output of the model should not change under any permutation of the elements in the input set. Second, such a model should be able to process input sets of any size. While these requirements stem from the definition of a set, they are not easily satisfied in neural-network-based models: classical feed-forward neural networks violate both requirements, and RNNs are sensitive to input order.\nRecently, Edwards & Storkey (2017) and Zaheer et al. (2017) propose neural network architectures which meet both criteria, which we call set pooling methods. In this model, each element in a set is first independently fed into a feed-forward neural network that takes fixed-size inputs. Resulting feature-space embeddings are then aggregated using a pooling operation (mean, sum, max or similar). The final output is obtained by further non-linear processing of the aggregated embedding. This remarkably simple architecture satisfies both aforementioned requirements, and more importantly, is proven to be a universal approximator for any set function (Zaheer et al., 2017). Thanks to this property, it is possible to learn a complex mapping between input sets and their target outputs in a black-box fashion, much like with feed-forward or recurrent neural networks.\nEven though this set pooling approach is theoretically attractive, it remains unclear whether we can approximate\nar X\niv :1\n81 0.\n00 82\n5v 3\n[ cs\n.L G\n] 2\n6 M\nay 2\n01 9\ncomplex mappings well using only instance-based feature extractors and simple pooling operations. Since every element in a set is processed independently in a set pooling operation, some information regarding interactions between elements has to be necessarily discarded. This can make some problems unnecessarily difficult to solve.\nConsider the problem of amortized clustering, where we would like to learn a parametric mapping from an input set of points to the centers of clusters of points inside the set. Even for a toy dataset in 2D space, this is not an easy problem. The main difficulty is that the parametric mapping must assign each point to its corresponding cluster while modelling the explaining away pattern such that the resulting clusters do not attempt to explain overlapping subsets of the input set. Due to this innate difficulty, clustering is typically solved via iterative algorithms that refine randomly initialized clusters until convergence. Even though a neural network with a set poling operation can approximate such an amortized mapping by learning to quantize space, a crucial shortcoming is that this quantization cannot depend on the contents of the set. This limits the quality of the solution and also may make optimization of such a model more difficult; we show empirically in Section 5 that such pooling architectures suffer from under-fitting.\nIn this paper, we propose a novel set-input deep neural network architecture called the Set Transformer, (cf. Transformer, (Vaswani et al., 2017)). The novelty of the Set Transformer is in three important design choices:\n1. We use a self-attention mechanism to process every element in an input set, which allows our approach to naturally encode pairwise- or higher-order interactions between elements in the set.\n2. We propose a method to reduce theO(n2) computation time of full self-attention (e.g. the Transformer) to O(nm) where m is a fixed hyperparameter, allowing our method to scale to large input sets.\n3. We use a self-attention mechanism to aggregate features, which is especially beneficial when the problem requires multiple outputs which depend on each other, such as the problem of meta-clustering, where the meaning of each cluster center heavily depends its location relative to the other clusters.\nWe apply the Set Transformer to several set-input problems and empirically demonstrate the importance and effectiveness of these design choices, and show that we can achieve the state-of-the-art performances for the most of the tasks."
+  }, {
+    "heading": "2. Background",
+    "text": ""
+  }, {
+    "heading": "2.1. Pooling Architecture for Sets",
+    "text": "Problems involving a set of objects have the permutation invariance property: the target value for a given set is the same regardless of the order of objects in the set. A simple example of a permutation invariant model is a network that performs pooling over embeddings extracted from the elements of a set. More formally,\nnet({x1, . . . , xn}) = ρ(pool({φ(x1), . . . , φ(xn)})). (1)\nZaheer et al. (2017) have proven that all permutation invariant functions can be represented as (1) when pool is the sum operator and ρ, φ any continuous functions, thus justifying the use of this architecture for set-input problems.\nNote that we can deconstruct (1) into two parts: an encoder (φ) which independently acts on each element of a set of n items, and a decoder (ρ(pool(·))) which aggregates these encoded features and produces our desired output. Most network architectures for set-structured data follow this encoder-decoder structure.\nZaheer et al. (2017) additionally observed that the model remains permutation invariant even if the encoder is a stack of permutation-equivariant layers:\nDefinition 1. Let Sn be the set of all permutations of indices {1, . . . , n}. A function f : Xn → Y n is permutation equivariant iff for any permutation π ∈ Sn, f(πx) = πf(x).\nAn example of a permutation-equivariant layer is\nfi(x; {x1, . . . , xn}) = σi(λx+ γpool({x1, . . . , xn})) (2)\nwhere pool is the pooling operation, λ, γ are learnable scalar variables, and σ(·) is a nonlinear activation function."
+  }, {
+    "heading": "2.2. Attention",
+    "text": "Assume we have n query vectors (corresponding to a set with n elements) each with dimension dq: Q ∈ Rn×dq . An attention function Att(Q,K, V ) is a function that maps queries Q to outputs using nv key-value pairs K ∈ Rnv×dq , V ∈ Rnv×dv .\nAtt(Q,K, V ;ω) = ω ( QK> ) V. (3)\nThe pairwise dot product QK> ∈ Rn×nv measures how similar each pair of query and key vectors is, with weights computed with an activation function ω. The output ω(QK>)V is a weighted sum of V where a value gets more weight if its corresponding key has larger dot product with the query.\nMulti-head attention, originally introduced in Vaswani et al. (2017), is an extension of the previous attention\nscheme. Instead of computing a single attention function, this method first projects Q,K, V onto h different dMq , d M q , d M v -dimensional vectors, respectively. An attention function (Att(·;ωj)) is applied to each of these h projections. The output is a linear transformation of the concatenation of all attention outputs:\nMultihead(Q,K, V ;λ, ω) = concat(O1, · · · , Oh)WO, (4)\nwhere Oj = Att(QW Q j ,KW K j , V W V j ;ωj) (5)\nNote that Multihead(·, ·, ·;λ) has learnable parameters λ = {WQj ,WKj ,WVj }hj=1, where WQj ,WKj ∈ Rdq×d M q , WVj ∈ Rdv×d M v , WO ∈ RhdMv ×d. A typical choice for the dimension hyperparameters is dMq = dq/h, d M v = dv/h, d = dq . For brevity, we set dq = dv = d, dMq = d M v = d/h throughout the rest of the paper. Unless otherwise specified, we use a scaled softmax ωj(·) = softmax(·/ √ d), which our experiments were worked robustly in most settings."
+  }, {
+    "heading": "3. Set Transformer",
+    "text": "In this section, we motivate and describe the Set Transformer: an attention-based neural network that is designed to process sets of data. Similar to other architectures, a Set Transformer consists of an encoder followed by a decoder (cf. Section 2.1), but a distinguishing feature is that each layer in the encoder and decoder attends to their inputs to produce activations. Additionally, instead of a fixed pooling operation such as mean, our aggregating function pool(·) is parameterized and can thus adapt to the problem at hand."
+  }, {
+    "heading": "3.1. Permutation Equivariant (Induced) Set Attention Blocks",
+    "text": "We begin by defining our attention-based set operations, which we call SAB and ISAB. While existing pooling methods for sets obtain instance features independently of other instances, we use self-attention to concurrently encode the whole set. This gives the Set Transformer the ability to compute pairwise as well as higher-order interactions among instances during the encoding process. For this purpose, we adapt the multihead attention mechanism used in Transformer. We emphasize that all blocks introduced here are\nneural network blocks with their own parameters, and not fixed functions.\nGiven matrices X,Y ∈ Rn×d which represent two sets of d-dimensional vectors, we define the Multihead Attention Block (MAB) with parameters ω as follows:\nMAB(X,Y ) = LayerNorm(H + rFF(H)), (6) where H = LayerNorm(X +Multihead(X,Y, Y ;ω)),\n(7)\nrFF is any row-wise feedforward layer (i.e., it processes each instance independently and identically), and LayerNorm is layer normalization (Ba et al., 2016). The MAB is an adaptation of the encoder block of the Transformer (Vaswani et al., 2017) without positional encoding and dropout. Using the MAB, we define the Set Attention Block (SAB) as\nSAB(X) := MAB(X,X). (8)\nIn other words, an SAB takes a set and performs selfattention between the elements in the set, resulting in a set of equal size. Since the output of SAB contains information about pairwise interactions among the elements in the input set X , we can stack multiple SABs to encode higher order interactions. Note that while the SAB (8) involves a multihead attention operation (7), where Q = K = V = X , it could reduce to applying a residual block on X . In practice, it learns more complicated functions due to linear projections of X inside attention heads, (3) and (5).\nA potential problem with using SABs for set-structured data is the quadratic time complexity O(n2), which may be too expensive for large sets (n 1). We thus introduce the Induced Set Attention Block (ISAB), which bypasses this problem. Along with the set X ∈ Rn×d, additionally define m d-dimensional vectors I ∈ Rm×d, which we call inducing points. Inducing points I are part of the ISAB itself, and they are trainable parameters which we train along with other parameters of the network. An ISAB with m inducing points I is defined as:\nISABm(X) = MAB(X,H) ∈ Rn×d, (9) where H = MAB(I,X) ∈ Rm×d. (10)\nThe ISAB first transforms I into H by attending to the input set. The set of transformed inducing points H , which\ncontains information about the input setX , is again attended to by the input set X to finally produce a set of n elements. This is analogous to low-rank projection or autoencoder models, where inputs (X) are first projected onto a lowdimensional object (H) and then reconstructed to produce outputs. The difference is that the goal of these methods is reconstruction whereas ISAB aims to obtain good features for the final task. We expect the learned inducing points to encode some global structure which helps explain the inputs X . For example, in the amortized clustering problem on a 2D plane, the inducing points could be appropriately distributed points on the 2D plane so that the encoder can compare elements in the query dataset indirectly through their proximity to these grid points.\nNote that in (9) and (10), attention was computed between a set of size m and a set of size n. Therefore, the time complexity of ISABm(X;λ) is O(nm) where m is a (typically small) hyperparameter — an improvement over the quadratic complexity of the SAB. We also emphasize that both of our set operations (SAB and ISAB) are permutation equivariant (definition in Section 2.1): Property 1. Both SAB(X) and ISABm(X) are permutation equivariant."
+  }, {
+    "heading": "3.2. Pooling by Multihead Attention",
+    "text": "A common aggregation scheme in permutation invariant networks is a dimension-wise average or maximum of the feature vectors (cf. Section 1). We instead propose to aggregate features by applying multihead attention on a learnable set of k seed vectors S ∈ Rk×d. Let Z ∈ Rn×d be the set of features constructed from an encoder. Pooling by Multihead Attention (PMA) with k seed vectors is defined as\nPMAk(Z) = MAB(S, rFF(Z)). (11)\nNote that the output of PMAk is a set of k items. We use one seed vector (k = 1) in most cases, but for problems such as amortized clustering which requires k correlated outputs, the natural thing to do is to use k seed vectors. To further model the interactions among the k outputs, we apply an SAB afterwards:\nH = SAB(PMAk(Z)). (12)\nWe later empirically show that such self-attention after pooling helps in modeling explaining-away (e.g., among clusters in an amortized clustering problem).\nIntuitively, feature aggregation using attention should be beneficial because the influence of each instance on the target is not necessarily equal. For example, consider a problem where the target value is the maximum value of a set of real numbers. Since the target can be recovered using only a single instance (the largest), finding and attending to that instance during aggregation will be advantageous."
+  }, {
+    "heading": "3.3. Overall Architecture",
+    "text": "Using the ingredients explained above, we describe how we would construct a set transformer consists of an encoder and a decoder. The encoder Encoder : X 7→ Z ∈ Rn×d is a stack of SABs or ISABs, for example:\nEncoder(X) = SAB(SAB(X)) (13) Encoder(X) = ISABm(ISABm(X)). (14)\nWe point out again that the time complexity for ` stacks of SABs and ISABs are O(`n2) and O(`nm), respectively. This can result in much lower processing times when using ISAB (as compared to SAB), while still maintaining high representational power. After the encoder transforms data X ∈ Rn×dx into features Z ∈ Rn×d, the decoder aggregates them into a single or a set of vectors which is fed into a feed-forward network to get final outputs. Note that PMA with k > 1 seed vectors should be followed by SABs to model the correlation between k outputs.\nDecoder(Z;λ) = rFF(SAB(PMAk(Z))) ∈ Rk×d (15) where PMAk(Z) = MAB(S, rFF(Z)) ∈ Rk×d, (16)"
+  }, {
+    "heading": "3.4. Analysis",
+    "text": "Since the blocks used to construct the encoder (i.e., SAB, ISAB) are permutation equivariant, the mapping of the encoderX → Z is permutation equivariant as well. Combined with the fact that the PMA in the decoder is a permutation invariant transformation, we have the following:\nProposition 1. The Set Transformer is permutation invariant.\nBeing able to approximate any function is a desirable property, especially for black-box models such as deep neural networks. Building on previous results about the universal approximation of permutation invariant functions, we prove the universality of Set Transformers:\nProposition 2. The Set Transformer is a universal approximator of permutation invariant functions.\nProof. See supplementary material."
+  }, {
+    "heading": "4. Related Works",
+    "text": "Pooling architectures for permutation invariant mappings Pooling architectures for sets have been used in various problems such as 3D shape recognition (Shi et al., 2015; Su et al., 2015), discovering causality (Lopez-Paz et al., 2017), learning the statistics of a set (Edwards & Storkey, 2017), few-shot image classification (Snell et al., 2017), and conditional regression and classification (Garnelo et al., 2018). Zaheer et al. (2017) discuss the structure\nin general and provides a partial proof of the universality of the pooling architecture, and Wagstaff et al. (2019) further discuss the limitation of pooling architectures. BloemReddy & Teh (2019) provides a link between probabilistic exchangeability and pooling architectures.\nAttention-based approaches for sets Several recent works have highlighted the competency of attention mechanisms in modeling sets. Vinyals et al. (2016) pool elements in a set by a weighted average with weights computed using an attention mechanism. Yang et al. (2018) propose AttSets for multi-view 3D reconstruction, where dot-product attention is applied to compute the weights used to pool the encoded features via weighted sums. Similarly, Ilse et al. (2018) use attention-based weighted sum-pooling for multiple instance learning. Compared to these approaches, ours use multihead attention in aggregation, and more importantly, we propose to apply self-attention after pooling to model correlation among multiple outputs. PMA with k = 1 seed vector and single-head attention roughly corresponds to these previous approaches. Although not permutation invariant, Mishra et al. (2018) has attention as one of its core components to meta-learn to solve various tasks using sequences of inputs. Kim et al. (2019) proposed attentionbased conditional regression, where self-attention is applied to the query sets.\nModeling interactions between elements in sets An important reason to use the Transformer is to explicitly model higher-order interactions among the elements in a set. Santoro et al. (2017) propose the relational network, a simple architecture that sum-pools all pairwise interactions of elements in a given set, but not higher-order interactions. Similarly to our work, Ma et al. (2018) use the Transformer to model interactions between the objects in a video. They use mean-pooling to obtain aggregated features which they fed into an LSTM.\nInducing point methods The idea of letting trainable vectors I directly interact with data points is loosely based on the inducing point methods used in sparse Gaussian processes (Snelson & Ghahramani, 2005) and the Nyström method for matrix decomposition (Fowlkes et al., 2004). m trainable inducing points can also be seen as m independent memory cells accessed with an attention mechanism. The differential neural dictionary (Pritzel et al., 2017) stores previous experience as key-value pairs and uses this to process queries. One can view the ISAB is the inversion of this idea, where queries I are stored and the input features are used as key-value pairs."
+  }, {
+    "heading": "5. Experiments",
+    "text": "To evaluate the Set Transformer, we apply it to a suite of tasks involving sets of data points. We repeat all experi-\nments five times and report performance metrics evaluated on corresponding test datasets. Along with baselines, we compared various architectures arising from the combination of the choices of having attention in encoders and decoders. Unless specified otherwise, “simple pooling” means average pooling.\n• rFF + Pooling (Zaheer et al., 2017): rFF layers in encoder and simple pooling + rFF layers in decoder. • rFFp-mean/rFFp-max + Pooling (Zaheer et al., 2017): rFF layers with permutation equivariant variants in encoder (Zaheer et al., 2017, (4)) and simple pooling + rFF layers in decoder. • rFF + Dotprod (Yang et al., 2018; Ilse et al., 2018): rFF layers in encoder and dot product attention based weighted sum pooling + rFF layers in decoder. • SAB (ISAB) + Pooling (ours): Stack of SABs (ISABs)\nin encoder and simple pooling + rFF layers in decoder. • rFF + PMA (ours): rFF layers in encoder and PMA\n(followed by stack of SABs) in decoder. • SAB (ISAB) + PMA (ours): Stack of SABs (ISABs)\nin encoder and PMA (followed by stack of SABs) in decoder."
+  }, {
+    "heading": "5.1. Toy Problem: Maximum Value Regression",
+    "text": "To demonstrate the advantage of attention-based set aggregation over simple pooling operations, we consider a toy problem: regression to the maximum value of a given set. Given a set of real numbers {x1, . . . , xn}, the goal is to return max(x1, · · · , xn). Given prediction p, we use the mean absolute error |p−max(x1, · · · , xn)| as the loss function. We constructed simple pooling architectures with three different pooling operations: max, mean, and sum. We report loss values after training in Table 1. Mean- and sumpooling architectures result in a high mean absolute error (MAE). The model with max-pooling can predict the output perfectly by learning its encoder to be an identity function, and thus achieves the highest performance. Notably, the Set Transformer achieves performance comparable to the max-pooling model, which underlines the importance of additional flexibility granted by attention mechanisms — it can learn to find and attend to the maximum element."
+  }, {
+    "heading": "5.2. Counting Unique Characters",
+    "text": "In order to test the ability of modelling interactions between objects in a set, we introduce a new task of counting unique elements in an input set. We use the Omniglot (Lake et al., 2015) dataset, which consists of 1,623 different handwritten characters from various alphabets, where each character is represented by 20 different images.\nWe split all characters (and corresponding images) into train, validation, and test sets and only train using images from the train character classes. We generate input sets by sampling between 6 and 10 images and we train the model to predict the number of different characters inside the set. We used a Poisson regression model to predict this number, with the rate λ given as the output of a neural network. We maximized the log likelihood of this model using stochastic gradient ascent.\nWe evaluated model performance using sets of images sampled from the test set of characters. Table 2 reports accuracy, measured as the frequency at which the mode of the Poisson distribution chosen by the network is equal to the number of characters inside the input set.\nWe additionally performed experiments to see how the number of incuding points affects performance. We trained ISABn+PMA on this task while varying the number of inducing points (n). Accuracies are shown in Figure 3, where other architectures are shown as horizontal lines for comparison. Note first that even the accuracy of ISAB1 + PMA surpasses that of both rFF+Pooling and rFF+PMA, and that performance tends to increase as we increase n."
+  }, {
+    "heading": "5.3. Amortized Clustering with Mixture of Gaussians",
+    "text": "We applied the set-input networks to the task of maximum likelihood of mixture of Gaussians (MoGs). The log-likelihood of a dataset X = {x1, . . . , xn} generated from an MoG with k components is\nlog p(X; θ) =\nn∑\ni=1\nlog\nk∑\nj=1\nπjN (xi;µj ,diag(σ2j )). (17)\nThe goal is to learn the optimal parameters θ∗(X) = argmaxθ log p(X; θ). The typical approach to this problem is to run an iterative algorithm such as ExpectationMaximisation (EM) until convergence. Instead, we aim to learn a generic meta-algorithm that directly maps the input set X to θ∗(X). One can also view this as amortized maximum likelihood learning. Specifically, given a dataset X , we train a neural network to output parameters f(X;λ) = {π(X), {µj(X), σj(X)}kj=1} which maximize\nEX\n  |X|∑\ni=1\nlog\nk∑\nj=1\nπj(X)N (xi;µj(X), diag(σ2j (X)))   . (18)\nWe structured f(·;λ) as a set-input neural network and learned its parameters λ using stochastic gradient ascent, where we approximate gradients using minibatches of datasets.\nWe tested Set Transformers along with other set-input networks on two datasets. We used four seed vectors for the PMA (S ∈ R4×d) so that each seed vector generates the parameters of a cluster.\nSynthetic 2D mixtures of Gaussians: Each dataset contains n ∈ [100, 500] points on a 2D plane, each sampled from one of four Gaussians.\nCIFAR-100: Each dataset contains n ∈ [100, 500] images sampled from four random classes in the CIFAR-100 dataset. Each image is represented by a 512-dim vector obtained from a pretrained VGG network (Simonyan & Zisserman, 2014).\nWe report the performance of the oracle along with the setinput neural networks in Table 3. We additionally report scores of all models after a single EM update. Overall, the Set Transformer found accurate parameters and even outperformed the oracles after a single EM update. This may be due to the relatively small size of the input sets; some clusters have fewer than 10 points. In this regime, sample statistics can differ substantially from population statistics, which limits the performance of the oracle while the Set Transformer can adapt accordingly. Notably, the Set Transformer with only 16 inducing points showed the best performance, even outperforming the full Set Transformer. We believe this is due to the knowledge transfer and regularization via inducing points, helping the network to learn global structures. Our results also imply that the improvement from using the PMA is more significant than that of the SAB, supporting our claim of the importance of attention-based decoders. We provide detailed genera-\ntive processes, network architectures, and training schemes along with additional experiments with various numbers of inducing points in the supplementary material."
+  }, {
+    "heading": "5.4. Set Anomaly Detection",
+    "text": "We evaluate our methods on the task of meta-anomaly detection within a set using the CelebA dataset. The dataset consists of 202,599 images with the total of 40 attributes. We randomly sample 1,000 sets of images. For every set, we select two attributes at random and construct the set by selecting seven images containing both attributes and one image with neither. The goal of this task is to find the image that does not belong to the set. We give a detailed description of the experimental setup in the supplementary material. We report the area under receiver operating characteristic curve (AUROC) and area under precision-recall curve (AUPR) in Table 5. Set Transformers outperformed all other methods by a significant margin.\nTable 4. Test accuracy for the point cloud classification task using 100, 1000, 5000 points.\nArchitecture 100 pts 1000 pts 5000 pts\nrFF + Pooling (Zaheer et al., 2017) - 0.83 ± 0.01 - rFFp-max + Pooling (Zaheer et al., 2017) 0.82 ± 0.02 0.87 ± 0.01 0.90 ± 0.003\nrFF + Pooling 0.7951 ± 0.0166 0.8551 ± 0.0142 0.8933 ± 0.0156 rFF + PMA (ours) 0.8076 ± 0.0160 0.8534 ± 0.0152 0.8628 ± 0.0136 ISAB (16) + Pooling (ours) 0.8273 ± 0.0159 0.8915 ± 0.0144 0.9040 ± 0.0173 ISAB (16) + PMA (ours) 0.8454 ± 0.0144 0.8662 ± 0.0149 0.8779 ± 0.0122\nFigure 5. Sampled datasets. Each row is a dataset, consisting of 7 normal images and 1 anomaly (red box). In each subsampled dataset, a normal image has two attributes (rightmost column) which anomalies do not."
+  }, {
+    "heading": "5.5. Point Cloud Classification",
+    "text": "We evaluated Set Transformers on a classification task using the ModelNet40 (Chang et al., 2015) dataset1, which contains three-dimensional objects in 40 different categories. Each object is represented as a point cloud, which we treat as a set of n vectors in R3. We performed experiments with input sets of size n ∈ {100, 1000, 5000}. Because of the large set sizes, MABs are prohibitively time-consuming due to their O(n2) time complexity. Table 4 shows classification accuracies. We point out that Zaheer et al. (2017) used significantly more engineering for the 5000 point experiment. For this experiment only,\n1The point-cloud dataset used in this experiment was obtained directly from the authors of Zaheer et al. (2017).\nthey augmented data (scaling, rotation) and used a different optimizer (Adamax) and learning rate schedule. Set Transformers were superior when given small sets, but were outperformed by ISAB (16) + Pooling on larger sets. First note that classification is harder when given fewer points. We think Set Transformers were outperformed in the problems with large sets because such sets already had sufficient information for classification, diminishing the need to model complex interactions among points. We point out that PMA outperformed simple pooling in all other experiments."
+  }, {
+    "heading": "6. Conclusion",
+    "text": "In this paper, we introduced the Set Transformer, an attention-based set-input neural network architecture. Our proposed method uses attention mechanisms for both encoding and aggregating features, and we have empirically validated that both of them are necessary for modelling complicated interactions among elements of a set. We also proposed an inducing point method for self-attention, which makes our approach scalable to large sets. We also showed useful theoretical properties of our model, including the fact that it is a universal approximator for permutation invariant functions. An interesting future work would be to apply Set Transformers to meta-learning problems. In particular, using Set Transformers to meta-learn posterior inference in Bayesian models seems like a promising line of research. Another exciting extension of our work would be to model the uncertainty in set functions by injecting noise variables into Set Transformers in a principled way.\nAcknowledgments JL and YWT’s research leading to these results has received funding from the European Research Council under the European Union’s Seventh Framework Programme (FP7/2007-2013) ERC grant agreement no. 617071. JL has also received funding from EPSRC under grant EP/P026753/1. JL acknowledges support from IITP grant funded by the Korea government(MSIT) (No.20170-01779, XAI) and Samsung Research Funding & Incubation Center of Samsung Electronics under Project Number SRFC-IT1702-15."
+  }, {
+    "heading": "1. Proofs",
+    "text": "Lemma 1. The mean operator mean({x1, . . . , xn}) = 1n ∑n i=1 xi is a special case of dot-product attention with softmax.\nProof. Let s = 0 ∈ Rd and X ∈ Rn×d.\nAtt(s,X,X; softmax) = softmax ( sX>√ d ) X = 1 n n∑\ni=1\nxi\nLemma 2. The decoder of a Set Transformer, given enough nodes, can express any element-wise function of the form( 1 n ∑n i=1 z p i ) 1 p .\nProof. We first note that we can view the decoder as the composition of functions\nDecoder(Z) = rFF(H) (1) where H = rFF(MAB(Z, rFF(Z))) (2)\nWe focus on H in (2). Since feed-forward networks are universal function approximators at the limit of infinite nodes, let the feed-forward layers in front and back of the MAB encode the element-wise functions z → zp and z → z 1p , respectively. We let h = d, so the number of heads is the same as the dimensionality of the inputs, and each head is one-dimensional. Let the projection matrices in multi-head attention (WQj ,W K j ,W V j ) represent projections onto the jth dimension and the output matrix (WO) the identity matrix. Since the mean operator is a special case of dot-product attention, by simple composition, we see that an MAB can express any dimension-wise function of the form\nMp(z1, · · · , zn) = ( 1\nn\nn∑\ni=1\nzpi\n) 1 p\n. (3)\nLemma 3. A PMA, given enough nodes, can express sum pooling ( ∑n\ni=1 zi).\nProof. We prove this by construction.\nSet the seed s to a zero vector and let ω(·) = 1 + f(·), where f is any activation function such that f(0) = 0. The identiy, sigmoid, or relu functions are suitable choices for f . The output of the multihead attention is then simply a sum of the values, which is Z in this case.\nWe additionally have the following universality theorem for pooling architectures:\nTheorem 1. Models of the form rFF(sum(rFF(·))) are universal function approximators in the space of permutation invariant functions.\nProof. See Appendix A of ?.\nar X\niv :1\n81 0.\n00 82\n5v 3\n[ cs\n.L G\n] 2\n6 M\nay 2\n01 9\nBy Lemma 3, we know that decoder(Z) can express any function of the form rFF(sum(Z)). Using this fact along with Theorem 1, we can prove the universality of Set Transformers:\nProposition 1. The Set Transformer is a universal function approximator in the space of permutation invariant functions.\nProof. By setting the matrix WO to a zero matrix in every SAB and ISAB, we can ignore all pairwise interaction terms in the encoder. Therefore, the encoder(X) can express any instance-wise feed-forward network (Z = rFF(X)). Directly invoking Theorem 1 concludes this proof.\nWhile this proof required us to ignore the pairwise interaction terms inside the SABs and ISABs to prove that Set Transformers are universal function approximators, our experiments indicated that self-attention in the encoder was crucial for good performance."
+  }, {
+    "heading": "2. Experiment Details",
+    "text": "In all implementations, we omit the feed-forward layer in the beginning of the decoder (rFF(Z)) because the end of the previous block contains a feed-forward layer. All MABs (inside SAB, ISAB and PMA) use fully-connected layers with ReLU activations for rFF layers.\nIn the architecture descriptions, FC(d, f) denotes the fully-connected layer with d units and activation function f . SAB(d, h) denotes the SAB with d units and h heads. ISABm(d, h) denotes the ISAB with d units, h heads and m inducing points. PMAk(d, h) denotes the PMA with d units, h heads and k vectors. All MABs used in SAB and PMA uses FC layers with ReLU activations for FF layers."
+  }, {
+    "heading": "2.1. Max Regression",
+    "text": "Given a set of real numbers {x1, . . . , xn}, the goal of this task is to return the maximum value in the set max(x1, · · · , xn). We construct training data as follows. We first sample a dataset size n uniformly from the set of integers {1, · · · , 10}. We then sample real numbers xi independently from the interval [0, 100]. Given the network’s prediction p, we use the actual maximum value max(x1, · · · , xn) to compute the mean absolute error |p−max(x1, · · · , xn)|. We don’t explicitly consider splits of train and test data, since we sample a new set {x1, . . . , xn} at each time step.\nWe show the detailed architectures used for the experiments in Table 1. We trained all networks using the Adam optimizer (?) with a constant learning rate of 10−3 and a batch size of 128 for 20,000 batches, after which loss converged for all architectures."
+  }, {
+    "heading": "2.2. Counting Unique Characters",
+    "text": "The task generation procedure is as follows. We first sample a set size n uniformly from the set of integers {6, . . . , 10}. We then sample the number of characters c uniformly from {1, . . . , n}. We sample c characters from the training set of characters, and randomly sample instances of each character so that the total number of instances sums to n and each set of characters has at least one instance in the resulting set.\nWe show the detailed architectures used for the experiments in Table 3. For both architectures, the resulting 1-dimensional output is passed through a softplus activation to produce the Poisson parameter γ. The role of softplus is to ensure that γ is always positive.\nThe loss function we optimize, as previously mentioned, is the log likelihood log p(x|γ) = x log(γ) − γ − log(x!). We chose this loss function over mean squared error or mean absolute error because it seemed like the more logical choice when trying to make a real number match a target integer. Early experiments showed that directly optimizing for mean absolute error had roughly the same result as optimizing γ in this way and measuring |γ − x|. We train using the Adam optimizer with a constant learning rate of 10−4 for 200,000 batches each with batch size 32."
+  }, {
+    "heading": "2.3. Solving maximum likelihood problems for mixture of Gaussians",
+    "text": ""
+  }, {
+    "heading": "2.3.1. DETAILS FOR 2D SYNTHETIC MIXTURES OF GAUSSIANS EXPERIMENT",
+    "text": "We generated the datasets according to the following generative process.\n1. Generate the number of data points, n ∼ Unif(100, 500).\n2. Generate k centers.\nµj,d ∼ Unif(−4, 4), j = 1, . . . , 4, d = 1, 2. (4)\n3. Generate cluster labels.\nπ ∼ Dir([1, 1]>), zi ∼ Categorical(π), i = 1, . . . , n. (5)\n4. Generate data from spherical Gaussian.\nxi ∼ N (µzi , (0.3)2I). (6)\nTable 4 summarizes the architectures used for the experiments. For all architectures, at each training step, we generate 10 random datasets according to the above generative process, and updated the parameters via Adam optimizer with initial learning rate 10−3. We trained all the algorithms for 50k steps, and decayed the learning rate to 10−4 after 35k steps. Table 5 summarizes the detailed results with various number of inducing points in the ISAB. Figure ?? shows the actual clustering results based on the predicted parameters."
+  }, {
+    "heading": "2.3.2. 2D SYNTHETIC MIXTURES OF GAUSSIANS EXPERIMENT ON LARGE-SCALE DATA",
+    "text": "To show the scalability of the set transformer, we conducted additional experiments on large-scale 2D synthetic clustering dataset. We generated the synthetic data as before, except that we sample the number of data points n Unif(1000, 5000) and set k = 6. We report the clustering accuracy of a subset of comparing methods in Table 6. The set transformer with only 32 inducing points works extremely well, demonstrating its scalability and efficiency."
+  }, {
+    "heading": "2.3.3. DETAILS FOR CIFAR-100 AMORTIZED CLUTERING EXPERIMENT",
+    "text": "We pretrained VGG net (?) with CIFAR-100, and obtained the test accuracy 68.54%. Then, we extracted feature vectors of 50k training images of CIFAR-100 from the 512-dimensional hidden layers of the VGG net (the layer just before the last layer). Given these feature vectors, the generative process of datasets is as follows.\n1. Generate the number of data points, n ∼ Unif(100, 500).\n2. Uniformly sample four classes among 100 classes.\n3. Uniformly sample n data points among four sampled classes.\nTable 7 summarizes the architectures used for the experiments. For all architectures, at each training step, we generate 10 random datasets according to the above generative process, and updated the parameters via Adam optimizer with initial learning rate 10−4. We trained all the algorithms for 50k steps, and decayed the learning rate to 10−5 after 35k steps. Table 8 summarizes the detailed results with various number of inducing points in the ISAB."
+  }, {
+    "heading": "2.4. Set Anomaly Detection",
+    "text": "Table 9 describes the architecture for meta set anomaly experiments. We trained all models via Adam optimizer with learning rate 10−4 and exponential decay of learning rate for 1,000 iterations. 1,000 datasets subsampled from CelebA dataset (see Figure ??) are used to train and test all the methods. We split 800 training datasets and 200 test datasets for the subsampled datasets."
+  }, {
+    "heading": "2.5. Point Cloud Classification",
+    "text": "We used the ModelNet40 dataset for our point cloud classification experiments. This dataset consists of a three-dimensional representation of 9,843 training and 2,468 test data which each belong to one of 40 object classes. As input to our architectures, we produce point clouds with n = 100, 1000, 5000 points each (each point is represented by (x, y, z) coordinates). For generalization, we randomly rotate and scale each set during training.\nWe show results our architectures in Table 10 and additional experiments which used n = 100, 5000 points in Table ??. We trained using the Adam optimizer with an initial learning rate of 10−3 which we decayed by a factor of 0.3 every 20,000 steps. For the experiment with 5,000 points (Table ??), we increased the dimension of the attention blocks (ISAB16(512, 4) instead of ISAB16(128, 4)) and also decayed the weights by a factor of 10−7. We also only used one ISAB block in the encoder because using two lead to overfitting in this setting."
+  }, {
+    "heading": "3. Additional Experiments",
+    "text": ""
+  }, {
+    "heading": "3.1. Runtime of SAB and ISAB",
+    "text": "We measured the runtime of SAB and ISAB on a simple benchmark (Figure 1). We used a single GPU (Tesla P40) for this experiment. The input data was a constant (zero) tensor of n three-dimensional vectors. We report the number of seconds it\ntook to process 10,000 sets of each size. The maximum set size we report for SAB is 2,000 because the computation graph of bigger sets could not fit on our GPU. The specific attention blocks used are ISAB4(64, 8) and SAB(64, 8).\nTable 10. Detailed architectures used in the point cloud classification experiments.\nEncoder Decoder\nrFF ISAB Pooling PMA\nFC(256,ReLU) ISAB(256, 4) max Dropout(0.5) FC(256,ReLU) ISAB(256, 4) Dropout(0.5) PMA1(256, 4) FC(256,ReLU) FC(256,ReLU) Dropout(0.5) FC(256,−) Dropout(0.5) FC(40,−)\nFC(40,−)\nFigure 1. Runtime of a single SAB/ISAB block on dummy data. x axis is the size of the input set and y axis is time (seconds). Note that the x-axis is log-scale."
+  }],
+  "year": 2019,
+  "references": [{
+    "title": "Probabilistic symmetry and invariant neural networks",
+    "authors": ["B. Bloem-Reddy", "Teh", "Y.-W"],
+    "venue": "arXiv e-prints,",
+    "year": 2019
+  }, {
+    "title": "ShapeNet: An information-rich 3D model repository",
+    "authors": ["A.X. Chang", "T. Funkhouser", "L. Guibas", "P. Hanrahan", "Q. Huang", "Z. Li", "S. Savarese", "M. Savva", "S. Song", "H. Su", "J. Xiao", "L. Yi", "F. Yu"],
+    "venue": "arXiv e-prints,",
+    "year": 2015
+  }, {
+    "title": "PointNet: Deep learning on point sets for 3D classification and segmentation",
+    "authors": ["R.Q. Charles", "H. Su", "M. Kaichun", "L.J. Guibas"],
+    "venue": "In Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR),",
+    "year": 2017
+  }, {
+    "title": "Solving the multiple instance problem with axis-parallel rectangles",
+    "authors": ["T.G. Dietterich", "H. Lathrop Richard", "T. Lozano-Pérez"],
+    "venue": "Artificial intelligence,",
+    "year": 1997
+  }, {
+    "title": "Towards a neural statistician",
+    "authors": ["H. Edwards", "A. Storkey"],
+    "venue": "In Proceedings of the International Conference on Learning Representations (ICLR),",
+    "year": 2017
+  }, {
+    "title": "Model-agnostic metalearning for fast adaptation of deep networks",
+    "authors": ["C. Finn", "P. Abbeel", "S. Levine"],
+    "venue": "In Proceedings of the International Conference on Machine Learning (ICML),",
+    "year": 2017
+  }, {
+    "title": "Spectral grouping using the Nyström method",
+    "authors": ["C. Fowlkes", "S. Belongie", "F. Chung", "J. Malik"],
+    "venue": "IEEE Transactions on Pattern Analysis and Machine Intelligence,",
+    "year": 2004
+  }, {
+    "title": "Conditional neural processes",
+    "authors": ["M. Garnelo", "D. Rosenbaum", "C.J. Maddison", "T. Ramalho", "D. Saxton", "M. Shanahan", "Y.W. Teh", "D.J. Rezende", "S.M.A. Eslami"],
+    "venue": "In Proceedings of the International Conference on Machine Learning (ICML),",
+    "year": 2018
+  }, {
+    "title": "Speech recognition with deep recurrent neural networks",
+    "authors": ["A. Graves", "Mohamed", "A.-r", "G.E. Hinton"],
+    "venue": "In Proceedings of the IEEE International Conference on Acoustics, Speech, and Signal Processing (ICASSP),",
+    "year": 2013
+  }, {
+    "title": "Attention-based deep multiple instance learning",
+    "authors": ["M. Ilse", "J.M. Tomczak", "M. Welling"],
+    "venue": "In Proceedings of the International Conference on Machine Learning (ICML),",
+    "year": 2018
+  }, {
+    "title": "Attentive neural processes",
+    "authors": ["H. Kim", "A. Mnih", "J. Schwarz", "M. Garnelo", "A. Eslami", "D. Rosenbaum", "O. Vinyals", "Y.W. Teh"],
+    "venue": "In Proceedings of International Conference on Learning Representations,",
+    "year": 2019
+  }, {
+    "title": "ImageNet classification with deep convolutional neural networks",
+    "authors": ["A. Krizhevsky", "I. Sutskever", "G.E. Hinton"],
+    "venue": "In Advances in Neural Information Processing Systems (NeurIPS),",
+    "year": 2012
+  }, {
+    "title": "Human-level concept learning through probabilistic program induction",
+    "authors": ["B.M. Lake", "R. Salakhutdinov", "J.B. Tenenbaum"],
+    "year": 2015
+  }, {
+    "title": "Gradient-based meta-learning with learned layerwise metric and subspace",
+    "authors": ["Y. Lee", "S. Choi"],
+    "venue": "In Proceedings of the International Conference on Machine Learning (ICML),",
+    "year": 2018
+  }, {
+    "title": "Discovering causal signals in images",
+    "authors": ["D. Lopez-Paz", "R. Nishihara", "S. Chintala", "B. Schölkopf", "L. Bottou"],
+    "venue": "In Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition",
+    "year": 2017
+  }, {
+    "title": "Attend and interact: higher-order object interactions for video understanding",
+    "authors": ["Ma", "C.-Y", "A. Kadav", "I. Melvin", "Z. Kira", "G. AlRegib", "H. Peter Graf"],
+    "venue": "In Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR),",
+    "year": 2018
+  }, {
+    "title": "A framework for multipleinstance learning",
+    "authors": ["O. Maron", "T. Lozano-Pérez"],
+    "venue": "In Advances in Neural Information Processing Systems (NeurIPS),",
+    "year": 1998
+  }, {
+    "title": "A simple neural attentive meta-learner",
+    "authors": ["N. Mishra", "M. Rohaninejad", "X. Chen", "P. Abbeel"],
+    "venue": "In Proceedings of the International Conference on Machine Learning (ICML),",
+    "year": 2018
+  }, {
+    "title": "Learning from distributions via support measure machines",
+    "authors": ["K. Muandet", "K. Fukumizu", "F. Dinuzzo", "B. Schölkopf"],
+    "venue": "In Advances in Neural Information Processing Systems (NeurIPS),",
+    "year": 2012
+  }, {
+    "title": "Distribution to distribution regression",
+    "authors": ["J. Oliva", "B. Póczos", "J. Schneider"],
+    "venue": "In Proceedings of the International Conference on Machine Learning (ICML),",
+    "year": 2013
+  }, {
+    "title": "Neural episodic control",
+    "authors": ["A. Pritzel", "B. Uria", "S. Srinivasan", "A. Puigdomenech", "O. Vinyals", "D. Hassabis", "D. Wierstra", "C. Blundell"],
+    "venue": "In Proceedings of the International Conference on Machine Learning (ICML),",
+    "year": 2017
+  }, {
+    "title": "A simple neural network module for relational reasoning",
+    "authors": ["A. Santoro", "D. Raposo", "D.G.T. Barret", "M. Malinowski", "R. Pascanu", "P. Battaglia"],
+    "venue": "In Advances in Neural Information Processing Systems (NeurIPS),",
+    "year": 2017
+  }, {
+    "title": "Evolutionary Principles in Self-Referential Learning",
+    "authors": ["J. Schmidhuber"],
+    "venue": "PhD thesis, Technical University of Munich,",
+    "year": 1987
+  }, {
+    "title": "DeepPano: deep panoramic representation for 3-D shape recognition",
+    "authors": ["B. Shi", "S. Bai", "Z. Zhou", "X. Bai"],
+    "venue": "IEEE Signal Processing Letters,",
+    "year": 2015
+  }, {
+    "title": "Very deep convolutional networks for large-scale image recognition",
+    "authors": ["K. Simonyan", "A. Zisserman"],
+    "venue": "arXiv eprints,",
+    "year": 2014
+  }, {
+    "title": "Prototypical networks for few-shot learning",
+    "authors": ["J. Snell", "K. Swersky", "R. Zemel"],
+    "venue": "In Advances in Neural Information Processing Systems (NeurIPS),",
+    "year": 2017
+  }, {
+    "title": "Sparse Gaussian processes using pseudo-inputs",
+    "authors": ["E. Snelson", "Z. Ghahramani"],
+    "venue": "In Advances in Neural Information Processing Systems (NeurIPS),",
+    "year": 2005
+  }, {
+    "title": "Multi-view convolutional neural networks for 3D shape recognition",
+    "authors": ["H. Su", "S. Maji", "E. Kalogerakis", "E. Learned-Miller"],
+    "venue": "In Proceedings of the IEEE International Conference on Computer Vision (ICCV),",
+    "year": 2015
+  }, {
+    "title": "Attention is all you need",
+    "authors": ["A. Vaswani", "N. Shazeer", "N. Parmar", "J. Uszkoreit", "L. Jones", "A.N. Gomez", "Ł. Kaiser", "I. Polosukhin"],
+    "venue": "In Advances in Neural Information Processing Systems (NeurIPS),",
+    "year": 2017
+  }, {
+    "title": "Order matters: sequence to sequence for sets",
+    "authors": ["O. Vinyals", "S. Bengio", "M. Kudlur"],
+    "venue": "In Proceedings of the International Conference on Learning Representations (ICLR),",
+    "year": 2016
+  }, {
+    "title": "3D ShapeNets: a deep representation for volumetric shapes",
+    "authors": ["Z. Wu", "S. Song", "A. Khosla", "F. Yu", "L. Zhang", "X. Tang", "J. Xiao"],
+    "venue": "In Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR),",
+    "year": 2015
+  }, {
+    "title": "Attentional aggregation of deep feature sets for multi-view 3D reconstruction",
+    "authors": ["B. Yang", "S. Wang", "A. Markham", "N. Trigoni"],
+    "venue": "arXiv e-prints,",
+    "year": 2018
+  }],
+  "id": "SP:d8a4e3159b3d907d041cb3ef45b6c7cbda1bf6b5",
+  "authors": [{
+    "name": "Juho Lee",
+    "affiliations": []
+  }, {
+    "name": "Yoonho Lee",
+    "affiliations": []
+  }, {
+    "name": "Jungtaek Kim",
+    "affiliations": []
+  }, {
+    "name": "Adam R. Kosiorek",
+    "affiliations": []
+  }, {
+    "name": "Seungjin Choi",
+    "affiliations": []
+  }, {
+    "name": "Yee Whye Teh",
+    "affiliations": []
+  }],
+  "abstractText": "Many machine learning tasks such as multiple instance learning, 3D shape recognition and fewshot image classification are defined on sets of instances. Since solutions to such problems do not depend on the order of elements of the set, models used to address them should be permutation invariant. We present an attention-based neural network module, the Set Transformer, specifically designed to model interactions among elements in the input set. The model consists of an encoder and a decoder, both of which rely on attention mechanisms. In an effort to reduce computational complexity, we introduce an attention scheme inspired by inducing point methods from sparse Gaussian process literature. It reduces computation time of self-attention from quadratic to linear in the number of elements in the set. We show that our model is theoretically attractive and we evaluate it on a range of tasks, demonstrating increased performance compared to recent methods for set-structured data.",
+  "title": "Set Transformer: A Framework for Attention-based Permutation-Invariant Neural Networks"
+}

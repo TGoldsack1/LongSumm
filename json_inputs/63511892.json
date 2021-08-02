@@ -1,0 +1,281 @@
+{
+  "sections": [{
+    "text": "Convolutional Neural Networks define an exceptionally powerful class of models, but are still limited by the lack of ability to be spatially invariant to the input data in a computationally and parameter efficient manner. In this work we introduce a new learnable module, the Spatial Transformer, which explicitly allows the spatial manipulation of data within the network. This differentiable module can be inserted into existing convolutional architectures, giving neural networks the ability to actively spatially transform feature maps, conditional on the feature map itself, without any extra training supervision or modification to the optimisation process. We show that the use of spatial transformers results in models which learn invariance to translation, scale, rotation and more generic warping, resulting in state-of-the-art performance on several benchmarks, and for a number of classes of transformations."
+  }, {
+    "heading": "1 Introduction",
+    "text": "Over recent years, the landscape of computer vision has been drastically altered and pushed forward through the adoption of a fast, scalable, end-to-end learning framework, the Convolutional Neural Network (CNN) [21]. Though not a recent invention, we now see a cornucopia of CNN-based models achieving state-of-the-art results in classification [19, 28, 35], localisation [31, 37], semantic segmentation [24], and action recognition [12, 32] tasks, amongst others.\nA desirable property of a system which is able to reason about images is to disentangle object pose and part deformation from texture and shape. The introduction of local max-pooling layers in CNNs has helped to satisfy this property by allowing a network to be somewhat spatially invariant to the position of features. However, due to the typically small spatial support for max-pooling (e.g. 2 × 2 pixels) this spatial invariance is only realised over a deep hierarchy of max-pooling and convolutions, and the intermediate feature maps (convolutional layer activations) in a CNN are not actually invariant to large transformations of the input data [6, 22]. This limitation of CNNs is due to having only a limited, pre-defined pooling mechanism for dealing with variations in the spatial arrangement of data.\nIn this work we introduce a Spatial Transformer module, that can be included into a standard neural network architecture to provide spatial transformation capabilities. The action of the spatial transformer is conditioned on individual data samples, with the appropriate behaviour learnt during training for the task in question (without extra supervision). Unlike pooling layers, where the receptive fields are fixed and local, the spatial transformer module is a dynamic mechanism that can actively spatially transform an image (or a feature map) by producing an appropriate transformation for each input sample. The transformation is then performed on the entire feature map (non-locally) and can include scaling, cropping, rotations, as well as non-rigid deformations. This allows networks which include spatial transformers to not only select regions of an image that are most relevant (attention), but also to transform those regions to a canonical, expected pose to simplify recognition in the following layers. Notably, spatial transformers can be trained with standard back-propagation, allowing for end-to-end training of the models they are injected in.\nar X\niv :1\n50 6.\n02 02\n5v 3\n[ cs\n.C V\n] 4\nF eb\n2 01\n9\nSpatial transformers can be incorporated into CNNs to benefit multifarious tasks, for example: (i) image classification: suppose a CNN is trained to perform multi-way classification of images according to whether they contain a particular digit – where the position and size of the digit may vary significantly with each sample (and are uncorrelated with the class); a spatial transformer that crops out and scale-normalizes the appropriate region can simplify the subsequent classification task, and lead to superior classification performance, see Fig. 1; (ii) co-localisation: given a set of images containing different instances of the same (but unknown) class, a spatial transformer can be used to localise them in each image; (iii) spatial attention: a spatial transformer can be used for tasks requiring an attention mechanism, such as in [14, 39], but is more flexible and can be trained purely with backpropagation without reinforcement learning. A key benefit of using attention is that transformed (and so attended), lower resolution inputs can be used in favour of higher resolution raw inputs, resulting in increased computational efficiency.\nThe rest of the paper is organised as follows: Sect. 2 discusses some work related to our own, we introduce the formulation and implementation of the spatial transformer in Sect. 3, and finally give the results of experiments in Sect. 4. Additional experiments and implementation details are given in Appendix A."
+  }, {
+    "heading": "2 Related Work",
+    "text": "In this section we discuss the prior work related to the paper, covering the central ideas of modelling transformations with neural networks [15, 16, 36], learning and analysing transformation-invariant representations [4, 6, 10, 20, 22, 33], as well as attention and detection mechanisms for feature selection [1, 7, 11, 14, 27, 29].\nEarly work by Hinton [15] looked at assigning canonical frames of reference to object parts, a theme which recurred in [16] where 2D affine transformations were modeled to create a generative model composed of transformed parts. The targets of the generative training scheme are the transformed input images, with the transformations between input images and targets given as an additional input to the network. The result is a generative model which can learn to generate transformed images of objects by composing parts. The notion of a composition of transformed parts is taken further by Tieleman [36], where learnt parts are explicitly affine-transformed, with the transform predicted by the network. Such generative capsule models are able to learn discriminative features for classification from transformation supervision.\nThe invariance and equivariance of CNN representations to input image transformations are studied in [22] by estimating the linear relationships between representations of the original and transformed images. Cohen & Welling [6] analyse this behaviour in relation to symmetry groups, which is also exploited in the architecture proposed by Gens & Domingos [10], resulting in feature maps that are more invariant to symmetry groups. Other attempts to design transformation invariant representations are scattering networks [4], and CNNs that construct filter banks of transformed filters [20, 33]. Stollenga et al. [34] use a policy based on a network’s activations to gate the responses of the network’s filters for a subsequent forward pass of the same image and so can allow attention to specific features. In this work, we aim to achieve invariant representations by manipulating the data rather than the feature extractors, something that was done for clustering in [9].\nNeural networks with selective attention manipulate the data by taking crops, and so are able to learn translation invariance. Work such as [1, 29] are trained with reinforcement learning to avoid the\nneed for a differentiable attention mechanism, while [14] use a differentiable attention mechansim by utilising Gaussian kernels in a generative model. The work by Girshick et al. [11] uses a region proposal algorithm as a form of attention, and [7] show that it is possible to regress salient regions with a CNN. The framework we present in this paper can be seen as a generalisation of differentiable attention to any spatial transformation."
+  }, {
+    "heading": "3 Spatial Transformers",
+    "text": "In this section we describe the formulation of a spatial transformer. This is a differentiable module which applies a spatial transformation to a feature map during a single forward pass, where the transformation is conditioned on the particular input, producing a single output feature map. For multi-channel inputs, the same warping is applied to each channel. For simplicity, in this section we consider single transforms and single outputs per transformer, however we can generalise to multiple transformations, as shown in experiments.\nThe spatial transformer mechanism is split into three parts, shown in Fig. 2. In order of computation, first a localisation network (Sect. 3.1) takes the input feature map, and through a number of hidden layers outputs the parameters of the spatial transformation that should be applied to the feature map – this gives a transformation conditional on the input. Then, the predicted transformation parameters are used to create a sampling grid, which is a set of points where the input map should be sampled to produce the transformed output. This is done by the grid generator, described in Sect. 3.2. Finally, the feature map and the sampling grid are taken as inputs to the sampler, producing the output map sampled from the input at the grid points (Sect. 3.3).\nThe combination of these three components forms a spatial transformer and will now be described in more detail in the following sections."
+  }, {
+    "heading": "3.1 Localisation Network",
+    "text": "The localisation network takes the input feature map U ∈ RH×W×C with width W , height H and C channels and outputs θ, the parameters of the transformation Tθ to be applied to the feature map: θ = floc(U). The size of θ can vary depending on the transformation type that is parameterised, e.g. for an affine transformation θ is 6-dimensional as in (10).\nThe localisation network function floc() can take any form, such as a fully-connected network or a convolutional network, but should include a final regression layer to produce the transformation parameters θ."
+  }, {
+    "heading": "3.2 Parameterised Sampling Grid",
+    "text": "To perform a warping of the input feature map, each output pixel is computed by applying a sampling kernel centered at a particular location in the input feature map (this is described fully in the next section). By pixel we refer to an element of a generic feature map, not necessarily an image. In general, the output pixels are defined to lie on a regular grid G = {Gi} of pixels Gi = (xti, yti), forming an output feature map V ∈ RH′×W ′×C , where H ′ and W ′ are the height and width of the grid, and C is the number of channels, which is the same in the input and output.\nxsi ysi\n)\n= Tθ(Gi) = Aθ\n xtiyti\n1\n = [ θ11 θ12 θ13\nθ21 θ22 θ23\n] xtiyti\n1\n (1)\nwhere (xti, y t i) are the target coordinates of the regular grid in the output feature map, (x s i , y s i ) are the source coordinates in the input feature map that define the sample points, and Aθ is the affine transformation matrix. We use height and width normalised coordinates, such that −1 ≤ xti, yti ≤ 1 when within the spatial bounds of the output, and −1 ≤ xsi , ysi ≤ 1 when within the spatial bounds of the input (and similarly for the y coordinates). The source/target transformation and sampling is equivalent to the standard texture mapping and coordinates used in graphics [8].\nThe transform defined in (10) allows cropping, translation, rotation, scale, and skew to be applied to the input feature map, and requires only 6 parameters (the 6 elements of Aθ) to be produced by the localisation network. It allows cropping because if the transformation is a contraction (i.e. the determinant of the left 2× 2 sub-matrix has magnitude less than unity) then the mapped regular grid will lie in a parallelogram of area less than the range of xsi , y s i . The effect of this transformation on the grid compared to the identity transform is shown in Fig. 3.\nThe class of transformations Tθ may be more constrained, such as that used for attention\nAθ = [ s 0 tx 0 s ty ] (2)\nallowing cropping, translation, and isotropic scaling by varying s, tx, and ty . The transformation Tθ can also be more general, such as a plane projective transformation with 8 parameters, piecewise affine, or a thin plate spline. Indeed, the transformation can have any parameterised form, provided that it is differentiable with respect to the parameters – this crucially allows gradients to be backpropagated through from the sample points Tθ(Gi) to the localisation network output θ. If the transformation is parameterised in a structured, low-dimensional way, this reduces the complexity of the task assigned to the localisation network. For instance, a generic class of structured and differentiable transformations, which is a superset of attention, affine, projective, and thin plate spline transformations, is Tθ = MθB, where B is a target grid representation (e.g. in (10), B is the regular grid G in homogeneous coordinates), and Mθ is a matrix parameterised by θ. In this case it is possible to not only learn how to predict θ for a sample, but also to learn B for the task at hand."
+  }, {
+    "heading": "3.3 Differentiable Image Sampling",
+    "text": "To perform a spatial transformation of the input feature map, a sampler must take the set of sampling points Tθ(G), along with the input feature map U and produce the sampled output feature map V . Each (xsi , y s i ) coordinate in Tθ(G) defines the spatial location in the input where a sampling kernel is applied to get the value at a particular pixel in the output V . This can be written as\nV ci = H∑ n W∑ m U cnmk(x s i −m; Φx)k(ysi − n; Φy) ∀i ∈ [1 . . . H ′W ′] ∀c ∈ [1 . . . C] (3)\nwhere Φx and Φy are the parameters of a generic sampling kernel k() which defines the image interpolation (e.g. bilinear), U cnm is the value at location (n,m) in channel c of the input, and V c i is the output value for pixel i at location (xti, y t i) in channel c. Note that the sampling is done identically for each channel of the input, so every channel is transformed in an identical way (this preserves spatial consistency between channels).\nIn theory, any sampling kernel can be used, as long as (sub-)gradients can be defined with respect to xsi and y s i . For example, using the integer sampling kernel reduces (3) to\nV ci = H∑ n W∑ m U cnmδ(bxsi + 0.5c −m)δ(bysi + 0.5c − n) (4)\nwhere bx + 0.5c rounds x to the nearest integer and δ() is the Kronecker delta function. This sampling kernel equates to just copying the value at the nearest pixel to (xsi , y s i ) to the output location (xti, y t i). Alternatively, a bilinear sampling kernel can be used, giving\nV ci = H∑ n W∑ m U cnm max(0, 1− |xsi −m|) max(0, 1− |ysi − n|) (5)\nTo allow backpropagation of the loss through this sampling mechanism we can define the gradients with respect to U and G. For bilinear sampling (5) the partial derivatives are\n∂V ci ∂U cnm = H∑ n W∑ m max(0, 1− |xsi −m|) max(0, 1− |ysi − n|) (6)\n∂V ci ∂xsi = H∑ n W∑ m U cnm max(0, 1− |ysi − n|)  0 if |m− xsi | ≥ 1 1 if m ≥ xsi −1 if m < xsi\n(7)\nand similarly to (7) for ∂V c i\n∂ysi .\nThis gives us a (sub-)differentiable sampling mechanism, allowing loss gradients to flow back not only to the input feature map (6), but also to the sampling grid coordinates (7), and therefore back to the transformation parameters θ and localisation network since ∂x s i\n∂θ and ∂xsi ∂θ can be easily derived\nfrom (10) for example. Due to discontinuities in the sampling fuctions, sub-gradients must be used. This sampling mechanism can be implemented very efficiently on GPU, by ignoring the sum over all input locations and instead just looking at the kernel support region for each output pixel."
+  }, {
+    "heading": "3.4 Spatial Transformer Networks",
+    "text": "The combination of the localisation network, grid generator, and sampler form a spatial transformer (Fig. 2). This is a self-contained module which can be dropped into a CNN architecture at any point, and in any number, giving rise to spatial transformer networks. This module is computationally very fast and does not impair the training speed, causing very little time overhead when used naively, and even speedups in attentive models due to subsequent downsampling that can be applied to the output of the transformer.\nPlacing spatial transformers within a CNN allows the network to learn how to actively transform the feature maps to help minimise the overall cost function of the network during training. The knowledge of how to transform each training sample is compressed and cached in the weights of the localisation network (and also the weights of the layers previous to a spatial transformer) during training. For some tasks, it may also be useful to feed the output of the localisation network, θ, forward to the rest of the network, as it explicitly encodes the transformation, and hence the pose, of a region or object.\nIt is also possible to use spatial transformers to downsample or oversample a feature map, as one can define the output dimensionsH ′ andW ′ to be different to the input dimensionsH andW . However, with sampling kernels with a fixed, small spatial support (such as the bilinear kernel), downsampling with a spatial transformer can cause aliasing effects.\nFinally, it is possible to have multiple spatial transformers in a CNN. Placing multiple spatial transformers at increasing depths of a network allow transformations of increasingly abstract representations, and also gives the localisation networks potentially more informative representations to base the predicted transformation parameters on. One can also use multiple spatial transformers in parallel – this can be useful if there are multiple objects or parts of interest in a feature map that should be focussed on individually. A limitation of this architecture in a purely feed-forward network is that the number of parallel spatial transformers limits the number of objects that the network can model."
+  }, {
+    "heading": "4 Experiments",
+    "text": "In this section we explore the use of spatial transformer networks on a number of supervised learning tasks. In Sect. 4.1 we begin with experiments on distorted versions of the MNIST handwriting dataset, showing the ability of spatial transformers to improve classification performance through actively transforming the input images. In Sect. 4.2 we test spatial transformer networks on a challenging real-world dataset, Street View House Numbers [25], for number recognition, showing stateof-the-art results using multiple spatial transformers embedded in the convolutional stack of a CNN. Finally, in Sect. 4.3, we investigate the use of multiple parallel spatial transformers for fine-grained classification, showing state-of-the-art performance on CUB-200-2011 birds dataset [38] by discovering object parts and learning to attend to them. Further experiments of MNIST addition and co-localisation can be found in Appendix A."
+  }, {
+    "heading": "4.1 Distorted MNIST",
+    "text": "In this section we use the MNIST handwriting dataset as a testbed for exploring the range of transformations to which a network can learn invariance to by using a spatial transformer.\nWe begin with experiments where we train different neural network models to classify MNIST data that has been distorted in various ways: rotation (R), rotation, scale and translation (RTS), projective transformation (P), and elastic warping (E) – note that elastic warping is destructive and can not be inverted in some cases. The full details of the distortions used to generate this data are given in Appendix A. We train baseline fully-connected (FCN) and convolutional (CNN) neural networks, as well as networks with spatial transformers acting on the input before the classification network (ST-FCN and ST-CNN). The spatial transformer networks all use bilinear sampling, but variants use different transformation functions: an affine transformation (Aff), projective transformation (Proj), and a 16-point thin plate spline transformation (TPS) [2]. The CNN models include two max-pooling layers. All networks have approximately the same number of parameters, are trained with identical optimisation schemes (backpropagation, SGD, scheduled learning rate decrease, with a multinomial cross entropy loss), and all with three weight layers in the classification network.\nThe results of these experiments are shown in Table 1 (left). Looking at any particular type of distortion of the data, it is clear that a spatial transformer enabled network outperforms its counterpart base network. For the case of rotation, translation, and scale distortion (RTS), the ST-CNN achieves\n0.5% and 0.6% depending on the class of transform used for Tθ, whereas a CNN, with two maxpooling layers to provide spatial invariance, achieves 0.8% error. This is in fact the same error that the ST-FCN achieves, which is without a single convolution or max-pooling layer in its network, showing that using a spatial transformer is an alternative way to achieve spatial invariance. ST-CNN models consistently perform better than ST-FCN models due to max-pooling layers in ST-CNN providing even more spatial invariance, and convolutional layers better modelling local structure. We also test our models in a noisy environment, on 60 × 60 images with translated MNIST digits and background clutter (see Fig. 1 third row for an example): an FCN gets 13.2% error, a CNN gets 3.5% error, while an ST-FCN gets 2.0% error and an ST-CNN gets 1.7% error.\nLooking at the results between different classes of transformation, the thin plate spline transformation (TPS) is the most powerful, being able to reduce error on elastically deformed digits by reshaping the input into a prototype instance of the digit, reducing the complexity of the task for the classification network, and does not over fit on simpler data e.g. R. Interestingly, the transformation of inputs for all ST models leads to a “standard” upright posed digit – this is the mean pose found in the training data. In Table 1 (right), we show the transformations performed for some test cases where a CNN is unable to correctly classify the digit, but a spatial transformer network can. Further test examples are visualised in an animation here https://goo.gl/qdEhUu."
+  }, {
+    "heading": "4.2 Street View House Numbers",
+    "text": "We now test our spatial transformer networks on a challenging real-world dataset, Street View House Numbers (SVHN) [25]. This dataset contains around 200k real world images of house numbers, with the task to recognise the sequence of numbers in each image. There are between 1 and 5 digits in each image, with a large variability in scale and spatial arrangement.\nWe follow the experimental setup as in [1, 13], where the data is preprocessed by taking 64 × 64 crops around each digit sequence. We also use an additional more loosely 128×128 cropped dataset as in [1]. We train a baseline character sequence CNN model with 11 hidden layers leading to five independent softmax classifiers, each one predicting the digit at a particular position in the sequence. This is the character sequence model used in [19], where each classifier includes a null-character output to model variable length sequences. This model matches the results obtained in [13].\nWe extend this baseline CNN to include a spatial transformer immediately following the input (STCNN Single), where the localisation network is a four-layer CNN. We also define another extension where before each of the first four convolutional layers of the baseline CNN, we insert a spatial transformer (ST-CNN Multi), where the localisation networks are all two layer fully connected networks with 32 units per layer. In the ST-CNN Multi model, the spatial transformer before the first convolutional layer acts on the input image as with the previous experiments, however the subsequent spatial transformers deeper in the network act on the convolutional feature maps, predicting a transformation from them and transforming these feature maps (this is visualised in Table 2 (right) (a)). This allows deeper spatial transformers to predict a transformation based on richer features rather than the raw image. All networks are trained from scratch with SGD and dropout [17], with randomly initialised weights, except for the regression layers of spatial transformers which are initialised to predict the identity transform. Affine transformations and bilinear sampling kernels are used for all spatial transformer networks in these experiments.\nThe results of this experiment are shown in Table 2 (left) – the spatial transformer models obtain state-of-the-art results, reaching 3.6% error on 64×64 images compared to previous state-of-the-art of 3.9% error. Interestingly on 128 × 128 images, while other methods degrade in performance, an ST-CNN achieves 3.9% error while the previous state of the art at 4.5% error is with a recurrent attention model that uses an ensemble of models with Monte Carlo averaging – in contrast the STCNN models require only a single forward pass of a single model. This accuracy is achieved due to the fact that the spatial transformers crop and rescale the parts of the feature maps that correspond to the digit, focussing resolution and network capacity only on these areas (see Table 2 (right) (b) for some examples). In terms of computation speed, the ST-CNN Multi model is only 6% slower (forward and backward pass) than the CNN."
+  }, {
+    "heading": "4.3 Fine-Grained Classification",
+    "text": "In this section, we use a spatial transformer network with multiple transformers in parallel to perform fine-grained bird classification. We evaluate our models on the CUB-200-2011 birds dataset [38], containing 6k training images and 5.8k test images, covering 200 species of birds. The birds appear at a range of scales and orientations, are not tightly cropped, and require detailed texture and shape analysis to distinguish. In our experiments, we only use image class labels for training.\nWe consider a strong baseline CNN model – an Inception architecture with batch normalisation [18] pre-trained on ImageNet [26] and fine-tuned on CUB – which by itself achieves the state-of-theart accuracy of 82.3% (previous best result is 81.0% [30]). We then train a spatial transformer network, ST-CNN, which contains 2 or 4 parallel spatial transformers, parameterised for attention and acting on the input image. Discriminative image parts, captured by the transformers, are passed to the part description sub-nets (each of which is also initialised by Inception). The resulting part representations are concatenated and classified with a single softmax layer. The whole architecture is trained on image class labels end-to-end with backpropagation (full details in Appendix A).\nThe results are shown in Table 3 (left). The ST-CNN achieves an accuracy of 84.1%, outperforming the baseline by 1.8%. It should be noted that there is a small (22/5794) overlap between the ImageNet training set and CUB-200-2011 test set1 – removing these images from the test set results in 84.0% accuracy with the same ST-CNN. In the visualisations of the transforms predicted by 2×STCNN (Table 3 (right)) one can see interesting behaviour has been learnt: one spatial transformer (red) has learnt to become a head detector, while the other (green) fixates on the central part of the body of a bird. The resulting output from the spatial transformers for the classification network is a somewhat pose-normalised representation of a bird. While previous work such as [3] explicitly define parts of the bird, training separate detectors for these parts with supplied keypoint training data, the ST-CNN is able to discover and learn part detectors in a data-driven manner without any additional supervision. In addition, the use of spatial transformers allows us to use 448px resolution input images without any impact in performance, as the output of the transformed 448px images are downsampled to 224px before being processed.\n1Thanks to the eagle-eyed Hugo Larochelle and Yin Zheng for spotting the birds nested in both the ImageNet training set and CUB test set."
+  }, {
+    "heading": "5 Conclusion",
+    "text": "In this paper we introduced a new self-contained module for neural networks – the spatial transformer. This module can be dropped into a network and perform explicit spatial transformations of features, opening up new ways for neural networks to model data, and is learnt in an end-toend fashion, without making any changes to the loss function. While CNNs provide an incredibly strong baseline, we see gains in accuracy using spatial transformers across multiple tasks, resulting in state-of-the-art performance. Furthermore, the regressed transformation parameters from the spatial transformer are available as an output and could be used for subsequent tasks. While we only explore feed-forward networks in this work, early experiments show spatial transformers to be powerful in recurrent models, and useful for tasks requiring the disentangling of object reference frames, as well as easily extendable to 3D transformations (see Appendix A.3)."
+  }, {
+    "heading": "A Appendix",
+    "text": "In this section we present the results of two further experiments – that of MNIST addition showing spatial transformers acting on multiple objects in Sect. A.1, and co-localisation in Sect. A.2 showing the application to semi-supervised scenarios. In addition, we give an example of the extension to 3D in Sect. A.3. We also expand upon the details of the experiments from Sect. 4.1 in Sect. A.4, Sect. 4.2 in Sect. A.5, and Sect. 4.3 in Sect. A.6."
+  }, {
+    "heading": "A.1 MNIST Addition",
+    "text": "In this section we demonstrate another use case for multiple spatial transformers in parallel: to model multiple objects. We define an MNIST addition task, where the network must output the sum of the two digits given in the input. Each digit is presented in a separate 42 × 42 input channel (giving 2-channel inputs), but each digit is transformed independently, with random rotation, scale, and translation (RTS).\nWe train fully connected (FCN), convolutional (CNN) and single spatial transformer fully connected (ST-FCN) networks, as well as spatial transformer fully connected networks with two parallel spatial transformers (2×ST-FCN) acting on the input image, each one taking both channels as input and transforming both channels. The two 2-channel outputs of the two spatial transformers are concatenated into a 4-channel feature map for the subsequent FCN. As in Sect. 4.1, all networks have the same number of parameters, and are all trained with SGD to minimise the multinomial cross entropy loss for 19 classes (the possible addition results 0-18).\nThe results are given in Table 4 (left). Due to the complexity of this task, the FCN reaches a minimum error of 47.7%, however a CNN with max-pooling layers is far more accurate with 14.7%\nerror. Adding a single spatial transformer improves the capability of an FCN by focussing on a single region of the input containing both digits, reaching 18.5% error. However, by using two spatial transformers, each transformer can learn to focus on transforming the digit in a single channel (though receiving both channels as input), visualised in Table 4 (right). The transformers co-adapt, producing stable representations of the two digits in two of the four output channels of the spatial transformers. This allows the 2×ST-FCN model to achieve 5.8% error, far exceeding that of other models."
+  }, {
+    "heading": "A.2 Co-localisation",
+    "text": "In this experiment, we explore the use of spatial transformers in a semi-supervised scenario – colocalisation. The co-localisation task is as follows: given a set of images that are assumed to contain instances of a common but unknown object class, localise (with a bounding box) the common object. Neither the object class labels, nor the object location ground truth is used for optimisation, only the set of images.\nTo achieve this, we adopt the supervision that the distance between the image crop corresponding to two correctly localised objects is smaller than to a randomly sampled image crop, in some embedding space. For a dataset I = {In} of N images, this translates to a triplet loss, where we minimise"
+  }, {
+    "heading": "Optimisation",
+    "text": "https://goo.gl/qdEhUu\nthe hinge loss\nN∑ n M∑ m 6=n max(0, ‖e(ITn )− e(ITm)‖22 − ‖e(ITn )− e(I randn )‖22 + α) (8)\nwhere ITn is the image crop of In corresponding to the localised object, I rand n is a randomly sampled patch from In, e() is an encoding function and α is a margin. We can use a spatial transformer to act as the localiser, such that ITn = Tθ(In) where θ = floc(In), interpreting the parameters of the transformation θ as the bounding box of the object. We can minimise this with stochastic gradient descent, randomly sampling image pairs (n,m).\nWe perform co-localisation on translated (T), and also translated and cluttered (TC) MNIST images. Each image, a 28 × 28 pixel MNIST digit, is placed in a uniform random location in a 84 × 84 black background image. For the cluttered dataset, we also then add 16 random 6 × 6 crops sampled from the original MNIST training dataset, creating distractors. For a particular co-localisation optimisation, we pick a digit class and generate 100 distorted image samples as the dataset for the experiment. We use a margin α = 1, and for the encoding function e() we use the CNN trained for digit classification from Sect. 4.1, concatenating the three layers of activations (two hidden layers and the classification layer without softmax) to form a feature descriptor. We use a spatial transformer parameterised for attention (scale and translation) where the localisation network is a 100k parameter CNN consisting of a convolutional layer with eight 9 × 9 filters and a 4 pixel stride, followed by 2× 2 max pooling with stride 2 and then two 8-unit fully-connected layers before the final 3-unit fully-connected layer.\nThe results are shown in Table 5. We measure a digit to be correctly localised if the overlap (area of intersection divided by area of union) between the predicted bounding box and groundtruth bounding box is greater than 0.5. Our co-localisation framework is able to perfectly localise MNIST digits without any clutter with 100% accuracy, and correctly localises between 75-93% of digits when there is clutter in the images. An example of the optimisation process on a subset of the dataset for “8” is shown in Fig. 4. This is surprisingly good performance for what is a simple loss function derived from simple intuition, and hints at potential further applications in tracking problems."
+  }, {
+    "heading": "A.3 Higher Dimensional Transformers",
+    "text": "The framework described in this paper is not limited to 2D transformations and can be easily extended to higher dimensions. To demonstrate this, we give the example of a spatial transformer capable of performing 3D affine transformations.\nWe extended the differentiable image sampling of Sect. 3.3 to perform 3D bilinear sampling. The 3D equivalent of (5) becomes\nV ci = H∑ n W∑ m D∑ l U cnml max(0, 1− |xsi −m|) max(0, 1− |ysi − n|) max(0, 1− |zsi − l|) (9)\nfor the 3D input U ∈ RH×W×D×C and output V ∈ RH′×W ′×D′×C , where H ′, W ′, and D′ are the height, width and depth of the grid, and C is the number of channels. Similarly to the 2D sampling grid in Sect. 3.2, the source coordinates that define the sampling points, (xsi , y s i , z s i ) can be generated by the transformation of a regular 3D grid G = {Gi} of voxels Gi = (xti, yti , zti). For a 3D affine transformation this is  xsiysi\nzsi  =  θ11 θ12 θ13 θ14θ21 θ22 θ23 θ24 θ31 θ32 θ33 θ34   xti yti zti 1  . (10) The 3D spatial transformer can be used just like its 2D counterpart, being dropped into neural networks to provide a way to warp data in 3D space, where the third dimension could be space or time.\nAnother interesting way to use the 3D transformer is to flatten the 3D output across one dimension, creating a 2D projection of the 3D space, e.g. W cnm = ∑ l V c nml such that W ∈ RH\n′×W ′×C . This allows the original 3D data to be intelligently projected to 2D, greatly reducing the dimensionality and complexity of the subsequent processing. We demonstrated this on the task of 3D object classification on a dataset of 3D, extruded MNIST digits. The task is to take a 3D voxel input of a digit which has been randomly translated and rotated in 3D space, and output the class of the digit. The resulting 3D spatial transformer network learns to create a 2D projection of the 3D space where the digit is centered in the resulting 2D image, making it easy for the remaining layers to classify. An example is shown in Fig. 5."
+  }, {
+    "heading": "A.4 Distorted MNIST Details",
+    "text": "In this section we expand upon the details of the distorted MNIST experiments in Sect. 4.1.\nData. The rotated dataset (R) was generated from rotating MNIST training digits with a random rotation sampled uniformly between −90◦ and +90◦. The rotated, translated, and scaled dataset (RTS) was generated by randomly rotating an MNIST digit by +45◦ and−45◦, randomly scaling the\ndigit by a factor of between 0.7 and 1.2, and placing the digit in a random location in a 42×42 image, all with uniform distributions. The projected dataset (P) was generated by scaling a digit randomly between 0.75 and 1.0, and stretching each corner of an MNIST digit by an amount sampled from a normal distribution with zero mean and 5 pixel standard deviation. The elasticly distorted dataset (E) was generated by scaling a digit randomly between 0.75 and 1.0, and then randomly peturbing 16 control points of a thin plate spline arranged in a regular grid on the image by an amount sampled from a normal distribution with zero mean and 1.5 pixel standard deviation. The translated and cluttered dataset (TC) is generated by placing an MNIST digit in a random location in a 60 × 60 black canvas, and then inserting six randomly sampled 6 × 6 patches of other digit images into random locations in the image.\nNetworks. All networks use rectified linear non-linearities and softmax classifiers. All FCN networks have two hidden fully connected layers followed by a classification layer. All CNN networks have a 9 × 9 convolutional layer (stride 1, no padding), a 2 × 2 max-pooling layer with stride 2, a subsequent 7 × 7 convolutional layer (stride 1, no padding), and another 2 × 2 max-pooling layer with stride 2 before the final classfication layer. All spatial transformer (ST) enabled networks place the ST modules at the beginning of the network, and have three hidden layers in their localisation networks with 32 unit fully connected layers for ST-FCN networks and two 20-filter 5 × 5 convolutional layers (stride 1, no padding) acting on a 2× downsampled input, with 2 × 2 max-pooling between convolutional layers, and a 20 unit fully connected layer following the convolutional layers. Spatial transformer networks for TC and RTS datasets have average pooling after the spatial transformer to downsample the output of the transformer by a factor of 2 for the classification network. The exact number of units in FCN and CNN based classification models varies so as to always ensure that all networks for a particular experiment contain the same number of learnable parameters (around 400k). This means that spatial transformer networks generally have less parameters in the classification networks due to the need for parameters in the localisation networks. The FCNs have between 128 and 256 units per layer, and the CNNs have between 32 and 64 filters per layer.\nTraining. All networks were trained with SGD for 150k iterations, the same hyperparameters (256 batch size, 0.01 base learning rate, no weight decay, no dropout), and same learning rate schedule (learning rate reduced by a factor of ten every 50k iterations). We initialise the network weights randomly, except for the final regression layer of localisation networks which are initialised to regress the identity transform (zero weights, identity transform bias). We perform three complete training runs for all models with different random seeds and report average accuracy."
+  }, {
+    "heading": "A.5 Street View House Numbers Details",
+    "text": "For the SVHN experiments in Sect. 4.2, we follow [1, 13] and select hyperparameters from a validation set of 5k images from the training set. All networks are trained for 400k iterations with SGD (128 batch size), using a base learning rate of 0.01 decreased by a factor of ten every 80k iterations, weight decay set to 0.0005, and dropout at 0.5 for all layers except the first convolutional layer and localisation networks. The learning rate for localisation networks of spatial transformer networks was set to a tenth of the base learning rate.\nWe adopt the notation that conv[N ,w,s,p] denotes a convolutional layer with N filters of size w × w, with stride s and p pixel padding, fc[N ] is a fully connected layer with N units, and max[s] is a s × s max-pooling layer with stride s. The CNN model is: conv[48,5,1,2]-max[2]conv[64,5,1,2]-conv[128,5,1,2]-max[2]-conv[160,5,1,2]-conv[192,5,1,2]-max[2]-conv[192,5,1,2]conv[192,5,1,2]-max[2]-conv[192,5,1,2]-fc[3072]-fc[3072]-fc[3072], with rectified linear units following each weight layer, followed by five parallel fc[11] and softmax layers for classification (similar to that in [19]). The ST-CNN Single has a single spatial transformer (ST) before the first convolutional layer of the CNN model – the ST’s localisation network architecture is as follows: conv[32,5,1,2]-max[2]-conv[32,5,1,2]-fc[32]-fc[32]. The ST-CNN Multi has four spatial transformers, one before each of the first four convolutional layers of the CNN model, and each with a simple fc[32]-fc[32] localisation network.\nWe initialise the network weights randomly, except for the final regression layer of localisation networks which are initialised to regress the identity transform (zero weights, identity transform bias). We performed two full training runs with different random seeds and report the average accuracy obtained by a single model."
+  }, {
+    "heading": "A.6 Fine Grained Classification Details",
+    "text": "In this section we describe our fine-grained image classification architecture in more detail. For this task, we utilise the spatial transformers as a differentiable attention mechanism, where each transformer is expected to automatically learn to focus on discriminative object parts. Namely, each transformer predicts the location (x,y) of the attention window, while the scale is fixed to 50% of the image size. The transformers sample 224 × 224 crops from the input image, each of which is then described each by its own CNN stream, thus forming a multi-stream architecture (shown in Fig. 6). The outputs of the streams are 1024-D crop descriptors, which are concatenated and classified with a 200-way softmax classifier.\nAs the main building block of our network, we utilise the state-of-the-art Inception architecture with batch normalisation [18], pre-trained on the ImageNet Challenge (ILSVRC) dataset. Our model achieves 27.1% top-1 error on the ILSVRC validation set using a single image crop (we only trained on single-scale images, resized so that the smallest side is 256). The crop description networks employ the Inception architecture with the last layer (1000-way ILSVRC classifier) removed, so that the output is a 1024-D descriptor.\nThe localisation network is shared across all the transformers, and was derived from Inception in the following way. Apart from the ILSVRC classification layer, we also removed the last pooling layer to preserve the spatial information. The output of this truncated Inception net has 7× 7 spatial resolution and 1024 feature channels. On top of it, we added three weight layers to predict the transformations: (i) 1 × 1 convolutional layer to reduce the number of feature channels from 1024 to 128; (ii) fully-connected layer with 128-D output; (iii) fully-connected layer with 2N -D output, where N is the number of transformers (we experimented with N = 2 and N = 4).\nWe note that we did not strive to optimise the architecture in terms of the number of parameters and the computation time. Our aim was to investigate whether spatial transformer networks are able to automatically discover meaningful object parts when trained just on image labels, which we confirmed both quantitatively and qualitatively (Sect. 4.3).\nThe model was trained for 30k iterations with SGD (batch size 256) with an initial learning rate of 0.1, reduced by a factor of 10 after 10k, 20k, and 25k iterations. For stability, the localisation network’s learning rate is the base learning rate multiplied by 10−4. Weight decay was set at 10−5 and dropout of 0.7 was used before the 200-way classification layer.\nWe evaluated two input images sizes for the spatial transformers: 224× 224 and 448× 448. In the latter case, we added a fixed 2× downscaling layer before the localisation net, so that its input is still 224 × 224. The difference between the two settings lies in the size of the image from which sampling is performed (224 vs 448), with 448 better suited for sampling small-scale crops. The output of the transformers are 224× 224 crops in both cases (so that they are compatible with crop description Inception nets). When training, we utilised conventional augmentation in the form of random sampling (224 × 224 from 256 × S and 448 × 448 from 512 × S where S is the largest image side) and horizontal flipping. The localisation net was initialised to tile the image plane with the spatial transformer crops.\nWe also experimented with more complex transformations (location and scale, as well as affine), but observed similar results. This can be attributed to the very small size of the training set (6k images, 200 classes), and we noticed severe over-fitting in all training scenarios. The hyper-parameters were estimated by cross-validation on the training set."
+  }],
+  "year": 2016,
+  "references": [{
+    "title": "Multiple object recognition with visual attention",
+    "authors": ["J. Ba", "V. Mnih", "K. Kavukcuoglu"],
+    "venue": "ICLR,",
+    "year": 2015
+  }, {
+    "title": "Principal warps : Thin-plate splines and the decomposition of deformations",
+    "authors": ["F. Bookstein"],
+    "venue": "IEEE PAMI,",
+    "year": 1989
+  }, {
+    "title": "Bird species categorization using pose normalized deep convolutional nets",
+    "authors": ["S. Branson", "G. Van Horn", "S. Belongie", "P. Perona"],
+    "venue": "BMVC.,",
+    "year": 2014
+  }, {
+    "title": "Invariant scattering convolution networks",
+    "authors": ["J. Bruna", "S. Mallat"],
+    "venue": "IEEE PAMI, 35(8):1872–1886,",
+    "year": 2013
+  }, {
+    "title": "Deep filter banks for texture recognition and segmentation",
+    "authors": ["M. Cimpoi", "S. Maji", "A. Vedaldi"],
+    "venue": "CVPR,",
+    "year": 2015
+  }, {
+    "title": "Transformation properties of learned visual representations",
+    "authors": ["T.S. Cohen", "M. Welling"],
+    "venue": "ICLR,",
+    "year": 2015
+  }, {
+    "title": "Scalable object detection using deep neural networks",
+    "authors": ["D. Erhan", "C. Szegedy", "A. Toshev", "D. Anguelov"],
+    "venue": "CVPR,",
+    "year": 2014
+  }, {
+    "title": "Introduction to computer graphics, volume 55",
+    "authors": ["J.D. Foley", "A. Van Dam", "S.K. Feiner", "J.F. Hughes", "R.L. Phillips"],
+    "venue": "Addison-Wesley Reading,",
+    "year": 1994
+  }, {
+    "title": "Fast, large-scale transformation-invariant clustering",
+    "authors": ["B.J. Frey", "N. Jojic"],
+    "venue": "NIPS,",
+    "year": 2001
+  }, {
+    "title": "Deep symmetry networks",
+    "authors": ["R. Gens", "P.M. Domingos"],
+    "venue": "NIPS,",
+    "year": 2014
+  }, {
+    "title": "Rich feature hierarchies for accurate object detection and semantic segmentation",
+    "authors": ["R.B. Girshick", "J. Donahue", "T. Darrell", "J. Malik"],
+    "venue": "CVPR,",
+    "year": 2014
+  }, {
+    "title": "Contextual action recognition with r* cnn",
+    "authors": ["G. Gkioxari", "R. Girshick", "J. Malik"],
+    "venue": "arXiv:1505.01197,",
+    "year": 2015
+  }, {
+    "title": "Multi-digit number recognition from street view imagery using deep convolutional neural networks",
+    "authors": ["I.J. Goodfellow", "Y. Bulatov", "J. Ibarz", "S. Arnoud", "V. Shet"],
+    "venue": "arXiv:1312.6082,",
+    "year": 2013
+  }, {
+    "title": "Draw: A recurrent neural network for image generation",
+    "authors": ["K. Gregor", "I. Danihelka", "A. Graves", "D. Wierstra"],
+    "venue": "ICML,",
+    "year": 2015
+  }, {
+    "title": "A parallel computation that assigns canonical object-based frames of reference",
+    "authors": ["G.E. Hinton"],
+    "venue": "IJCAI,",
+    "year": 1981
+  }, {
+    "title": "Transforming auto-encoders",
+    "authors": ["G.E. Hinton", "A. Krizhevsky", "S.D. Wang"],
+    "venue": "ICANN.",
+    "year": 2011
+  }, {
+    "title": "Improving neural networks by preventing co-adaptation of feature detectors",
+    "authors": ["G.E. Hinton", "N. Srivastava", "A. Krizhevsky", "I. Sutskever", "R. Salakhutdinov"],
+    "venue": "CoRR, abs/1207.0580,",
+    "year": 2012
+  }, {
+    "title": "Batch normalization: Accelerating deep network training by reducing internal covariate shift",
+    "authors": ["S. Ioffe", "C. Szegedy"],
+    "venue": "ICML,",
+    "year": 2015
+  }, {
+    "title": "Synthetic data and artificial neural networks for natural scene text recognition",
+    "authors": ["M. Jaderberg", "K. Simonyan", "A. Vedaldi", "A. Zisserman"],
+    "venue": "NIPS DLW,",
+    "year": 2014
+  }, {
+    "title": "Locally scale-invariant convolutional neural networks",
+    "authors": ["A. Kanazawa", "A. Sharma", "D. Jacobs"],
+    "venue": "NIPS,",
+    "year": 2014
+  }, {
+    "title": "Gradient-based learning applied to document recognition",
+    "authors": ["Y. LeCun", "L. Bottou", "Y. Bengio", "P. Haffner"],
+    "venue": "Proceedings of the IEEE, 86(11):2278–2324,",
+    "year": 1998
+  }, {
+    "title": "Understanding image representations by measuring their equivariance and equivalence",
+    "authors": ["K. Lenc", "A. Vedaldi"],
+    "venue": "CVPR,",
+    "year": 2015
+  }, {
+    "title": "Bilinear CNN models for fine-grained visual recognition",
+    "authors": ["T. Lin", "A. RoyChowdhury", "S. Maji"],
+    "venue": "arXiv:1504.07889,",
+    "year": 2015
+  }, {
+    "title": "Fully convolutional networks for semantic segmentation",
+    "authors": ["J. Long", "E. Shelhamer", "T. Darrell"],
+    "venue": "CVPR,",
+    "year": 2015
+  }, {
+    "title": "Reading digits in natural images with unsupervised feature learning",
+    "authors": ["Y. Netzer", "T. Wang", "A. Coates", "A. Bissacco", "B. Wu", "A.Y. Ng"],
+    "venue": "NIPS DLW,",
+    "year": 2011
+  }, {
+    "title": "Imagenet large scale visual recognition challenge",
+    "authors": ["O. Russakovsky", "J. Deng", "H. Su", "J. Krause", "S. Satheesh", "S. Ma", "Z. Huang", "A. Karpathy", "A. Khosla", "M. Bernstein"],
+    "year": 2014
+  }, {
+    "title": "Learning to generate artificial fovea trajectories for target detection",
+    "authors": ["J. Schmidhuber", "R. Huber"],
+    "venue": "International Journal of Neural Systems, 2(01n02):125–134,",
+    "year": 1991
+  }, {
+    "title": "Facenet: A unified embedding for face recognition and clustering",
+    "authors": ["F. Schroff", "D. Kalenichenko", "J. Philbin"],
+    "venue": "arXiv:1503.03832,",
+    "year": 2015
+  }, {
+    "title": "Attention for fine-grained categorization",
+    "authors": ["P. Sermanet", "A. Frome", "E. Real"],
+    "venue": "arXiv:1412.7054,",
+    "year": 2014
+  }, {
+    "title": "Neural activation constellations: Unsupervised part model discovery with convolutional networks",
+    "authors": ["M. Simon", "E. Rodner"],
+    "venue": "arXiv:1504.08289,",
+    "year": 2015
+  }, {
+    "title": "Very deep convolutional networks for large-scale image recognition",
+    "authors": ["K. Simonyan", "A. Zisserman"],
+    "venue": "ICLR,",
+    "year": 2015
+  }, {
+    "title": "Two-stream convolutional networks for action recognition in videos",
+    "authors": ["Karen Simonyan", "Andrew Zisserman"],
+    "venue": "In NIPS,",
+    "year": 2014
+  }, {
+    "title": "Learning invariant representations with local transformations",
+    "authors": ["K. Sohn", "H. Lee"],
+    "venue": "arXiv:1206.6418,",
+    "year": 2012
+  }, {
+    "title": "Deep networks with internal selective attention through feedback connections",
+    "authors": ["M.F. Stollenga", "J. Masci", "F. Gomez", "J. Schmidhuber"],
+    "venue": "NIPS,",
+    "year": 2014
+  }, {
+    "title": "Going deeper with convolutions",
+    "authors": ["C. Szegedy", "W. Liu", "Y. Jia", "P. Sermanet", "S. Reed", "D. Anguelov", "D. Erhan", "V. Vanhoucke", "A. Rabinovich"],
+    "venue": "CVPR,",
+    "year": 2015
+  }, {
+    "title": "Optimizing Neural Networks that Generate Images",
+    "authors": ["T. Tieleman"],
+    "venue": "PhD thesis, University of Toronto,",
+    "year": 2014
+  }, {
+    "title": "Joint training of a convolutional network and a graphical model for human pose estimation",
+    "authors": ["J.J. Tompson", "A. Jain", "Y. LeCun", "C. Bregler"],
+    "venue": "NIPS, pages 1799–1807,",
+    "year": 2014
+  }, {
+    "title": "The Caltech-UCSD Birds-200-2011",
+    "authors": ["C. Wah", "S. Branson", "P. Welinder", "P. Perona", "S. Belongie"],
+    "year": 2011
+  }, {
+    "title": "Show, attend and tell: Neural image caption generation with visual attention",
+    "authors": ["K. Xu", "J. Ba", "R. Kiros", "K. Cho", "A. Courville", "R. Salakhutdinov", "R. Zemel", "Y. Bengio"],
+    "venue": "ICML,",
+    "year": 2015
+  }, {
+    "title": "Part-based r-cnns for fine-grained category detection",
+    "authors": ["Ning Zhang", "Jeff Donahue", "Ross Girshick", "Trevor Darrell"],
+    "venue": "In Computer Vision–ECCV",
+    "year": 2014
+  }],
+  "id": "SP:0d8b85953c25c23c512d4522d5597c8e3e0bb8c7",
+  "authors": [{
+    "name": "Max Jaderberg",
+    "affiliations": []
+  }, {
+    "name": "Karen Simonyan",
+    "affiliations": []
+  }, {
+    "name": "Andrew Zisserman",
+    "affiliations": []
+  }, {
+    "name": "Koray Kavukcuoglu",
+    "affiliations": []
+  }],
+  "abstractText": "Convolutional Neural Networks define an exceptionally powerful class of models, but are still limited by the lack of ability to be spatially invariant to the input data in a computationally and parameter efficient manner. In this work we introduce a new learnable module, the Spatial Transformer, which explicitly allows the spatial manipulation of data within the network. This differentiable module can be inserted into existing convolutional architectures, giving neural networks the ability to actively spatially transform feature maps, conditional on the feature map itself, without any extra training supervision or modification to the optimisation process. We show that the use of spatial transformers results in models which learn invariance to translation, scale, rotation and more generic warping, resulting in state-of-the-art performance on several benchmarks, and for a number of classes of transformations.",
+  "title": "Spatial Transformer Networks"
+}

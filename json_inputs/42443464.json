@@ -1,0 +1,309 @@
+{
+  "sections": [{
+    "text": "We develop a technique for transfer learning in machine comprehension (MC) using a novel two-stage synthesis network (SynNet). Given a high-performing MC model in one domain, our technique aims to answer questions about documents in another domain, where we use no labeled data of question-answer pairs. Using the proposed SynNet with a pretrained model from the SQuAD dataset on the challenging NewsQA dataset, we achieve an F1 measure of 44.3% with a single model and 46.6% with an ensemble, approaching performance of in-domain models (F1 measure of 50.0%) and outperforming the outof-domain baseline of 7.6%, without use of provided annotations.1"
+  }, {
+    "heading": "1 Introduction",
+    "text": "Machine comprehension (MC), the ability to answer questions over a provided context paragraph, is a key task in natural language processing. The rise of high-quality, large-scale human-annotated datasets for this task (Rajpurkar et al., 2016; Trischler et al., 2016) has allowed for the training of data-intensive but expressive models such as deep neural networks (Wang et al., 2016; Xiong et al., 2016; Seo et al., 2016). Moreover, these datasets have the attractive quality that the answer is a short snippet of text within the paragraph, which narrows the search space of possible answer spans.\n∗Work performed while interning at Microsoft Research. †Work performed when the author was at Microsoft Research. 1Code will be available at https://github.com/ davidgolub/QuestionGeneration\nHowever, many of these models rely on large amounts of human-labeled data for training. Yet data collection is a time-consuming and expensive task. Moreover, direct application of a MC model trained on one domain to answer questions over paragraphs from another domain may suffer performance degradation.\nWhile understudied, the ability to transfer a MC model to multiple domains is of great practical importance. For instance, the ability to quickly use a MC model trained on Wikipedia to bootstrap a question-answering system over customer support manuals or news articles, where there is no labeled data, can unlock a great number of practical applications.\nIn this paper, we address this problem in MC through a two-stage synthesis network (SynNet). The SynNet generates synthetic question-answer pairs over paragraphs in a new domain that are then used in place of human-generated annotations to finetune a MC model trained on the original domain.\nThe idea of generating synthetic data to augment insufficient training data has been explored before. For example, for the target task of translation, Sennrich et al. (2016) present a method to generate synthetic translations given real sentences to refine an existing machine translation system.\nHowever, unlike machine translation, for tasks like MC, we need to synthesize both the question and answers given the context paragraph. Moreover, while the question is a syntactically fluent natural language sentence, the answer is mostly a salient semantic concept in the paragraph, e.g., a named entity, an action, or a number, which is often a single word or short phrase.2 Since the an-\n2This assumption holds for MC datasets such as SQuAD and NewsQA, but there are exceptions in certain subdomains of MSMARCO.\nar X\niv :1\n70 6.\n09 78\n9v 3\n[ cs\n.C L\n] 2\n3 Se\np 20\n17\n… …\n…\nw 1\nw 2\nw N\n…\nPassage Text Paragraph Answer Network\n…\nq 1\nq 2\nq M\nw 3\nO B OI\nQuestion Network\nO\nAttention Context Vector\nFigure 1: Illustration of the two-stage SynNet. The SynNet is trained to synthesize the answer and the question, given the paragraph. The first stage of the model, an answer synthesis module, uses a bi-directional LSTM to predict IOB tags on the input paragraph, which mark out key semantic concepts that are likely answers. The second stage, a question synthesis module, uses a uni-directional LSTM to generate the question, while attending on embeddings of the words in the paragraph and IOB ids. Although multiple spans in the paragraph could be identified as potential answers, we pick one span when generating the question.\nswer has a very different linguistic structure compared to the question, it may be more appropriate to view answers and questions as two different types of data. Hence, the synthesis of a (question, answer) tuple is needed.\nIn our approach, we decompose the process of generating question-answer pairs into two steps, answer generation conditioned on the paragraph, and question generation conditioned on the paragraph and answer. We generate the answer first because answers are usually key semantic concepts, while questions can be viewed as a full sentence composed to inquire the concept.\nUsing the proposed SynNet, we are able to outperform a strong baseline of directly applying a high-performing MC model trained on another domain. For example, when we apply our algorithm using a pretrained model on the Stanford Question-Answering Dataset (SQuAD) (Rajpurkar et al., 2016), which consists of Wikipedia articles, to answer questions on the NewsQA dataset (Trischler et al., 2016), which consists of\nCNN/Daily Mail articles, we improve the performance of the single-model SQuAD baseline from 39.0% to 44.3% F1, and boost results further with an ensemble to 46.6% F1, approaching results of previously published work of Trischler et al. (2016) (50.0% F1), without use of labeled data in the new domain. Moreover, an error analysis reveals that we achieve higher accuracy over the baseline on all common question types."
+  }, {
+    "heading": "2 Related Work",
+    "text": ""
+  }, {
+    "heading": "2.1 Question Answering",
+    "text": "Question answering is an active area in natural language processing with ongoing research in many directions (Berant et al., 2013; Hill et al., 2015; Golub and He, 2016; Chen et al., 2016; Hermann et al., 2015). Machine comprehension, a form of extractive question answering where the answer is a snippet or multiple snippets of text within a context paragraph, has recently attracted a lot of attention in the community. The rise of large-scale human annotated datasets with over 100,000 realistic question-answer pairs such as SQuAD (Rajpurkar et al., 2016), NewsQA (Trischler et al., 2016), and MSMARCO (Nguyen et al., 2016), has led to a large number of successful deep learning models (Lee et al., 2016; Seo et al., 2016; Xiong et al., 2016; Dhingra et al., 2016; Wang and Jiang, 2016)."
+  }, {
+    "heading": "2.2 Semi-Supervised Learning",
+    "text": "Semi-supervised learning has a long history (c.f. Chapelle et al. (2009) for an overview), and has been applied to many tasks in natural language processing such as dependency parsing (Koo et al., 2008), sentiment analysis (Yang et al., 2015),machine translation (Sennrich et al., 2016), and semantic parsing (Berant and Liang; Wang et al.; Jia and Liang, 2016). Recent work generated synthetic annotations on unsupervised data to boost the performance of both reading comprehension and visual question answering models (Yang et al., 2017; Ren et al., 2015), but on domains with some form of annotated data. There has also been work on generating high-quality questions (Yuan et al., 2017; Serban et al., 2016; Labutov et al.), but not how to best use them to train a model. In contrast, we use the two-stage SynNet to generate data tuples to directly boost performance of a model on a domain with no annotations."
+  }, {
+    "heading": "2.3 Transfer Learning",
+    "text": "Transfer learning (Pan and Yang, 2010) has been successfully applied to numerous domains in machine learning, such as machine translation (Zoph et al., 2016), computer vision, (Sharif Razavian et al., 2014), and speech recognition (Doulaty et al., 2015). Specifically, object recognition models trained on the large-scale ImageNet challenge (Russakovsky et al., 2015) have proven to be excellent feature extractors for diverse tasks such as image captioning (i.e., Lu et al. (2016); Fang et al. (2015); Karpathy and Fei-Fei (2015)) and visual question answering (i.e., Zhou et al. (2015); Xu and Saenko (2016); Fukui et al. (2016); Yang et al. (2016)), among others. In a similar fashion, we use a model pretrained on the SQuAD dataset as a generic feature extractor to bootstrap a QA system on NewsQA."
+  }, {
+    "heading": "3 The Transfer Learning Task for MC",
+    "text": "We formalize the task of machine comprehension below. Our MC model takes as input a tokenized question q = {q0, q1, ...qn}, a context paragraph p = {p0, p1, ...pn}, where qi, pi are words, and learns a function f(p, q) 7→ {astart, aend} where astart and aend are pointer indices into paragraph p, i.e., the answer a = pastart ...paend .\nGiven a collection of labeled paragraph, question, answer triples {p, q, a}ni=1 from a particular domain s, i.e., Wikipedia articles, we can learn a MC model fs(p, q) that is able to answer questions in that domain.\nHowever, when applying the model trained in one domain to answer questions in another, the performance may degrade. On the other hand, labeling data to train a model in the new domain is expensive and time-consuming.\nIn this paper, we propose the task of transferring a MC system fs(p, q) that is trained in a source domain to answer questions over another target domain, t. In the target domain t, we are given an unlabeled set pt = {p}ki=1 of k paragraphs. During test time, we are given an unseen set of paragraphs, p∗, in the target domain, over which we would like to answer questions."
+  }, {
+    "heading": "4 The Model",
+    "text": ""
+  }, {
+    "heading": "4.1 Two-Stage SynNet",
+    "text": "To bootstrap our model fs we use a SynNet (Figure 1), which consists of answer synthesis and\nquestion synthesis modules, to generate data on pt. Our SynNet learns the conditional probability of generating answer a = {astart, aend} and question q = {q1, ...qn} given paragraph p, P (q, a|p). We decompose the joint probability distribution P (q, a|p) into a conditional probability distribution P (q|p, a)P (a|p), where we first generate the answer a, followed by generating the question q conditioned on the answer and paragraph."
+  }, {
+    "heading": "4.1.1 Answer Synthesis Module",
+    "text": "In our answer synthesis module we train a simple IOB tagger to predict whether each word in the paragraph is part of an answer or not.\nMore formally, given a set of words in a paragraph p = {p1...pn}, our IOB tagging model learns the conditional probability of labels y1...yn, where y1 ∈ IOBSTART, IOBMID, IOBEND if a word pi is marked as an answer by the annotator in our train set, NONE otherwise.\nWe use a bi-directional Long-Short Term Memory Network (Bi-LSTM) (Hochreiter and Schmidhuber, 1997) for tagging. Specifically, we project each word pi 7→ p∗i into a continuous vector space via pretrained GloVe embeddings (Pennington et al., 2014). We then run a Bi-LSTM over the word embeddings p∗1, ...p ∗ n to produce a contextdependent word representation h1, ...hn, which we feed into two fully connected layers followed by a softmax to produce our tag likelihoods for each word.\nWe select all consecutive spans where y 6= NONE produced by the tagger as our candidate answer chunks, which we feed into our question synthesis module for question generation."
+  }, {
+    "heading": "4.1.2 Question Synthesis Module",
+    "text": "Our question synthesis module learns the conditional probability of generating question q = {q1, ...qn} given answer a = astart, aend and paragraph p = p1...pn, P (q1, ...qn|p1...pn, astart, aend). We decompose the joint probability distribution of generating all the question words q1, ...qn into generating the question one word at a time, i.e.∏n\ni=1 P (qi|p, a, q1...i−1). The model is similar to an encoder-decoder network with attention (Bahdanau et al., 2014), which computes the conditional probability P (qi|p1...pn, astart, aend, q1...i−1). We run a Bi-LSTM over the paragraph to produce contextdependent word representations h = {h1, ...hn}.\nTo model where the answer is in the paragraph, similar to Yang et al. (2017), we insert answer information by appending a zero/one feature to the paragraph word embeddings. Then, at each time step i, a decoder network attends to both h and the previously generated question token qi−1 to produce a hidden representation ri. Since paragraphs may often have named entities and rare words not present during training, we incorporate a copy mechanism into our models (Gu et al., 2016).\nWe use an architecture motivated by latent predictor networks (Ling et al., 2016) to force the model to learn when to copy vs. directly predict the word, without direct supervision of what action to choose. Specifically, at every time step i, two latent predictors generate the probability of generating word wi, a pointer network Cp (Vinyals et al., 2015) which can copy a word from the context paragraph, and a vocabulary predictor Vp which directly generates a probability distribution of choosing a word wi from a predefined vocabulary. The likelihood of choosing predictor k at time step i is proportional to wkri, and the likelihood of predicting question token qi is given by q∗i = p\nvlv(wi) + (1 − pv)lc(wi), where v represents the vocabulary predictor and c represents the copy predictor, and l(wi) is the likelihood of the word given by the predictor.3 For training, since no direct supervision is given as to which predictor to choose, we minimize the cross entropy loss of producing the correct question tokens ∑n j=1−log(q∗j ) by marginalizing out latent variables using a variant of the forward-backward algorithm (see Ling et al. (2016) for full details).\nDuring inference, to generate a question q1...qn, we use greedy decoding in the following manner. At time step i, we select the most likely predictor (Cp or Vp), followed by the most likely word qi given the predictor. We feed the predicted word as input at the next timestep back into the decoder until we predict the end symbol, END, after which we stop decoding."
+  }, {
+    "heading": "4.2 Machine Comprehension Model",
+    "text": "Our machine comprehension model f(p, q) 7→ a learns the conditional likelihood of predicting answer pointers a = {astart, aend} given paragraph p and question q, P (a|p, q). In our experiments we use the open-source Bi-directional Attention Flow\n3Since we only have two predictors, pc = 1− pv\nAlgorithm 1: Training Algorithm Input : xs = {ps, qs, as}ni=1 triplets from\nsource domain s; pretrained MC model on s, fs(p, q) 7→ {astart, aend}; paragraphs from target domain t, pmj=1\nOutput: MC model on target domain, ft(p, q) 7→ {astart, aend}\n1 Train SynNet g to maximize P (q, a|p) on source s; 2 Generate samples xt = (q, a|p)ki=1 on text in target domain t; 3 Use xs ∪ xt to finetune MC model fs on domain t. For every batch sampled from xt, sample k batches from xs;\n(BiDAF) network (Seo et al., 2016)4 since it is one of the best-performing models on the SQuAD dataset,5 although we note that our algorithm for data synthesis can be used with any MC model."
+  }, {
+    "heading": "4.3 Algorithm Overview",
+    "text": "Having given an overview of our SynNet and a brief overview of the MC model we describe our training procedure, which is illustrated in Algorithm 1."
+  }, {
+    "heading": "4.4 Training",
+    "text": "Our approach for transfer learning consists of several training steps. First, given a series of labeled examples xs = {ps, qs, as}ni=1 from domain s, paragraphs pmj=1 from domain t, and pretrained MC model fs(p, q), we train the SynNet gs to maximize the likelihood of the question-answer pairs in s.\nSecond, we fix our SynNet gs and we sample xt = {pt, qt, at}ki=1 question-answer pairs on the paragraphs in domain t. Several examples of generated questions can be found in Table 1.\nWe then transfer the MC model originally learned on the source domain to the target domain t using SGD on the synthetic data. However, since the synthetic data is usually noisy, we alternatively train the MC model with mini-batches from xs and xt, which we call data-regularization. Every k batches from x, we sample 1 batch of synthetic\n4See https://github.com/allenai/bi-att-flow 5See https://rajpurkar.github.io/SQuAD-explorer/ for lat-\nest results\ndata from x′, where k is a hyper-parameter, which we set to 4. Letting the model encounter many examples from source domain s serves to regularize the distribution of the synthetic data in the target domain with real data from s. We checkpoint finetuned model f∗s every i mini-batches, i = 1000 in our experiments, and save a copy of the model at each checkpoint.\nAt test time, to generate an answer, we feed paragraph p = {p0, p1, ...pn} and question q through our finetuned MC model f∗(p, q) to get P (pi = astart), P (pi = aend) for all i ∈ 1...n. We then use dynamic programming (Seo et al., 2016) to find the optimal answer span {astart, aend}. To improve the stability of using our model for inference, we average the predicted answer likelihoods from model copies at different checkpoints, which we call checkpoint− averaging, prior to running the dynamic programming algorithm."
+  }, {
+    "heading": "5 Experimental Setup",
+    "text": "We summarize the datasets we use in our experiments, parameters for our model architectures, and training details.\nThe SQuAD dataset consists of approximately 100,000 question-answer pairs on Wikipedia, 87,600 of which are used for training, 10,570 for development, and an unknown number in a hidden test set. The NewsQA dataset consists of 92,549\ntrain, 5,166 development and 5,165 test questions on CNN/Daily Mail news articles. Both the domain type (i.e., news) and question types differ between the two datasets. For example, an analysis of a randomly generated sample of 1,000 questions from both NewsQA and SQuAD (Trischler et al., 2016) reveals that approximately 74.1% of questions in SQuAD require word matching or paraphrasing to retrieve the answer, as opposed to 59.7% in NewsQA. As our test metrics, we report two numbers, exact match (EM) and F1 score.\nWe train a BIDAF model on the SQuAD train dataset and use a two-stage SynNet to finetune it on the NewsQA train dataset.\nWe initialize word-embeddings for the BIDAF model, answer synthesis module, and question synthesis module with 300-dimensional-GloVe vectors (Pennington et al., 2014) trained on the 840 Billion Words Common Crawl corpus. We set all embeddings of unknown word tokens to zero.\nFor both the answer synthesis and question synthesis module, we use a vocabulary of size 110,179. We use LSTMs with hidden states of size 150 for the answer module vs. those of size 100 for the question module since the answer module is less memory intensive than the question module.\nWe train both the answer and question module with Adam (Kingma and Ba, 2014) and a learning rate of 1e-2. We train a BIDAF model with the default hyperparameters provided in the open-source\nrepository. To stop training of the question synthesis module, after each epoch, we monitor both the loss as well as the quality of questions generated on the SQuAD development set. To stop training of the answer synthesis module, we similarly monitor predictions on the SQuAD development set.\nTo train the question synthesis module, we only use the questions provided in the SQuAD train set. However, to train the answer synthesis module, we further augment the human-annotated labels of each paragraph with tags from a simple NER system6 because labels of answers provided in the train set are underspecified, i.e., many words in the paragraph that could be potential answers are not labeled. Therefore, we assume any named entities could also be potential answers of certain questions, in addition to the answers explicitly labeled by annotators.\nTo generate question-answer pairs on the NewsQA train set using the SynNet, we first run every paragraph through our answer synthesis module. We then randomly sample up to 30 candidate answers extracted by our module, which we feed into the question synthesis module. This results in 250,000 synthetic question-answer pairs that we can use to finetune our MC model."
+  }, {
+    "heading": "6 Experimental Results",
+    "text": "We report the main results on the NewsQA test set (Table 2), report brief results on SQuAD (Table 3), conduct ablation studies (Table 4), and conduct an error analysis."
+  }, {
+    "heading": "6.1 Results",
+    "text": "We compare to the best previously published work, which trains BARB (Trischler et al., 2016) and Match-LSTM (Wang and Jiang, 2016) architectures, and a BIDAF model we train on NewsQA. Directly applying a BIDAF model trained on SQuAD to predict on NewsQA leads to poor performance with an F1 measure of 39.0%, 13.2% lower than one trained on labeled NewsQA data. Using the 2-stage SynNet already leads to a slight boost in performance (F1 measure of 40.9%), which implies that having exposure to the new domain via question-answer pairs provides important signal for the model during training. With checkpoint-averaging, we see an additional improvement of 3.4% (F1 measure of 44.3%). When we ensemble a BIDAF model trained on\n6https://spacy.io/\nquestions and answers from the SynNet with three BIDAF models trained on questions by Qgen and answers from a generic NER system, we have an additional 2.3% performance boost. Finally, when we ensemble the original BIDAF model trained on SQuAD in the ensemble, we boost the EM further by 0.2%. Our final system achieves an F1 measure of 46.6%, approaching previously published results of 50.0%. The results demonstrate that using the proposed architecture and training procedure, we can transfer a MC model from one domain to another, without use of annotated data.\nWe also evaluate the SynNet on the NewsQAto-SQuAD direction. We directly apply the best setting from the other direction and report the result in Table 3. The SynNet improves over the baseline by 1.6% in EM and 0.7% in F1. Limited by space, we leave out ablation studies in this direction."
+  }, {
+    "heading": "6.2 Ablation Studies",
+    "text": "To better understand how various components in our training procedure and model impact overall performance we conduct several ablation studies, as summarized in Table 4."
+  }, {
+    "heading": "6.2.1 Answer Synthesis",
+    "text": "We experiment with using the answer chunks given in the train set, Aoracle, to generate synthetic questions, versus those from an NER system, Aner. Results in Table 4(A) show that using human-annotated answers to generate questions leads to a significant performance boost over using answers from an answer generation module. This supports the hypothesis that the answers humans choose to generate questions for provide important linguistic cues for finetuning the machine comprehension model."
+  }, {
+    "heading": "6.2.2 Question Synthesis",
+    "text": "To see how copying impacts performance, we explore using the entire paragraph to generate the question vs. only the two sentences before and one sentence after the answer span and report results in Table 4(B). On the NewsQA train set, synthetic questions that use 2 sentences contain an average of 3.0 context words within 10 words to the left and right of the answer chunk, those that use the entire context have 2.1 context words, and human generated questions only have 1.7 words. Training with generated questions that have a large amount of overlap with words close to the an-\nswer span (i.e., those that use 2-sentences vs. entire context for generation) leads to models that perform worse, especially with synthetic answer spans and no data regularization (35.6% F1 vs. 34.3% F1). One possible reason is that, according to analysis in Trischler et al. (2016), significantly more questions in the NewsQA dataset require paraphrase, inference, and synthesis as opposed to word-matching."
+  }, {
+    "heading": "6.2.3 Model Finetuning",
+    "text": "To see how the quantity of synthetic questions encountered during training impacts performance, we use k = {0, 2, 4} mini-batches from SQuAD for every synthetic mini-batch from NewsQA to finetune our model, and average the prediction of 4 checkpointed models during testing. As we see from the results, letting the model to encounter data from human annotations, although from another domain, serves as a key form of data-\nregularization, yielding consistent improvement as k increases. We hypothesize this is because the data distribution of machine-generated questions is different than human-annotated ones; our batching scheme provides a simple way to prevent overfitting to this distribution."
+  }, {
+    "heading": "6.3 Error Analysis",
+    "text": "In this section we provide a qualitative analysis of some of our components to help guide further research in this task.\nThey are ghost hunters , or , as they prefer to be called , paranormal investigators . “ Ghost-Hunters ”, which airs a special live show at 7 p.m. Halloween night , is helping lift the stigma once attached to paranormal investigators . The show has become so popular that the group featured in each episode – Atlantic Paranormal Society - has spawned imitators across United States and affiliates in countries . TAPS , as the “ Hunters” group is informally known , even has its own “ Reality Radio” show , magazine , lecture tours , T-shirts – and groupies . “ Hunters” has made creepy cool , says David Schrader , a paranormal investigator and co-host of “ Radio ”, a radio show that investigates paranormal activity.\nTable 5: Sample predictions from our answer synthesis module.\nWhat is Oklahoma’s unemployment rate until Oklahoma City ? What was the manager of the Oklahoma City agency ? How many companies are in Oklahoma City ? How many workers may Oklahoma have as fair hold ? Who said the bureau has already hired civilians to choose What was the average hour manager of Oklahoma City ? How much would Oklahoma have a year to be held What year did Oklahoma ’s census build job industry ?\nTable 6: Predictions from the question synthesis module on a subset of a paragraph."
+  }, {
+    "heading": "6.3.1 Answer Synthesis",
+    "text": "We randomly sample and present a paragraph with answers extracted by our answer synthesis module (Tables 5 and 6). Although the module appears to have high precision, i.e., it picks up entities such as the “Atlantic Paranormal Society”, it misses clear entities such as “David Schrader”, which suggests training a system with full NER/POS tags as labels would yield better results, and also explains why augmenting synthetic data generated by SynNet with such tags leads to improved performance."
+  }, {
+    "heading": "6.3.2 Question Synthesis",
+    "text": "We randomly sample synthetic questions generated by our module and present our results in Table 6. Due to the copy mechanism, our module has the tendency to directly use many words from the paragraph, especially common entities, such as “Oklahoma” in the example. Thus, one way to generate higher-quality questions may be to introduce a cost function that promotes diversity during decoding, especially within a single paragraph. In turn, this would expose the RC model to a larger variety of training examples in the new domain, which can lead to better performance.\n0 20 40 60 80 100 Percentage of questions with correct answers\nwhat is (436)\nwhat did (411)\nhow many (296)\nwho is (238)\nwhat does (217)\nwhat was (206)\nwho was (162)\nwhere did (102)\nwhat are (92)\nwhere was (89)\nTo p\nNgr\nam s\nFigure 2: NewsQA accuracy of baseline BIDAF model trained on SQuAD (light green), vs. model finetuned with our method (red) vs. one trained from scratch on NewsQA (dark grey)."
+  }, {
+    "heading": "6.3.3 Machine Comprehension Model",
+    "text": "We examine the performance over various question types of a finetuned BIDAF on NewsQA vs. one trained on NewsQA vs. one trained on SQuAD (Figure 2). Finetuning with SynNet improves performance over all question types given, with the largest performance boost on location and person-identification questions. Similarly, models trained on synthetic questions tend to approach in-domain performance on numeric and person-identification questions, but still struggle with questions that require higher-order reasoning, i.e. those starting with “what was” or “what did”. Designing a question generator that explicitly requires such reasoning may be one way to further bridge the gap in performance."
+  }, {
+    "heading": "7 Conclusion",
+    "text": "We introduce a two-stage SynNet for the task of transfer learning for machine comprehension,\na task which is both challenging and of practical importance. With our network and a simple training algorithm where we generate synthetic question-answer pairs on the target domain, we are able to generalize a MC model from one domain to another with no annotated data. We present strong results on the NewsQA test set, with a single model improving performance of a baseline BIDAF model by 5.3% and an ensemble by 7.6% F1. Through ablation studies and error analysis, we provide insights into our methodology on the SynNet and MC models that can help guide further research in this task."
+  }, {
+    "heading": "Acknowledgments",
+    "text": "We would like to thank Yejin Choi and Luke Zettlemoyer for helpful discussions concerning this work."
+  }],
+  "year": 2017,
+  "references": [{
+    "title": "Neural machine translation by jointly learning to align and translate",
+    "authors": ["Dzmitry Bahdanau", "Kyunghyun Cho", "Yoshua Bengio."],
+    "venue": "arXiv preprint arXiv:1409.0473 .",
+    "year": 2014
+  }, {
+    "title": "Semantic parsing on freebase from question-answer pairs",
+    "authors": ["Jonathan Berant", "Andrew Chou", "Roy Frostig", "Percy Liang."],
+    "venue": "EMNLP. volume 2, page 6.",
+    "year": 2013
+  }, {
+    "title": "Semi-supervised learning (chapelle, o",
+    "authors": ["Olivier Chapelle", "Bernhard Scholkopf", "Alexander Zien."],
+    "venue": "et al., eds.; 2006)[book reviews]. IEEE Transactions on Neural Networks 20(3):542–542.",
+    "year": 2009
+  }, {
+    "title": "A thorough examination of the cnn/daily mail reading comprehension task",
+    "authors": ["Danqi Chen", "Jason Bolton", "Christopher D Manning."],
+    "venue": "arXiv preprint arXiv:1606.02858 .",
+    "year": 2016
+  }, {
+    "title": "Gated-attention readers for text comprehension",
+    "authors": ["Bhuwan Dhingra", "Hanxiao Liu", "William W Cohen", "Ruslan Salakhutdinov."],
+    "venue": "arXiv preprint arXiv:1606.01549 .",
+    "year": 2016
+  }, {
+    "title": "Data-selective transfer learning for multidomain speech recognition",
+    "authors": ["Mortaza Doulaty", "Oscar Saz", "Thomas Hain."],
+    "venue": "arXiv preprint arXiv:1509.02409 .",
+    "year": 2015
+  }, {
+    "title": "From captions to visual concepts and back",
+    "authors": ["Hao Fang", "Saurabh Gupta", "Forrest Iandola", "Rupesh K Srivastava", "Li Deng", "Piotr Dollár", "Jianfeng Gao", "Xiaodong He", "Margaret Mitchell", "John C Platt"],
+    "venue": "In Proceedings of the IEEE Conference on Computer",
+    "year": 2015
+  }, {
+    "title": "Multimodal compact bilinear pooling for visual question answering and visual grounding",
+    "authors": ["Akira Fukui", "Dong Huk Park", "Daylen Yang", "Anna Rohrbach", "Trevor Darrell", "Marcus Rohrbach."],
+    "venue": "arXiv preprint arXiv:1606.01847 .",
+    "year": 2016
+  }, {
+    "title": "Character-level question answering with attention",
+    "authors": ["David Golub", "Xiaodong He."],
+    "venue": "arXiv preprint arXiv:1604.00727 .",
+    "year": 2016
+  }, {
+    "title": "Incorporating copying mechanism in sequence-to-sequence learning",
+    "authors": ["Jiatao Gu", "Zhengdong Lu", "Hang Li", "Victor OK Li."],
+    "venue": "arXiv preprint arXiv:1603.06393 .",
+    "year": 2016
+  }, {
+    "title": "Teaching machines to read and comprehend",
+    "authors": ["Karl Moritz Hermann", "Tomas Kocisky", "Edward Grefenstette", "Lasse Espeholt", "Will Kay", "Mustafa Suleyman", "Phil Blunsom."],
+    "venue": "Advances in Neural Information Processing Systems. pages 1693–",
+    "year": 2015
+  }, {
+    "title": "The goldilocks principle: Reading children’s books with explicit memory representations",
+    "authors": ["Felix Hill", "Antoine Bordes", "Sumit Chopra", "Jason Weston."],
+    "venue": "arXiv preprint arXiv:1511.02301 .",
+    "year": 2015
+  }, {
+    "title": "Long short-term memory",
+    "authors": ["Sepp Hochreiter", "Jürgen Schmidhuber."],
+    "venue": "Neural computation 9(8):1735–1780.",
+    "year": 1997
+  }, {
+    "title": "Data recombination for neural semantic parsing",
+    "authors": ["Robin Jia", "Percy Liang."],
+    "venue": "arXiv preprint arXiv:1606.03622 .",
+    "year": 2016
+  }, {
+    "title": "Deep visualsemantic alignments for generating image descriptions",
+    "authors": ["Andrej Karpathy", "Li Fei-Fei."],
+    "venue": "Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition. pages 3128–3137.",
+    "year": 2015
+  }, {
+    "title": "Adam: A method for stochastic optimization",
+    "authors": ["Diederik Kingma", "Jimmy Ba."],
+    "venue": "arXiv preprint arXiv:1412.6980 .",
+    "year": 2014
+  }, {
+    "title": "Simple semi-supervised dependency parsing",
+    "authors": ["Terry Koo", "Xavier Carreras Pérez", "Michael Collins."],
+    "venue": "46th Annual Meeting of the Association for Computational Linguistics. pages 595–603.",
+    "year": 2008
+  }, {
+    "title": "Learning recurrent span representations for extractive question answering",
+    "authors": ["Kenton Lee", "Tom Kwiatkowski", "Ankur Parikh", "Dipanjan Das."],
+    "venue": "arXiv preprint arXiv:1611.01436 .",
+    "year": 2016
+  }, {
+    "title": "Latent predictor networks for code generation",
+    "authors": ["Wang Ling", "Edward Grefenstette", "Karl Moritz Hermann", "Tomáš Kočiskỳ", "Andrew Senior", "Fumin Wang", "Phil Blunsom."],
+    "venue": "arXiv preprint arXiv:1603.06744 .",
+    "year": 2016
+  }, {
+    "title": "Knowing when to look: Adaptive attention via a visual sentinel for image captioning",
+    "authors": ["Jiasen Lu", "Caiming Xiong", "Devi Parikh", "Richard Socher."],
+    "venue": "arXiv preprint arXiv:1612.01887 .",
+    "year": 2016
+  }, {
+    "title": "Ms marco: A human generated machine reading comprehension dataset",
+    "authors": ["Tri Nguyen", "Mir Rosenberg", "Xia Song", "Jianfeng Gao", "Saurabh Tiwary", "Rangan Majumder", "Li Deng."],
+    "venue": "arXiv preprint arXiv:1611.09268 .",
+    "year": 2016
+  }, {
+    "title": "A survey on transfer learning",
+    "authors": ["Sinno Jialin Pan", "Qiang Yang."],
+    "venue": "IEEE Transactions on knowledge and data engineering 22(10):1345–1359.",
+    "year": 2010
+  }, {
+    "title": "Glove: Global vectors for word representation",
+    "authors": ["Jeffrey Pennington", "Richard Socher", "Christopher Manning."],
+    "venue": "Proceedings of the 2014 Conference on Empirical Methods in Natural Language Processing (EMNLP). Association for Computa-",
+    "year": 2014
+  }, {
+    "title": "Squad: 100,000+ questions for machine comprehension of text",
+    "authors": ["Pranav Rajpurkar", "Jian Zhang", "Konstantin Lopyrev", "Percy Liang."],
+    "venue": "arXiv preprint arXiv:1606.05250 .",
+    "year": 2016
+  }, {
+    "title": "Exploring models and data for image question answering",
+    "authors": ["Mengye Ren", "Ryan Kiros", "Richard Zemel."],
+    "venue": "Advances in Neural Information Processing Systems. pages 2953–2961.",
+    "year": 2015
+  }, {
+    "title": "Imagenet large scale visual recognition challenge",
+    "authors": ["Olga Russakovsky", "Jia Deng", "Hao Su", "Jonathan Krause", "Sanjeev Satheesh", "Sean Ma", "Zhiheng Huang", "Andrej Karpathy", "Aditya Khosla", "Michael Bernstein"],
+    "year": 2015
+  }, {
+    "title": "Improving neural machine translation models with monolingual data",
+    "authors": ["Rico Sennrich", "Barry Haddow", "Alexandra Birch."],
+    "venue": "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume",
+    "year": 2016
+  }, {
+    "title": "Bidirectional attention flow for machine comprehension",
+    "authors": ["Min Joon Seo", "Aniruddha Kembhavi", "Ali Farhadi", "Hannaneh Hajishirzi."],
+    "venue": "CoRR abs/1611.01603.",
+    "year": 2016
+  }, {
+    "title": "Generating factoid questions with recurrent neural networks: The 30m factoid question-answer corpus",
+    "authors": ["Iulian Vlad Serban", "Alberto Garcı́a-Durán", "Caglar Gulcehre", "Sungjin Ahn", "Sarath Chandar", "Aaron Courville", "Yoshua Bengio"],
+    "year": 2016
+  }, {
+    "title": "Cnn features offthe-shelf: an astounding baseline for recognition",
+    "authors": ["Ali Sharif Razavian", "Hossein Azizpour", "Josephine Sullivan", "Stefan Carlsson."],
+    "venue": "Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition Workshops. pages",
+    "year": 2014
+  }, {
+    "title": "Newsqa: A machine comprehension dataset",
+    "authors": ["Adam Trischler", "Tong Wang", "Xingdi Yuan", "Justin Harris", "Alessandro Sordoni", "Philip Bachman", "Kaheer Suleman."],
+    "venue": "arXiv preprint arXiv:1611.09830 .",
+    "year": 2016
+  }, {
+    "title": "Pointer networks",
+    "authors": ["Oriol Vinyals", "Meire Fortunato", "Navdeep Jaitly."],
+    "venue": "Advances in Neural Information Processing Systems. pages 2692–2700.",
+    "year": 2015
+  }, {
+    "title": "Machine comprehension using match-lstm and answer pointer",
+    "authors": ["Shuohang Wang", "Jing Jiang."],
+    "venue": "arXiv preprint arXiv:1608.07905 .",
+    "year": 2016
+  }, {
+    "title": "Multi-perspective context matching for machine comprehension",
+    "authors": ["Zhiguo Wang", "Haitao Mi", "Wael Hamza", "Radu Florian."],
+    "venue": "arXiv preprint arXiv:1612.04211 .",
+    "year": 2016
+  }, {
+    "title": "Dynamic coattention networks for question answering",
+    "authors": ["Caiming Xiong", "Victor Zhong", "Richard Socher."],
+    "venue": "arXiv preprint arXiv:1611.01604 .",
+    "year": 2016
+  }, {
+    "title": "Ask, attend and answer: Exploring question-guided spatial attention for visual question answering",
+    "authors": ["Huijuan Xu", "Kate Saenko."],
+    "venue": "European Conference on Computer Vision. Springer, pages 451–466.",
+    "year": 2016
+  }, {
+    "title": "Lcct: a semisupervised model for sentiment classification",
+    "authors": ["Min Yang", "Wenting Tu", "Ziyu Lu", "Wenpeng Yin", "Kam-Pui Chow."],
+    "venue": "Human Language Technologies: The 2015 Annual Conference of the North American Chapter of the ACL. Associ-",
+    "year": 2015
+  }, {
+    "title": "Semi-supervised qa with generative domain-adaptive nets",
+    "authors": ["Zhilin Yang", "Junjie Hu", "Ruslan Salakhutdinov", "William W Cohen."],
+    "venue": "arXiv preprint arXiv:1702.02206 .",
+    "year": 2017
+  }, {
+    "title": "Stacked attention networks for image question answering",
+    "authors": ["Zichao Yang", "Xiaodong He", "Jianfeng Gao", "Li Deng", "Alex Smola."],
+    "venue": "Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition. pages 21–29.",
+    "year": 2016
+  }, {
+    "title": "Machine comprehension by text-to-text neural question generation",
+    "authors": ["Xingdi Yuan", "Tong Wang", "Çaglar Gülçehre", "Alessandro Sordoni", "Philip Bachman", "Sandeep Subramanian", "Saizheng Zhang", "Adam Trischler."],
+    "venue": "CoRR abs/1705.02012.",
+    "year": 2017
+  }, {
+    "title": "Simple baseline for visual question answering",
+    "authors": ["Bolei Zhou", "Yuandong Tian", "Sainbayar Sukhbaatar", "Arthur Szlam", "Rob Fergus."],
+    "venue": "arXiv preprint arXiv:1512.02167 .",
+    "year": 2015
+  }, {
+    "title": "Transfer learning for lowresource neural machine translation",
+    "authors": ["Barret Zoph", "Deniz Yuret", "Jonathan May", "Kevin Knight."],
+    "venue": "arXiv preprint arXiv:1604.02201 .",
+    "year": 2016
+  }],
+  "id": "SP:16a6a775650c5975ac8412a9ec06bf1c92ad6f82",
+  "authors": [{
+    "name": "David Golub",
+    "affiliations": []
+  }, {
+    "name": "Po-Sen Huang",
+    "affiliations": []
+  }, {
+    "name": "Xiaodong He",
+    "affiliations": []
+  }, {
+    "name": "Li Deng",
+    "affiliations": []
+  }],
+  "abstractText": "We develop a technique for transfer learning in machine comprehension (MC) using a novel two-stage synthesis network (SynNet). Given a high-performing MC model in one domain, our technique aims to answer questions about documents in another domain, where we use no labeled data of question-answer pairs. Using the proposed SynNet with a pretrained model from the SQuAD dataset on the challenging NewsQA dataset, we achieve an F1 measure of 44.3% with a single model and 46.6% with an ensemble, approaching performance of in-domain models (F1 measure of 50.0%) and outperforming the outof-domain baseline of 7.6%, without use of provided annotations.1",
+  "title": "Two-Stage Synthesis Networks for Transfer Learning in Machine Comprehension"
+}

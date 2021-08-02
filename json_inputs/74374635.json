@@ -1,0 +1,297 @@
+{
+  "sections": [{
+    "heading": "1 Introduction",
+    "text": "Modern neural network architectures are commonly augmented with an attention mechanism, which tells the network where to look within the input in order to make the next prediction. Attentionaugmented architectures have been successfully applied to machine translation [2, 29], speech recognition [10], image caption generation [44], textual entailment [38, 31], and sentence summarization [39], to name but a few examples. At the heart of attention mechanisms is a mapping function that converts real values to probabilities, encoding the relative importance of elements in the input. For the case of sequence-to-sequence prediction, at each time step of generating the output sequence, attention probabilities are produced, conditioned on the current state of a decoder network. They are then used to aggregate an input representation (a variable-length list of vectors) into a single vector, which is relevant for the current time step. That vector is finally fed into the decoder network to produce the next element in the output sequence. This process is repeated until the end-of-sequence symbol is generated. Importantly, such architectures can be trained end-to-end using backpropagation.\nAlongside empirical successes, neural attention—while not necessarily correlated with human attention—is increasingly crucial in bringing more interpretability to neural networks by helping explain how individual input elements contribute to the model’s decisions. However, the most commonly used attention mechanism, softmax, yields dense attention weights: all elements in the input always make at least a small contribution to the decision. To overcome this limitation, sparsemax was recently proposed [31], using the Euclidean projection onto the simplex as a sparse alternative to\n∗Work performed during an internship at NTT Commmunication Science Laboratories, Kyoto, Japan.\n31st Conference on Neural Information Processing Systems (NIPS 2017), Long Beach, CA, USA.\nsoftmax. Compared to softmax, sparsemax outputs more interpretable attention weights, as illustrated in [31] on the task of textual entailment. The principle of parsimony, which states that simple explanations should be preferred over complex ones, is not, however, limited to sparsity: it remains open whether new attention mechanisms can be designed to benefit from more structural prior knowledge.\nOur contributions. The success of sparsemax motivates us to explore new attention mechanisms that can both output sparse weights and take advantage of structural properties of the input through the use of modern sparsity-inducing penalties. To do so, we make the following contributions:\n1) We propose a new general framework that builds upon a max operator, regularized with a strongly convex function. We show that this operator is differentiable, and that its gradient defines a mapping from real values to probabilities, suitable as an attention mechanism. Our framework includes as special cases both softmax and a slight generalization of sparsemax. (§2)\n2) We show how to incorporate the fused lasso [42] in this framework, to derive a new attention mechanism, named fusedmax, which encourages the network to pay attention to contiguous segments of text when making a decision. This idea is illustrated in Figure 1 on sentence summarization. For cases when the contiguity assumption is too strict, we show how to incorporate an OSCAR penalty [7] to derive a new attention mechanism, named oscarmax, that encourages the network to pay equal attention to possibly non-contiguous groups of words. (§3)\n3) In order to use attention mechanisms defined under our framework in an autodiff toolkit, two problems must be addressed: evaluating the attention itself and computing its Jacobian. However, our attention mechanisms require solving a convex optimization problem and do not generally enjoy a simple analytical expression, unlike softmax. Computing the Jacobian of the solution of an optimization problem is called argmin/argmax differentiation and is currently an area of active research (cf. [1] and references therein). One of our key algorithmic contributions is to show how to compute this Jacobian under our general framework, as well as for fused lasso and OSCAR. (§3)\n4) To showcase the potential of our new attention mechanisms as a drop-in replacement for existing ones, we show empirically that our new attention mechanisms enhance interpretability while achieving comparable or better accuracy on three diverse and challenging tasks: textual entailment, machine translation, and sentence summarization. (§4)\nNotation. We denote the set {1, . . . , d} by [d]. We denote the (d − 1)-dimensional probability simplex by ∆d := {x ∈ Rd : ‖x‖1 = 1,x ≥ 0} and the Euclidean projection onto it by P∆d(x) := argmin\ny∈∆d ‖y − x‖ 2. Given a function f : Rd → R ∪ {∞}, its convex conjugate is defined by\nf∗(x) := sup y∈dom f y Tx−f(y). Given a norm ‖·‖, its dual is defined by ‖x‖∗ := sup‖y‖≤1 y Tx. We denote the subdifferential of a function f at y by ∂f(y). Elements of the subdifferential are called subgradients and when f is differentiable, ∂f(y) contains a single element, the gradient of f at y, denoted by ∇f(y). We denote the Jacobian of a function g : Rd → Rd at y by Jg(y) ∈ R d×d and the Hessian of a function f : Rd → R at y by Hf (y) ∈ R d×d."
+  }, {
+    "heading": "2 Proposed regularized attention framework",
+    "text": ""
+  }, {
+    "heading": "2.1 The max operator and its subgradient mapping",
+    "text": "To motivate our proposal, we first show in this section that the subgradients of the maximum operator define a mapping from Rd to ∆d, but that this mapping is highly unsuitable as an attention mechanism. The maximum operator is a function from Rd to R and can be defined by\nmax(x) := max i∈[d] xi = sup y∈∆d\nyTx.\nThe equality on the r.h.s comes from the fact that the supremum of a linear form over the simplex is always achieved at one of the vertices, i.e., one of the standard basis vectors {ei} d i=1. Moreover, it is not hard to check that any solution y⋆ of that supremum is precisely a subgradient of max(x): ∂max(x) = {ei⋆ : i ⋆ ∈ argmaxi∈[d] xi}. We can see these subgradients as a mapping Π: R d → ∆d that puts all the probability mass onto a single element: Π(x) = ei for any ei ∈ ∂max(x). However, this behavior is undesirable, as the resulting mapping is a discontinuous function (a Heaviside step function when x = [t, 0]), which is not amenable to optimization by gradient descent."
+  }, {
+    "heading": "2.2 A regularized max operator and its gradient mapping",
+    "text": "These shortcomings encourage us to consider a regularization of the maximum operator. Inspired by the seminal work of Nesterov [35], we apply a smoothing technique. The conjugate of max(x) is\nmax∗(y) =\n{\n0, if y ∈ ∆d ∞, o.w. .\nFor a proof, see for instance [33, Appendix B]. We now add regularization to the conjugate\nmax∗Ω(y) :=\n{\nγΩ(y), if y ∈ ∆d ∞, o.w. ,\nwhere we assume that Ω: Rd → R is β-strongly convex w.r.t. some norm ‖ · ‖ and γ > 0 controls the regularization strength. To define a smoothed max operator, we take the conjugate once again\nmaxΩ(x) = max ∗∗ Ω (x) = sup y∈Rd yTx−max∗Ω(y) = sup y∈∆d yTx− γΩ(y). (1)\nOur main proposal is a mapping ΠΩ : R d → ∆d, defined as the argument that achieves this supremum.\nΠΩ(x) := argmax y∈∆d\nyTx− γΩ(y) = ∇maxΩ(x)\nThe r.h.s. holds by combining that i) maxΩ(x) = (y ⋆)Tx−max∗Ω(y ⋆) ⇔ y⋆ ∈ ∂maxΩ(x) and ii) ∂maxΩ(x) = {∇maxΩ(x)}, since (1) has a unique solution. Therefore, ΠΩ is a gradient mapping. We illustrate maxΩ and ΠΩ for various choices of Ω in Figure 2 (2-d) and in Appendix C.1 (3-d).\nImportance of strong convexity. Our β-strong convexity assumption on Ω plays a crucial role and should not be underestimated. Recall that a function f : Rd → R is β-strongly convex w.r.t. a norm ‖ · ‖ if and only if its conjugate f∗ is 1β -smooth w.r.t. the dual norm ‖ · ‖∗ [46, Corollary 3.5.11] [22, Theorem 3]. This is sufficient to ensure that maxΩ is 1 γβ -smooth, or, in other words, that it is differentiable everywhere and its gradient, ΠΩ, is 1 γβ -Lipschitz continuous w.r.t. ‖ · ‖∗.\nTraining by backpropagation. In order to use ΠΩ in a neural network trained by backpropagation, two problems must be addressed for any regularizer Ω. The first is the forward computation: how to evaluate ΠΩ(x), i.e., how to solve the optimization problem in (1). The second is the backward computation: how to evaluate the Jacobian of ΠΩ(x), or, equivalently, the Hessian of maxΩ(x). One of our key contributions, presented in §3, is to show how to solve these two problems for general differentiable Ω, as well as for two structured regularizers: fused lasso and OSCAR."
+  }, {
+    "heading": "2.3 Recovering softmax and sparsemax as special cases",
+    "text": "Before deriving new attention mechanisms using our framework, we now show how we can recover softmax and sparsemax, using a specific regularizer Ω.\nSoftmax. We choose Ω(y) = ∑d\ni=1 yi log yi, the negative entropy. The conjugate of the negative entropy restricted to the simplex is the log sum exp [9, Example 3.25]. Moreover, if f(x) = γg(x) for γ > 0, then f∗(y) = γg∗(y/γ). We therefore get a closed-form expression: maxΩ(x) = γ log sum exp(x/γ) := γ log ∑d\ni=1 e xi/γ . Since the negative entropy is 1-strongly convex w.r.t.\n‖ · ‖1 over ∆ d, we get that maxΩ is 1 γ -smooth w.r.t. ‖ · ‖∞. We obtain the classical softmax, with temperature parameter γ, by taking the gradient of maxΩ(x),\nΠΩ(x) = ex/γ\n∑d i=1 e\nxi/γ , (softmax)\nwhere ex/γ is evaluated element-wise. Note that some authors also call maxΩ a “soft max.” Although ΠΩ is really a soft arg max, we opt to follow the more popular terminology. When x = [t, 0], it can be checked that maxΩ(x) reduces to the softplus [16] and ΠΩ(x)1 to a sigmoid.\nSparsemax. We choose Ω(y) = 12‖y‖ 2 2, also known as Moreau-Yosida regularization in proximal operator theory [35, 36]. Since 12‖y‖ 2 2 is 1-strongly convex w.r.t. ‖·‖2, we get that maxΩ is 1 γ -smooth w.r.t. ‖ · ‖2. In addition, it is easy to verify that\nΠΩ(x) = P∆d(x/γ) = argmin y∈∆d\n‖y − x/γ‖2. (sparsemax)\nThis mapping was introduced as is in [31] with γ = 1 and was named sparsemax, due to the fact that it is a sparse alternative to softmax. Our derivation thus gives us a slight generalization, where γ controls the sparsity (the smaller, the sparser) and could be tuned; in our experiments, however, we follow the literature and set γ = 1. The Euclidean projection onto the simplex, P∆d , can be computed exactly [34, 15] (we discuss the complexity in Appendix B). Following [31], the Jacobian of ΠΩ is\nJΠΩ(x) = 1\nγ JP ∆d (x/γ) =\n1\nγ\n( diag(s)− ssT/‖s‖1 ) ,\nwhere s ∈ {0, 1}d indicates the nonzero elements of ΠΩ(x). Since ΠΩ is Lipschitz continuous, Rademacher’s theorem implies that ΠΩ is differentiable almost everywhere. For points where ΠΩ is not differentiable (where maxΩ is not twice differentiable), we can take an arbitrary matrix in the set of Clarke’s generalized Jacobians [11], the convex hull of Jacobians of the form lim\nxt→x JΠΩ(xt) [31]."
+  }, {
+    "heading": "3 Deriving new sparse and structured attention mechanisms",
+    "text": ""
+  }, {
+    "heading": "3.1 Differentiable regularizer Ω",
+    "text": "Before tackling more structured regularizers, we address in this section the case of general differentiable regularizer Ω. Because ΠΩ(x) involves maximizing (1), a concave function over the simplex, it can be computed globally using any off-the-shelf projected gradient solver. Therefore, the main challenge is how to compute the Jacobian of ΠΩ. This is what we address in the next proposition.\nProposition 1 Jacobian of ΠΩ for any differentiable Ω (backward computation)\nAssume that Ω is differentiable over ∆d and that ΠΩ(x) = argmaxy∈∆d y Tx− γΩ(y) = y⋆ has been computed. Then the Jacobian of ΠΩ at x, denoted JΠΩ , can be obtained by solving the system\n(I +A(B − I)) JΠΩ = A,\nwhere we defined the shorthands A := JP ∆d\n(y⋆ − γ∇Ω(y⋆) + x) and B := γHΩ(y ⋆).\nThe proof is given in Appendix A.1. Unlike recent work tackling argmin differentiation through matrix differential calculus on the Karush–Kuhn–Tucker (KKT) conditions [1], our proof technique relies on differentiating the fixed point iteration y∗ = P∆d(y\n⋆ −∇f(y⋆)). To compute JΠΩv for an arbitrary v ∈ Rd, as required by backpropagation, we may directly solve (I +A(B − I)) (JΠΩv) = Av. We show in Appendix B how this system can be solved efficiently thanks to the structure of A.\nSquared p-norms. As a useful example of a differentiable function over the simplex, we consider\nsquared p-norms: Ω(y) = 12‖y‖ 2 p =\n(\n∑d i=1 y p i\n)2/p\n, where y ∈ ∆d and p ∈ (1, 2]. For this choice\nof p, it is known that the squared p-norm is strongly convex w.r.t. ‖ · ‖p [3]. This implies that maxΩ is 1 γ(p−1) smooth w.r.t. ‖.‖q , where 1 p + 1 q = 1. We call the induced mapping function sq-pnorm-max:\nΠΩ(x) = argmin y∈∆d\nγ 2 ‖y‖2p − y Tx. (sq-pnorm-max)\nThe gradient and Hessian needed for Proposition 1 can be computed by ∇Ω(y) = y p−1\n‖y‖p−2p and\nHΩ(y) = diag(d) + uu T, where d =\n(p− 1) ‖y‖p−2p yp−2 and u =\n√\n(2− p)\n‖y‖2p−2p yp−1,\nwith the exponentiation performed element-wise. sq-pnorm-max recovers sparsemax with p = 2 and, like sparsemax, encourages sparse outputs. However, as can be seen in the zoomed box in Figure 2 (right), the transition between y⋆ = [0, 1] and y⋆ = [1, 0] can be smoother when 1 < p < 2. Throughout our experiments, we use p = 1.5."
+  }, {
+    "heading": "3.2 Structured regularizers: fused lasso and OSCAR",
+    "text": "Fusedmax. For cases when the input is sequential and the order is meaningful, as is the case for many natural languages, we propose fusedmax, an attention mechanism based on fused lasso [42], also known as 1-d total variation (TV). Fusedmax encourages paying attention to contiguous segments, with equal weights within each one. It is expressed under our framework by choosing Ω(y) = 12‖y‖ 2 2+λ ∑d−1 i=1 |yi+1−yi|, i.e., the sum of a strongly convex term and of a 1-d TV penalty. It is easy to verify that this choice yields the mapping\nΠΩ(x) = argmin y∈∆d\n1 2 ‖y − x/γ‖2 + λ\nd−1 ∑\ni=1\n|yi+1 − yi|. (fusedmax)\nOscarmax. For situations where the contiguity assumption may be too strict, we propose oscarmax, based on the OSCAR penalty [7], to encourage attention weights to merge into clusters with the same value, regardless of position in the sequence. This is accomplished by replacing the 1-d TV penalty in fusedmax with an ∞-norm penalty on each pair of attention weights, i.e., Ω(y) = 1 2‖y‖ 2 2 + λ ∑ i<j max(|yi|, |yj |). This results in the mapping\nΠΩ(x) = argmin y∈∆d\n1 2 ‖y − x/γ‖2 + λ ∑\ni<j\nmax(|yi|, |yj |). (oscarmax)\nForward computation. Due to the y ∈ ∆d constraint, computing fusedmax/oscarmax does not seem trivial on first sight. The next proposition shows how to do so, without any iterative method.\nProposition 2 Computing fusedmax and oscarmax (forward computation)\nfusedmax: ΠΩ(x) = P∆d (PTV (x/γ)) , PTV(x) := argmin y∈Rd\n1 2 ‖y − x‖2 + λ\nd−1 ∑\ni=1\n|yi+1 − yi|.\noscarmax: ΠΩ(x) = P∆d (POSC (x/γ)) , POSC(x) := argmin y∈Rd\n1 2 ‖y − x‖2 + λ ∑\ni<j\nmax(|yi|, |yj |).\nHere, PTV and POSC indicate the proximal operators of 1-d TV and OSCAR, and can be computed exactly by [13] and [47], respectively. To remind the reader, P∆d denotes the Euclidean projection onto the simplex and can be computed exactly using [34, 15]. Proposition 2 shows that we can compute fusedmax and oscarmax using the composition of two functions, for which exact noniterative algorithms exist. This is a surprising result, since the proximal operator of the sum of two functions is not, in general, the composition of the proximal operators of each function. The proof follows by showing that the indicator function of ∆d satisfies the conditions of [45, Corollaries 4,5].\nGroups induced by PTV and POSC. Let z ⋆ be the optimal solution of PTV(x) or POSC(x). For PTV, we denote the group of adjacent elements with the same value as z⋆i by G ⋆ i , ∀i ∈ [d]. Formally, G⋆i = [a, b] ∩ N with a ≤ i ≤ b where a and b are the minimal and maximal indices such that z⋆i = z ⋆ j for all j ∈ G ⋆ i . For POSC, we define G ⋆ i as the indices of elements with the same absolute value as z⋆i , more formally G ⋆ i = {j ∈ [d] : |z ⋆ i | = |z ⋆ j |}. Because P∆d(z\n⋆) = max(z⋆ − θ, 0) for some θ ∈ R, fusedmax/oscarmax either shift a group’s common value or set all its elements to zero.\nλ controls the trade-off between no fusion (sparsemax) and all elements fused into a single trivial group. While tuning λ may improve performance, we observe that λ = 0.1 (fusedmax) and λ = 0.01 (oscarmax) are sensible defaults that work well across all tasks and report all our results using them.\nBackward computation. We already know that the Jacobian of P∆d is the same as that of sparsemax with γ = 1. Then, by Proposition 2, if we know how to compute the Jacobians of PTV and POSC, we can obtain the Jacobians of fusedmax and oscarmax by straightforward application of the chain rule. However, although PTV and POSC can be computed exactly, they lack analytical expressions. We next show that we can nonetheless compute their Jacobians efficiently, without needing to solve a system.\nProposition 3 Jacobians of PTV and POSC (backward computation)\nAssume z⋆ = PTV(x) or POSC(x) has been computed. Define the groups derived from z ⋆ as above.\nThen, [JPTV(x)]i,j =\n{\n1 |G⋆\ni | if j ∈ G\n⋆ i ,\n0 o.w. and [JPOSC(x)]i,j =\n{ sign(z⋆i z ⋆ j )\n|G⋆ i | if j ∈ G\n⋆ i and z ⋆ i 6= 0,\n0 o.w. .\nThe proof is given in Appendix A.2. Clearly, the structure of these Jacobians permits efficient Jacobian-vector products; we discuss the computational complexity and implementation details in Appendix B. Note that PTV and POSC are differentiable everywhere except at points where groups change. For these points, the same remark as for sparsemax applies, and we can use Clarke’s Jacobian."
+  }, {
+    "heading": "4 Experimental results",
+    "text": "We showcase the performance of our attention mechanisms on three challenging natural language tasks: textual entailment, machine translation, and sentence summarization. We rely on available, well-established neural architectures, so as to demonstrate simple drop-in replacement of softmax with structured sparse attention; quite likely, newer task-specific models could lead to further improvement."
+  }, {
+    "heading": "4.1 Textual entailment (a.k.a. natural language inference) experiments",
+    "text": "Textual entailment is the task of deciding, given a text T and an hypothesis H, whether a human reading T is likely to infer that H is true [14]. We use the Stanford Natural Language Inference (SNLI) dataset [8], a collection of 570,000 English sentence pairs. Each pair consists of a sentence and an hypothesis, manually labeled with one of the labels ENTAILMENT, CONTRADICTION, or NEUTRAL.\nWe use a variant of the neural attention–based classifier proposed for this dataset by [38] and follow the same methodology as [31] in terms of implementation, hyperparameters, and grid search. We employ the CPU implementation provided in [31] and simply replace sparsemax with fusedmax/oscarmax; we observe that training time per epoch is essentially the same for each of the four attention mechanisms (timings and more experimental details in Appendix C.2).\nTable 1 shows that, for this task, fusedmax reaches the highest accuracy, and oscarmax slightly outperforms softmax. Furthermore,\nfusedmax results in the most interpretable feature groupings: Figure 3 shows the weights of the neural network’s attention to the text, when considering the hypothesis “No one is dancing.” In this case, all four models correctly predicted that the text “A band is playing on stage at a concert and the attendants are dancing to the music,” denoted along the x-axis, contradicts the hypothesis, although the attention weights differ. Notably, fusedmax identifies the meaningful segment “band is playing”."
+  }, {
+    "heading": "4.2 Machine translation experiments",
+    "text": "Sequence-to-sequence neural machine translation (NMT) has recently become a strong contender in machine translation [2, 29]. In NMT, attention weights can be seen as an alignment between source and translated words. To demonstrate the potential of our new attention mechanisms for NMT, we ran experiments on 10 language pairs. We build on OpenNMT-py [24], based on PyTorch [37], with all default hyperparameters (detailed in Appendix C.3), simply replacing softmax with the proposed ΠΩ.\nOpenNMT-py with softmax attention is optimized for the GPU. Since sparsemax, fusedmax, and oscarmax rely on sorting operations, we implement their computations on the CPU for simplicity, keeping the rest of the pipeline on the GPU. However, we observe that, even with this context switching, the number of tokens processed per second was within 3/4 of the softmax pipeline. For sq-pnorm-max, we observe that the projected gradient solver used in the forward pass, unlike the linear system solver used in the backward pass, could become a computational bottleneck. To mitigate this effect, we set the tolerance of the solver’s stopping criterion to 10−2.\nQuantitatively, we find that all compared attention mechanisms are always within 1 BLEU score point of the best mechanism (for detailed results, cf. Appendix C.3). This suggests that structured sparsity does not restrict accuracy. However, as illustrated in Figure 4, fusedmax and oscarmax often lead to more interpretable attention alignments, as well as to qualitatively different translations."
+  }, {
+    "heading": "4.3 Sentence summarization experiments",
+    "text": "Attention mechanisms were recently explored for sentence summarization in [39]. To generate sentence-summary pairs at low cost, the authors proposed to use the title of a news article as a noisy summary of the article’s leading sentence. They collected 4 million such pairs from the Gigaword dataset and showed that this seemingly simplistic approach leads to models that generalize\nsurprisingly well. We follow their experimental setup and are able to reproduce comparable results to theirs with OpenNMT when using softmax attention. The models we use are the same as in §4.2.\nOur evaluation follows [39]: we use the standard DUC 2004 dataset (500 news articles each paired with 4 different human-generated summaries) and a randomly held-out subset of Gigaword, released by [39]. We report results on ROUGE-1, ROUGE-2, and ROUGE-L. Our results, in Table 2, indicate that fusedmax is the best under nearly all metrics, always outperforming softmax. In addition to Figure 1, we exemplify our enhanced interpretability and provide more detailed results in Appendix C.4."
+  }, {
+    "heading": "5 Related work",
+    "text": "Smoothed max operators. Replacing the max operator by a differentiable approximation based on the log sum exp has been exploited in numerous works. Regularizing the max operator with a squared 2-norm is less frequent, but has been used to obtain a smoothed multiclass hinge loss [41] or smoothed linear programming relaxations for maximum a-posteriori inference [33]. Our work differs from these in mainly two aspects. First, we are less interested in the max operator itself than in its gradient, which we use as a mapping from Rd to ∆d. Second, since we use this mapping in neural networks trained with backpropagation, we study and compute the mapping’s Jacobian (the Hessian of a regularized max operator), in contrast with previous works.\nInterpretability, structure and sparsity in neural networks. Providing interpretations alongside predictions is important for accountability, error analysis and exploratory analysis, among other reasons. Toward this goal, several recent works have been relying on visualizing hidden layer activations [20, 27] and the potential for interpretability provided by attention mechanisms has been noted in multiple works [2, 38, 39]. Our work aims to fulfill this potential by providing a unified framework upon which new interpretable attention mechanisms can be designed, using well-studied tools from the field of structured sparse regularization.\nSelecting contiguous text segments for model interpretations is explored in [26], where an explanation generator network is proposed for justifying predictions using a fused lasso penalty. However, this network is not an attention mechanism and has its own parameters to be learned. Furthemore, [26] sidesteps the need to backpropagate through the fused lasso, unlike our work, by using a stochastic training approach. In constrast, our attention mechanisms are deterministic and drop-in replacements for existing ones. As a consequence, our mechanisms can be coupled with recent research that builds on top of softmax attention, for example in order to incorporate soft prior knowledge about NMT alignment into attention through penalties on the attention weights [12].\nA different approach to incorporating structure into attention uses the posterior marginal probabilities from a conditional random field as attention weights [23]. While this approach takes into account structural correlations, the marginal probabilities are generally dense and different from each other. Our proposed mechanisms produce sparse and clustered attention weights, a visible benefit in interpretability. The idea of deriving constrained alternatives to softmax has been independently explored for differentiable easy-first decoding [32]. Finally, sparsity-inducing penalties have been used to obtain convex relaxations of neural networks [5] or to compress models [28, 43, 40]. These works differ from ours, in that sparsity is enforced on the network parameters, while our approach can produce sparse and structured outputs from neural attention layers."
+  }, {
+    "heading": "6 Conclusion and future directions",
+    "text": "We proposed in this paper a unified regularized framework upon which new attention mechanisms can be designed. To enable such mechanisms to be used in a neural network trained by backpropagation, we demonstrated how to carry out forward and backward computations for general differentiable regularizers. We further developed two new structured attention mechanisms, fusedmax and oscarmax, and demonstrated that they enhance interpretability while achieving comparable or better accuracy on three diverse and challenging tasks: textual entailment, machine translation, and summarization.\nThe usefulness of a differentiable mapping from real values to the simplex or to [0, 1] with sparse or structured outputs goes beyond attention mechanisms. We expect that our framework will be useful to sample from categorical distributions using the Gumbel trick [21, 30], as well as for conditional computation [6] or differentiable neural computers [18, 19]. We plan to explore these in future work."
+  }, {
+    "heading": "Acknowledgements",
+    "text": "We are grateful to André Martins, Takuma Otsuka, Fabian Pedregosa, Antoine Rolet, Jun Suzuki, and Justine Zhang for helpful discussions. We thank the anonymous reviewers for the valuable feedback."
+  }],
+  "year": 2017,
+  "references": [{
+    "title": "OptNet: Differentiable optimization as a layer in neural networks",
+    "authors": ["B. Amos", "J.Z. Kolter"],
+    "venue": "Proc. of ICML",
+    "year": 2017
+  }, {
+    "title": "Neural machine translation by jointly learning to align and translate",
+    "authors": ["D. Bahdanau", "K. Cho", "Y. Bengio"],
+    "venue": "Proc. of ICLR",
+    "year": 2015
+  }, {
+    "title": "Sharp uniform convexity and smoothness inequalities for trace norms",
+    "authors": ["K. Ball", "E.A. Carlen", "E.H. Lieb"],
+    "venue": "Inventiones Mathematicae, 115(1):463–482",
+    "year": 1994
+  }, {
+    "title": "A fast iterative shrinkage-thresholding algorithm for linear inverse problems",
+    "authors": ["A. Beck", "M. Teboulle"],
+    "venue": "SIAM Journal on Imaging Sciences, 2(1):183–202",
+    "year": 2009
+  }, {
+    "title": "Convex neural networks",
+    "authors": ["Y. Bengio", "N. Le Roux", "P. Vincent", "O. Delalleau", "P. Marcotte"],
+    "venue": "Proc. of NIPS",
+    "year": 2005
+  }, {
+    "title": "Estimating or propagating gradients through stochastic neurons for conditional computation",
+    "authors": ["Y. Bengio", "N. Léonard", "A. Courville"],
+    "venue": "Proc. of NIPS",
+    "year": 2013
+  }, {
+    "title": "Simultaneous regression shrinkage",
+    "authors": ["H.D. Bondell", "B.J. Reich"],
+    "venue": "variable selection, and supervised clustering of predictors with OSCAR. Biometrics, 64(1):115–123",
+    "year": 2008
+  }, {
+    "title": "A large annotated corpus for learning natural language inference",
+    "authors": ["S.R. Bowman", "G. Angeli", "C. Potts", "C.D. Manning"],
+    "venue": "Proc. of EMNLP",
+    "year": 2015
+  }, {
+    "title": "Convex optimization",
+    "authors": ["S. Boyd", "L. Vandenberghe"],
+    "venue": "Cambridge University Press",
+    "year": 2004
+  }, {
+    "title": "Attention-based models for speech recognition",
+    "authors": ["J.K. Chorowski", "D. Bahdanau", "D. Serdyuk", "K. Cho", "Y. Bengio"],
+    "venue": "Proc. of NIPS",
+    "year": 2015
+  }, {
+    "title": "Optimization and nonsmooth analysis",
+    "authors": ["F.H. Clarke"],
+    "venue": "SIAM",
+    "year": 1990
+  }, {
+    "title": "Incorporating structural alignment biases into an attentional neural translation model",
+    "authors": ["T. Cohn", "C.D.V. Hoang", "E. Vymolova", "K. Yao", "C. Dyer", "G. Haffari"],
+    "venue": "Proc. of NAACL-HLT",
+    "year": 2016
+  }, {
+    "title": "A direct algorithm for 1-d total variation denoising",
+    "authors": ["L. Condat"],
+    "venue": "IEEE Signal Processing Letters, 20(11):1054–1057",
+    "year": 2013
+  }, {
+    "title": "Recognizing textual entailment: Rational",
+    "authors": ["I. Dagan", "B. Dolan", "B. Magnini", "D. Roth"],
+    "venue": "evaluation and approaches. Natural Language Engineering, 15(4):i–xvii",
+    "year": 2009
+  }, {
+    "title": "Efficient projections onto the  l1-ball for learning in high dimensions",
+    "authors": ["J. Duchi", "S. Shalev-Shwartz", "Y. Singer", "T. Chandra"],
+    "venue": "Proc. of ICML",
+    "year": 2008
+  }, {
+    "title": "Incorporating second-order functional knowledge for better option pricing",
+    "authors": ["C. Dugas", "Y. Bengio", "F. Bélisle", "C. Nadeau", "R. Garcia"],
+    "venue": "Proc. of NIPS",
+    "year": 2001
+  }, {
+    "title": "Pathwise coordinate optimization",
+    "authors": ["J. Friedman", "T. Hastie", "H. Höfling", "R. Tibshirani"],
+    "venue": "The Annals of Applied Statistics, 1(2):302–332",
+    "year": 2007
+  }, {
+    "title": "Neural Turing Machines",
+    "authors": ["A. Graves", "G. Wayne", "I. Danihelka"],
+    "venue": "Proc. of NIPS",
+    "year": 2014
+  }, {
+    "title": "et al",
+    "authors": ["A. Graves", "G. Wayne", "M. Reynolds", "T. Harley", "I. Danihelka", "A. Grabska-Barwińska", "S.G. Colmenarejo", "E. Grefenstette", "T. Ramalho", "J. Agapiou"],
+    "venue": "Hybrid computing using a neural network with dynamic external memory. Nature, 538(7626):471–476",
+    "year": 2016
+  }, {
+    "title": "Deep sequential and structural neural models of compositionality",
+    "authors": ["O. Irsoy"],
+    "venue": "PhD thesis, Cornell University",
+    "year": 2017
+  }, {
+    "title": "Categorical reparameterization with Gumbel-Softmax",
+    "authors": ["E. Jang", "S. Gu", "B. Poole"],
+    "venue": "Proc. of ICLR",
+    "year": 2017
+  }, {
+    "title": "Regularization techniques for learning with matrices",
+    "authors": ["S.M. Kakade", "S. Shalev-Shwartz", "A. Tewari"],
+    "venue": "Journal of Machine Learning Research, 13:1865–1890",
+    "year": 2012
+  }, {
+    "title": "Structured attention networks",
+    "authors": ["Y. Kim", "C. Denton", "L. Hoang", "A.M. Rush"],
+    "venue": "Proc. of ICLR",
+    "year": 2017
+  }, {
+    "title": "OpenNMT: Open-source toolkit for neural machine translation",
+    "authors": ["G. Klein", "Y. Kim", "Y. Deng", "J. Senellart", "A.M. Rush"],
+    "venue": "arXiv e-prints",
+    "year": 2017
+  }, {
+    "title": "Moses: Open source toolkit for statistical machine translation",
+    "authors": ["P. Koehn", "H. Hoang", "A. Birch", "C. Callison-Burch", "M. Federico", "N. Bertoldi", "B. Cowan", "W. Shen", "C. Moran", "R. Zens", "C. Dyer", "O. Bojar", "A. Constantin", "E. Herbst"],
+    "venue": "Proc. of ACL",
+    "year": 2007
+  }, {
+    "title": "Rationalizing neural predictions",
+    "authors": ["T. Lei", "R. Barzilay", "T. Jaakkola"],
+    "venue": "Proc. of EMNLP",
+    "year": 2016
+  }, {
+    "title": "Visualizing and understanding neural models in NLP",
+    "authors": ["J. Li", "X. Chen", "E. Hovy", "D. Jurafsky"],
+    "venue": "Proc. of NAACL-HLT",
+    "year": 2016
+  }, {
+    "title": "Sparse convolutional neural networks",
+    "authors": ["B. Liu", "M. Wang", "H. Foroosh", "M. Tappen", "M. Pensky"],
+    "venue": "Proc. of ICCVPR",
+    "year": 2015
+  }, {
+    "title": "Effective approaches to attention-based neural machine translation",
+    "authors": ["M.-T. Luong", "H. Pham", "C.D. Manning"],
+    "venue": "Proc. of EMNLP",
+    "year": 2015
+  }, {
+    "title": "The concrete distribution: A continuous relaxation of discrete random variables",
+    "authors": ["C.J. Maddison", "A. Mnih", "Y.W. Teh"],
+    "venue": "Proc. of ICLR",
+    "year": 2017
+  }, {
+    "title": "From softmax to sparsemax: A sparse model of attention and multi-label classification",
+    "authors": ["A.F. Martins", "R.F. Astudillo"],
+    "venue": "Proc. of ICML",
+    "year": 2016
+  }, {
+    "title": "Learning what’s easy: Fully differentiable neural easy-first taggers",
+    "authors": ["A.F. Martins", "J. Kreutzer"],
+    "venue": "Proc. of EMNLP",
+    "year": 2017
+  }, {
+    "title": "Smooth and strong: MAP inference with linear convergence",
+    "authors": ["O. Meshi", "M. Mahdavi", "A.G. Schwing"],
+    "venue": "Proc. of NIPS",
+    "year": 2015
+  }, {
+    "title": "A finite algorithm for finding the projection of a point onto the canonical simplex of R",
+    "authors": ["C. Michelot"],
+    "venue": "Journal of Optimization Theory and Applications, 50(1):195–200",
+    "year": 1986
+  }, {
+    "title": "Smooth minimization of non-smooth functions",
+    "authors": ["Y. Nesterov"],
+    "venue": "Mathematical Programming, 103(1):127–152",
+    "year": 2005
+  }, {
+    "title": "Proximal algorithms",
+    "authors": ["N. Parikh", "S. Boyd"],
+    "venue": "Foundations and Trends R  © in Optimization, 1(3):127–239",
+    "year": 2014
+  }, {
+    "title": "Reasoning about entailment with neural attention",
+    "authors": ["T. Rocktäschel", "E. Grefenstette", "K.M. Hermann", "T. Kocisky", "P. Blunsom"],
+    "venue": "Proc. of ICLR",
+    "year": 2016
+  }, {
+    "title": "A neural attention model for abstractive sentence summarization",
+    "authors": ["A.M. Rush", "S. Chopra", "J. Weston"],
+    "venue": "Proc. of EMNLP",
+    "year": 2015
+  }, {
+    "title": "Group sparse regularization for deep neural networks",
+    "authors": ["S. Scardapane", "D. Comminiello", "A. Hussain", "A. Uncini"],
+    "venue": "Neurocomputing, 241:81–89",
+    "year": 2017
+  }, {
+    "title": "Accelerated proximal stochastic dual coordinate ascent for regularized loss minimization",
+    "authors": ["S. Shalev-Shwartz", "T. Zhang"],
+    "venue": "Mathematical Programming, 155(1):105–145",
+    "year": 2016
+  }, {
+    "title": "Sparsity and smoothness via the fused lasso",
+    "authors": ["R. Tibshirani", "M. Saunders", "S. Rosset", "J. Zhu", "K. Knight"],
+    "venue": "Journal of the Royal Statistical Society: Series B (Statistical Methodology), 67(1):91–108",
+    "year": 2005
+  }, {
+    "title": "Learning structured sparsity in deep neural networks",
+    "authors": ["W. Wen", "C. Wu", "Y. Wang", "Y. Chen", "H. Li"],
+    "venue": "Proc. of NIPS",
+    "year": 2016
+  }, {
+    "title": "Show",
+    "authors": ["K. Xu", "J. Ba", "R. Kiros", "K. Cho", "A. Courville", "R. Salakhudinov", "R. Zemel", "Y. Bengio"],
+    "venue": "attend and tell: Neural image caption generation with visual attention. In Proc. of ICML",
+    "year": 2015
+  }, {
+    "title": "On decomposing the proximal map",
+    "authors": ["Y. Yu"],
+    "venue": "Proc. of NIPS",
+    "year": 2013
+  }, {
+    "title": "Convex analysis in general vector spaces",
+    "authors": ["C. Zalinescu"],
+    "venue": "World Scientific",
+    "year": 2002
+  }, {
+    "title": "Solving OSCAR regularization problems by fast approximate proximal splitting algorithms",
+    "authors": ["X. Zeng", "M.A. Figueiredo"],
+    "venue": "Digital Signal Processing, 31:124–135",
+    "year": 2014
+  }, {
+    "title": "The ordered weighted l1 norm: Atomic formulation",
+    "authors": ["X. Zeng", "F.A. Mario"],
+    "venue": "dual norm, and projections. arXiv e-prints",
+    "year": 2014
+  }, {
+    "title": "Efficient sparse modeling with automatic feature grouping",
+    "authors": ["L.W. Zhong", "J.T. Kwok"],
+    "venue": "IEEE transactions on neural networks and learning systems, 23(9):1436–1447",
+    "year": 2012
+  }],
+  "id": "SP:ba6b48ef52e2432a0d6342381e0863fd82a8687b",
+  "authors": [{
+    "name": "Vlad Niculae",
+    "affiliations": []
+  }],
+  "abstractText": "Modern neural networks are often augmented with an attention mechanism, which tells the network where to focus within the input. We propose in this paper a new framework for sparse and structured attention, building upon a smoothed max operator. We show that the gradient of this operator defines a mapping from real values to probabilities, suitable as an attention mechanism. Our framework includes softmax and a slight generalization of the recently-proposed sparsemax as special cases. However, we also show how our framework can incorporate modern structured penalties, resulting in more interpretable attention mechanisms, that focus on entire segments or groups of an input. We derive efficient algorithms to compute the forward and backward passes of our attention mechanisms, enabling their use in a neural network trained with backpropagation. To showcase their potential as a drop-in replacement for existing ones, we evaluate our attention mechanisms on three large-scale tasks: textual entailment, machine translation, and sentence summarization. Our attention mechanisms improve interpretability without sacrificing performance; notably, on textual entailment and summarization, we outperform the standard attention mechanisms based on softmax and sparsemax.",
+  "title": "A Regularized Framework for Sparse and Structured Neural Attention"
+}

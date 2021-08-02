@@ -1,0 +1,205 @@
+{
+  "sections": [{
+    "text": "Stochastic Gradient Descent (SGD) is one of the most widely used techniques for online optimization in machine learning. In this work, we accelerate SGD by adaptively learning how to sample the most useful training examples at each time step. First, we show that SGD can be used to learn the best possible sampling distribution of an importance sampling estimator. Second, we show that the sampling distribution of an SGD algorithm can be estimated online by incrementally minimizing the variance of the gradient. The resulting algorithm — called Adaptive Weighted SGD (AW-SGD) — maintains a set of parameters to optimize, as well as a set of parameters to sample learning examples. We show that AWSGD yields faster convergence in three different applications: (i) image classification with deep features, where the sampling of images depends on their labels, (ii) matrix factorization, where rows and columns are not sampled uniformly, and (iii) reinforcement learning, where the optimized and exploration policies are estimated at the same time, where our approach corresponds to an off-policy gradient algorithm."
+  }, {
+    "heading": "1 Introduction",
+    "text": "In many real-world problems, one has to face intractable integrals, such as averaging on combinatorial spaces or nonGaussian integrals. Stochastic approximation is a class of methods introduced in 1951 by Herbert Robbins and Sutton Monro [1] to solve intractable equations by using a se-\n∗Work made while at Xerox.\nquence of approximate and random evaluations. Stochastic Gradient Descent [2] is a special type of stochastic approximation method that is widely used in large scale learning tasks thanks to its good generalization properties [3].\nStochastic Gradient Descent (SGD) can be used to minimize functions of the form:\nγ(w) := Ex∼P [f(x;w)] = ∫ X f(x;w)dP (x) (1)\nwhere P is a known fixed distribution and f is a function that maps X × W into <, i.e. a family of functions on the metric space X and parameterized by w ∈ W . SGD is a stochastic approximation method that consists in doing approximate gradient steps equal on average to the true gradient∇wγ(w) [2]. In many applications, including supervised learning techniques, the function f is the loglikelihood and P is an empirical distribution with density 1 n ∑n i=1 δ(x, xi) where {x1, · · · , xn} is a set of i.i.d. data sampled from an unknown distribution.\nAt a given step t, SGD can be viewed as a two-step procedure: (i) sampling xt ∈ X according to the distribution P ; (ii) doing an approximate gradient step with step-size ρt:\nwt+1 = wt − ρt∇wf(xt;wt) (2)\nThe convergence properties of SGD are directly linked to the variance of the gradient estimate [4]. Consequently, some improvements on this basic algorithm focus on the use of (i) parameter averaging [5] to reduce the variance of the final estimator, (ii) the sampling of mini-batches [6] when multiple points are sampled at the same time to reduce the variance of the gradient, and (iii) the use of adaptive step sizes to have per-dimension learning rates, e.g., AdaGrad [7].\nIn this paper, we propose another general technique, which can be used in conjunction with the aforementioned ones,\nar X\niv :1\n50 6.\n09 01\n6v 2\n[ cs\n.L G\n] 1\n5 M\nwhich is to reduce the gradient variance by learning how to sample training points. Rather than learning the fixed optimal sampling distribution and then optimizing the gradient, we propose to dynamically learn an optimal sampling distribution at the same time as the original SGD algorithm. Our formulation uses a stochastic process that focuses on the minimization of the gradient variance, which amounts to do an additional SGD step (to minimize gradient variance) along each SGD step (to minimize the learning objective). There is a constant extra cost to pay at each iteration, but it is the same for each iteration, and when simulations are expensive or the data access is slow, this extra computational cost is compensated by the increase of convergence speed, as quantified in our experiments.\nThe paper is organized as follows. After reviewing the related work in Section 2, we show that SGD can be used to find the optimal sampling distribution of an importance sampling estimator (Sec. 3). This variance reduction technique is then used during the iterations of a SGD algorithm by learning how to reduce the variance of the gradient (Sec. 4). We then illustrate this algorithm — called Adaptive Weighted SGD (AW-SGD) — on three well known machine learning problems: image classification (Sec. 5), matrix factorization (Sec. 6), and reinforcement learning (Sec. 7). Finally, we conclude with a discussion (Sec. 9)."
+  }, {
+    "heading": "2 Related work",
+    "text": "The idea of speeding up learning by modifying the importance sampling distribution in SGD has been recently analyzed by [8] who showed that a particular choice of the sampling distribution could lead to sub-linear performance guarantees for support vector machines. We can see our approach as a generalization of this idea to other models, by including the learning of the sampling distribution as part of the optimization. The work of [9] shows that using a simple model to choose which data to resample from is a useful thing to do, but they do not learn the sampling model while optimizing. The two approaches mentioned above can be viewed as the extreme case of adaptive sampling, where there is one step to learn the sampling distribution, and then a second step to learn the model using this sampling distribution. The training on language models has been shown to be faster with adaptive importance sampling [10; 11], but the authors did not directly minimize the variance of the estimator.\nRegarding variance reduction techniques, in addition to the aforementioned ones (Polyak-Ruppert Averaging [5], batching [6], and adaptive learning rates like AdaGrad [7]), an additional technique is to use control variates (see for instance [12]). It has been recently used by [13] to estimate non-conjugate potentials in a variational stochastic gradient algorithm. The techniques described in this paper can also be straightforwardly extended to the optimiza-\ntion of a control variate. A full derivation is given in the appendix, but it was not implemented in the experimental section. In the neural net community, adapting the order at which the training samples are used is called curriculum learning [14], and our approach can be seen under this framework, allthough our algorithm is more general as it can speadup the learning on arbitrary integrals, not only sums of losses over the training data.\nAnother way to obtain good convergence properties is to properly scale or rotate the gradient, ideally in the direction of the inverse Hessian, but this type of second-order method is slow in practice. However, one can estimate the Hessian greedily, as done in Quasi-Newton methods such as Limited Memory BFGS, and then adapt it for the SGD algorithm, similarly to [6]."
+  }, {
+    "heading": "3 Adaptive Importance Sampling",
+    "text": "We first show in this section that SGD is a powerful tool to optimize the sampling distribution of Monte Carlo estimators. This will motivate our Adaptive Weighted SGD algorithm in which the sampling distribution is not kept constant, but learned during the optimization process.\nWe consider a family {Qτ} of sampling distributions on X , such that Qτ is absolutely continuous with respect to P (i.e. the support of P is included in the support of Qτ ) for any τ in the parametric set T . We denote the density q = dQdP . Importance sampling is a common method to estimate the integral in Eq. (1). It corresponds to a Monte Carlo estimator of the form (we omit the dependency on w for clarity):\nγ̂ = 1\nT T∑ t=1 f(xt) q(xt; τ) , xt ∼ Qτ , (3)\nwhere Qτ is called the importance distribution. It is an unbiased estimator of γ, i.e. the expectation of γ̂ is exactly the desired quantity γ.\nTo compare estimators, we can use a variance criterion. The variance of this estimator depends on τ :\nσ2(τ) = Varτ [γ̂] = 1\nT Eτ\n[( f(x)\nq(x; τ)\n)2] − γ 2\nT (4)\nwhere Eτ [.] and Varτ [.] denote the expectation and variance with respect to distribution Qτ .\nTo find the best possible sampling distribution in the sampling family {Qτ}, one can minimize the variance σ2(τ) with respect to τ . If |f | belongs to the family {Qτ}, then there exists a parameter τ∗ ∈ T such that q(., τ∗) ∝ |f | P -almost surely. In such a case, the variance σ(τ∗) of the estimator is null: one can estimate the integral with a single sample. In general, however, the parametric family does\nAlgorithm 1 Minimal Variance Importance Sampling Require: Initial sampling parameter vector τ0 ∈ T Require: Learning rates {ηt}t>0\nfor t = 0, 1, 2, · · · , T − 1 do xt ∼ Qτt τt+1 ← τt + ηt ( f(xt) q(xt;τt) )2 ∇τ log q(xt; τt) end for Output γ̂ ← 1T ∑ t f(xt) q(xt;τt)\nnot contain a normalized version of |f |. In addition, the minimization of the variance σ2 has often no closed form solution. This motivates the use of approximate variance reduction methods.\nA possible approach is to minimize σ2 with respect to the importance parameter τ . The gradient is:\n∇τσ2(τ) = ∇τEτ [( f(x)\nq(x; τ)\n)2] (5)\n= −Eτ [ f(x)2∇τq(x; τ)\nq(x; τ)3\n] (6)\n= −Eτ [( f(x)\nq(x; τ)\n)2 ∇τ log q(x; τ) ] .\nThis quantity has no closed form solution, but we can use a SGD algorithm with a gradient step equal on average to this quantity. To obtain an estimator g of the gradient with expectation given by Equation (6), it is enough to sample a point xt according to Qτ and then set g := −f2(xt)/q2(xt; τ)∇τ log q(xt; τ). This is then repeated until convergence. The full iterative procedure is summarized in Algorithm 1.\nIn the experiments below, we show that learning the importance weight of an importance sampling estimator using SGD can lead to a significant speed-up in several machine learning applications, including the estimation of empirical loss functions and the evaluation of a policy in a reinforcement learning scenario. In the following, we show that this idea can also be used in a sequential setting (the function f can change over time), and when f has multivariate outputs, so that we can control the variance of the gradient of a standard SGD algorithm and, ultimately, speedup the convergence."
+  }, {
+    "heading": "4 Biased Sampling in Stochastic Optimization",
+    "text": "In this section, we first analyze a weighted version of the SGD algorithm where points are sampled non-uniformly, similarly to importance sampling, and then derive an adaptive version of this algorithm, where the sampling distribution evolves with the iterations."
+  }, {
+    "heading": "4.1 Weighted stochastic gradient descent",
+    "text": "As introduced previously, our goal is to minimize the expectation of a parametric function f (cf. Eq. (1)). Similarly to importance sampling, we do not need to sample according to the base distribution P at each iteration of SGD. Instead, we can use any distribution Q defined on X if each gradient step is properly re-weighted by the density q = dQ/dP . Each iteration t of the algorithm consists in two steps: (i) sample xt ∈ X according to distribution Q; (ii) do an approximate gradient step:\nwt+1 = wt − ρt ∇wf(xt;wt)\nq(xt) . (7)\nDepending on the importance distributionQ, this algorithm can have different convergence properties from the original SGD algorithm. As mentioned previously, the best sampling distribution would be the one that gives a small variance to the weighted gradient in Eq. (7). The main issue is that it depends on the parameters wt, which are different at each iteration.\nOur main observation is that we can minimize the variance of the gradient using the previous iterates, under the assumption that this variance does not change to quickly when wt is updated. We argue this is reasonable in practice as learning rate policies for ρt usually assume a small constant learning rate, or a decreasing schedule [2]. In the next section, we build on that observation to build a new algorithm that learns the best sampling distribution Q in an online fashion."
+  }, {
+    "heading": "4.2 Adaptive weighted stochastic gradient descent",
+    "text": "Similarly to Section 3, we consider a family {Qτ} of sampling distributions parameterized by τ in the parametric set T . Using the sampling distribution Qτ with p.d.f. q(x; τ) = dQτ (x)dP (x) , we can now evaluate the efficiency of the sampling distributions Qτ based on the variance Σ(w, τ):\nΣ(w, τ) :=Varτ [∇wf(x;w)/q(x, τ)] (8) =Eτ [∇wf(x;w)∇Twf(x;w)\nq(x; τ)2 ] −∇wγ(w)∇Twγ(w) (9)\nFor a given function f(.;w) we would like to find the parameter τ∗(w) of the sampling distribution that minimizes the trace of the covariance Σ(w, τ), i.e.:\nτ∗(w) ∈ arg min τ Eτ [∥∥∥∥∇wf(x;w)q(x; τ) ∥∥∥∥2 ]\n(10)\nNote that if the family of sampling distribution {Qτ} belongs to the exponential family, the problem (10) is convex,\nAlgorithm 2 Adaptive Weighted SGD (AW-SGD) Require: Initial target and sampling parameter vectors w0 ∈ W and τ0 ∈ T Require: Learning rates {ρt}t>0 and {ηt}t>0 for t = 0, 1, · · · , T − 1 do xt ∼ Qτt dt ← ∇wf(xt;wt)q(xt;τt) wt+1 ← wt − ρtdt τt+1 ← τt + ηt ‖dt‖2∇τ log q(xt; τt)\nend for\nand therefore can be solved using (sub-) gradient methods. Consequently, a simple SGD algorithm with gradient steps having small variance consists in the following two steps at each iteration t:\n1. perform a weighted stochastic gradient step using distribution Qτt to obtain wt;\n2. compute τt = τ∗(wt) by solving Equation (10), i.e. find the parameter τt minimizing the variance of the gradient at point wt. This can be done approximately by applying M steps of stochastic gradient descent.\nThe inner-loop SGD algorithm involved in the second step can be based on the current sample, and the stochastic gradient direction is\n∇τΣ(wt, τ) =∇τEτ [∥∥∥∥∇wtf(x;wt)q(x; τ) ∥∥∥∥2 ]\n(11)\n=− Eτ [∥∥∥∥∇wtf(x;wt)q(x; τ) ∥∥∥∥2∇τ log q(x; τ) ]\nIn practice, we noted that it is enough to do a single step of the inner loop, i.e. M = 1. We call this simplified algorithm the Adapted-Weighted SGD Algorithm and its pseudocode is given in Algorithm 2. We see that AW-SGD is a slight modification of the standard SGD — or any variant of it, such as Adagrad, AdaDelta or RMSProp – but where the sampling distribution evolves during the algorithm, thanks to the update of τt. This algorithm is useful when the gradient has a variance that can be significantly reduced by choosing better samples. An important design choice of the algorithm is the choice of the decay of the step sizes sequences {ρt}t>0 and {ηt}t>0. While using adaptive step sizes appears to be useful in some settings, it appears that the regime in which AW-SGD outperforms SGD is when ηt are significantly larger than ρt, meaning that the algorithm converges quickly to the smallest variance, and AWSGD tracks it during the course of the iterations. Ideally, the sequence of sampling parameters {τt} remains close to the optimal trajectory which consist is the best possible sequence of sampling parameters given by Equation 10\nWe now illustrate the benefit of this algorithm in three different applications: image classification, matrix factorization and reinforcement learning."
+  }, {
+    "heading": "5 Application to Image classification",
+    "text": "Large scale image classification is an important machine learning tasks where images containing a given category are much less frequent than images not containing the category. In practice, to learn efficient classifiers, one need to optimize a class-imbalance hyper-parameter [15]. Furthermore, as suggested by the standard practice of “hard negative mining” [16], positives and negatives should have a different importance during optimization, with positives\nbeing more important at first, and negatives gradually gaining in importance. However, cross-validating the best imbalance hyper-parameter at each iteration is prohibitively expensive. Instead, we show here that AW-SGD can be used for biased sampling depending on the label, where the bias τt (imbalance factor) is adapted along the learning.\nTo measure the acceleration of convergence, we experiment on the widely used Pascal VOC 2007 image classification benchmark [17]. Following standard practice [18; 19; 20], we learn a One-versus-Rest logistic regression classifier using deep image features from the last layers of the pretrained AlexNet Convolutional Network [21]. Note that this image classification pipeline provides a strong baseline, comparable to the state of the art [19].\nLet D = {(Ii, yi), i = 1, · · · , n} a training set of n images Ii with labels yi ∈ {−1, 1}. The discrete distribution over samples is parametrized by the log-odd τ of the probability of sampling a positive image: the family of sampling distributions {Qτ} over D can be written as:\nq(x; τ) = n\nn(yi) ς(yiτ) (12)\nwith ς(a) := 1/(1 + e−a) representing the sigmoid function1, x = i, an image index in {1, . . . , n}, τ ∈ <, and n(+1) (resp. n(−1)) is the number of positive (resp. negative) images. With this formulation, the update equations in AW-SGD (Algo. 2) are:\nf(xt;wt) = ` (f(φθ(Iit);wt), yit) = log ( 1 + exp(−yitwTt φθ(Iit)) ) (13)\n= − log (st) (14)\nwith st := ς(yitw T t φθ(Iit)) representing the predicted probability and θ the parameters of the feature function.\n∇wf(xt;wt) = (st − 1) yitφθ(Iit), ∇τ log q(xt; τt) = yit(1− s(yitτt)) . (15)\nWe initialize the positive sampling bias parameter with the value τ0 = 0.0, which yields a good performance both for SGD and AW-SGD. For both the SGD baseline and our AW-SGD algorithm we use AdaGrad [7] to choose the learning rates ρt and ηt. Both were initialized at 0.1.\nFigure 1 shows that AW-SGD converges faster than SGD for both training error and generalization performance. Acceleration is both in time and in iterations, and AW-SGD only costs +1.7% per iteration with respect to SGD in our implementation. In further experiments, we noticed that the positive sampling bias parameter τt indeed gradually decreases, i.e. the /algorithm learns that it should focus more on the harder negative class. We also show that the\n1Using the sigmoid link enables an optimization in the real line instead on the constrained set [0, 1]\nvalues learned for this sampling parameter also depend on the category.\nFigure 2 displays the evolution of the positive sampling bias parameter τt along AW-SGD iterations t. Almost all classes expose the expected behavior of sampling more and more negatives as the optimization progresses, as the negatives correspond to anything but the object of interest, and are, therefore, much more varied and difficult to model. The “person” class is the only exception, because it is, by far, the category with the largest number of positives and intra-class variation. Note that, although the dynamics of the τt stochastic process are similar, the exact values obtained vary significantly depending on the class, which shows the self-tuning capacity of AW-SGD."
+  }, {
+    "heading": "6 Application to Matrix factorization",
+    "text": "We applied AW-SGD to learn how to sample the rows and columns in a SGD-based low-rank matrix decomposition algorithm. Let Y ∈ <n×m be a matrix that has been generated by a rank-K matrix UV T , where U ∈ <n×K and V ∈ <m×K . We consider a differentiable loss function `(z; y) where z ∈ < and y is the observed value. With the squared loss, we have each entry of Y is a real scalar and `(z, y) = (z − y)2. The full loss function is\nγ(U, V ) = n∑ i=1 m∑ j=1 `(uiv T j , yij) (16)\nWe consider the sampling distributions {Qτ} over the set X := {1, · · · , n} × {1, · · · ,m}, where we independently sample a row i and a column j according to the discrete distributions ς(τ ′) and ς(τ ′′) respectively, with τ ′ ∈ <n, τ ′′ ∈ <m, τ = (τ ′, τ ′′) ∈ <m+n, and x = (i, j). We define:\nς(z) =(ez1 , ez2 , · · · , ezp)/ (\np∑ i=1 ezi\n) (17)\nq(x, τ) = ς(τ ′) ς(τ ′′) (18)\nwith ς : <p 7→ <p the softmax function. Using the square loss, as in the experiments below, the update equations in AW-SGD (Algo. 2) are:\nf(xt;ut, vt) =`(uitv T jt , yitjt) = (uitv T jt − yitjt)2 = s2t\n(19)\n∇uit f(xt;ut, vt) = 2vjtst, (20) ∇vjt f(xt;ut, vt) = 2uitst (21)\n∇τ ′ log q(xt; τt) = ei − ς(τ ′), (22) ∇τ ′′ log q(xt; τt) = ej − ς(τ ′′) (23)\nwhere ei ∈ <n and ej ∈ <m, vectors with 1 at index i and j respectively, and all other components are 0.\nIn the matrix factorization experiments, we used the minibatch technique with batches of size 100, ρ0 and η0 were tuned to yield the minimum γ at convergence, separately with each algorithm. All results are averaged over 10 runs. τ ′ and τ ′′ were initialized with zeros to get an initial uniform sampling distribution over the rows and columns. The\nmodel learning rate decrease was set to ρ0/((N/2) + t), η0 was kept constant.\nIn Figure 3, we simulated a n × m rank-K matrix, for n = m = 100 and K = 10, by sampling U and V using independent centered Gaussian variables with unit variance. To illustrate the benefit of adaptive sampling, we multiply by 100 a randomly drawn square block of size 20, to experimentally observe the benefit of a non uniform sampling strategy. The results of the minimal variance important sampling scheme (Algorithm 1) is shown on the left. We see that after having seen 50% of the number N = nm of matrix entries, the standard deviation of the importance sampling estimator is divided by two, meaning that we would need only half of the samples to evaluate the full loss compared to uniform sampling . Figure 4 shows the loss decrease of SGD and AW-SGD and on the same matrix for multiple learning rates. The x−axis is expressed in epochs, where one epoch corresponds to N sampling of values in the matrix. AW-SGD converges significantly faster than the best uniformly sampled SGD, even after 1 epoch through the data. On average, AW-SGD requires half of the number of iterations to converge to the same value.\nIn-painting experiment We compared both algorithms on the MNIST dataset [22], on which low-rank decomposition techniques have been successfully applied [23]. We factorized with K = 50 the training set for the zero digit, a 5923 × 784 matrix, where each line is a 28 × 28 image of a handwritten zero, and each column one pixel. Figure 5 shows the loss decrease for both algorithms on the first iteration. AW-SGD requires significantly less samples to reach the same error. At convergence, AW-SGD showed an average 2.52× speedup in execution time compared to SGD, showing that its sampling choices compensate for its\nparametrization overhead.\nNon-stationary data On Figure 6 we progressively substituted images of handwritten zeros by images of handwritten ones. It shows, every 2000 samples (i.e. 0.0005 epoch), the heatmap of the sampling probability of each pixel, ς(τ ′′), reorganized as 28 × 28 grids. Substitution from zeros to ones was made between 10000 and 20000 samples (on 2nd line). One can distinctly recognize the zero digit first, that progressively fades out for the one digit2. This transitions shows that AW-SGD learns to sample the digits that are likely to have a high impact on the loss. The algorithm adapts online to changes in the underlying distribution (transitions from one digit to another).\nCombined with adaptive step size algorithms such as AdaGrad, we noticed that Adagrad did not improved the convergence speed of AW-SGD in our matrix factorization experiments. A possible explanation is that the adaptive sampling favors some rows and columns, and AdaGrad compensates the non-uniform sampling, such that using AWSGD and AdaGrad simultaneously converges only slightly faster than AdaGrad alone. It should behave similarly on other parameterizations of τ where τ indices are linked to parameters indices. However, in many of our experiments, Adagrad performances were not matching the best crossvalidated learning rates."
+  }, {
+    "heading": "7 Sequential Control through Policy Gradient",
+    "text": "Stochastic optimization is currently one of the most popular approaches for policy learning in the context of Markov Decision Processes. More precisely, policy gradient has\n2We created an animated gif with more of these images and inserted it in the supplementary material.\nbecome the method of choice in a large number of contexts in reinforcement learning [24; 25]. Here, optimizing the integral (1) is related to policy gradient algorithms which aim at minimizing an expected loss (i.e. a negative reward or a cost) or maximizing a reward in an episodic setting (i.e. with a predefined finite trajectory length) and off-policy estimation. Equivalently, if we consider the sampling space as being the (action, state) trajectory of a Markov Decision Process, AW-SGD can be viewed as a off-policy gradient algorithm, where Pw and Qτ have the same parameterization, i.e. W = T . The objective is to maximize the expected reward for the target policy Pw, and to minimize the variance of the gradient for the policy gradient for the exploration policy Qτ .\nWe considered a canonical grid-world problem [26; 27] with a squared grid of size ` is considered. A classical reward setting has been applied: the reward function is a discounted instantaneous reward of −1 assigned on each cell of the grid and a reward of 1000 for a terminal state located at the down right of the grid. In this context, an episode is considered as successful if the defined terminal state is reached. Finally, a random distribution of ntrap = `25 terminal states with a negative reward of −1000 are also positioned. The start state is located at the very up-left cell of the grid.\nIn this experimental setting, the parameters w and τ of the target policy Pw and the exploration policy Qτ are defined in the space <`×`×4. More precisely, the probability of an action a at each position {x, y} ∈ [1, `]2 follows a multinomial distribution of parameters {px,y1 , . . . , px,y4 }. Indeed, in the context of the grid type of environment that we will use in this section, these parameters basically correspond to the log-odds of the probability of moving in one of the four directions at each position of the grid (movements outside the grid do not change the position). The distribution Qτ of sampled trajectories are different from the distribution of trajectory derived from Pw (off-policy learning).\nThe policy is optimized using Algorithm 2. The baseline corresponds to a policy iteration based on SGD where trajectories are sampled using their current policy estimate (on-policy learning). On Table 1, the table gives the average means and variances obtained for a batch of 20000 learning trials using both algorithms with properly tuned learning rate (the optimal learning rate is different in the two algorithms, for SGD ρ = 2.1 and for AWSGD ρ = 0.003 has been found). We can see that for all the tested grid sizes, there is a significant improvement (close to 10% relative improvement) of the expected success when adaptive weighted SGD is used instead of the on-policy learning SGD algorithm."
+  }, {
+    "heading": "8 Adapting to Non-Uniform Architectures",
+    "text": "In many large scale infrastructures, such as computation servers shared by many people, data access or gradient computation are unknown in advance. For example, in large scale image classification, some images might be stored in the RAM, leading to a access time that is order of times faster than other images stored only on the hard drive. These hardware systems are sometimes called NonUniform Memory Access [28]. It is also the case in matrix factorization, when some embeddings are stored locally, and others downloaded through the network. How can we inform the algorithm that it should sample more often data stored locally?\nA simple modification of AW-SGD can enable the algorithm to adapt to non-uniform computation time. The key idea is to learn dynamically to minimize the expected loss decrease per unit of time. To make AW-SGD take into account this access time, we simply weighted the update of τ in Algorithm 2 by dividing it by the simulated access time ∆x to the sample x. This is summarized in Algorithm 3.\nAs an experiment, we show in the matrix factorization case that the time-aware AW-SGD is able to learn and exploit the underlying hardware when the data does not fit entirely in memory, and one part of them has an extra access cost. To do so, we generate a 1000 × 1000 rank-10 matrix, but without high variance block, so that variance is uniform across rows and columns. For the first half of the rows of the matrix, i.e. i < n2 , we consider the data as being in main memory, and simulate an access cost of 100ns for each sampling in those rows, inspired by Jeff Dean’s explanations[29]. For the other half of the rows, i >= n2 ,\nAlgorithm 3 Time-Aware AW-SGD) Require: Initial values for w0 ∈ W and τ0 ∈ T Require: Learning rates {ρt}t>0 and {ηt}t>0\nfor t = 0, 1, · · · , T − 1 do st ← getCurrentTime() xt ∼ Qτt dt ← ∇wf(xt;wt)q(xt;τt) wt+1 ← wt − ρtdt et ← getCurrentTime() τt+1 ← τt + ηtet−st ‖dt‖\n2∇τ log q(xt; τt) end for\nwe multiply that access cost by a factor f , we’ll call the slow block access factor. The simulated access time to the sample (i, j), ∆(i,j) is thus given by: ∆(i,j) = 10−7 × f if i >= n2 , and ∆(i,j) = 10\n−7 if i >= n2 . We ranged the factor f from 2 to 220.\nThe time speedup achieved by the time-aware AW-SGD against SGD is plotted against the evolution of this factor in Figure 7. For each algorithm, we summed the real execution time and the simulated access times in order to take into account the time-aware AW-SGD sampling overhead. The speedup is computed after one epoch, by dividing SGD total time by AW-SGD total time. Positive speedups starts with a slow access time factor f of roughly 200, which corresponds to a random read on a SSD. Below AW-SGD is slower, since the data is homogeneous, and time access difference is not yet big enough to compensate its overhead. At f = 5000, corresponding to a read from another computer’s memory on local network, speedup reaches 10×. At f = 50000, a hard drive seek, AW-SGD is 100× faster. This shows that the time-aware AW-SGD overhead is compensated by its sampling choices.\nFigure 8 shows the loss decrease of both algorithms on the 5 first epochs with f = 5000. It shows that if the access time was the uniform, AW-SGD would have the same convergence speed as standard SGD (this is expected by the design of this experiment). Hence, even in such case where there is no theoretical benefit of using the time-aware AWSGD in terms of epochs, the fact that we learn the underlying access time to bias the sampling could potentially lead to huge improvements of the convergence time."
+  }, {
+    "heading": "9 Conclusion",
+    "text": "In this work, we argue that SGD and importance sampling can strongly benefit from each other. SGD algorithms can be used to learn the minimal variance sampling distribution, while importance sampling techniques can be used to improve the gradient estimation of SGD algorithm. We have introduced a simple yet efficient Adaptive Weighted SGD algorithm that can optimize a function while optimizing the way it samples the examples. We showed that this framework can be used in a large variety of problems, and experimented with it in three domains that have apparently no direct connections: image classification, matrix factorization and reinforcement learning. In all the cases, we can gain a significant speed-up by optimizing the way the samples are generated.\nThere are many more applications in which these variance reduction techniques have a strong potential. For example, in variational inference, the objective function is an integral and SGD algorithms are often used to increase convergence [30; 13]. Computing these integrals stochastically could be made more efficient by sampling non-uniformly in the integration space. Also, the estimation of intractable log-partition function, such as Boltzmann machines, are potential candidate models in which importance sampling has already been proposed, but without variance reduction technique [31].\nThis work also shows that we can learn about the algorithm while optimizing, as shown by the time-aware AW-SGD. This idea can be extended to design new types of metaalgorithms that learn to optimize or learn to coach other algorithms."
+  }],
+  "year": 2016,
+  "references": [{
+    "title": "A stochastic approximation method",
+    "authors": ["H. Robbins", "S. Monro"],
+    "venue": "Annals of Mathematical Statistics, 22(3)",
+    "year": 1951
+  }, {
+    "title": "Online algorithms and stochastic approximations",
+    "authors": ["L. Bottou"],
+    "venue": "David Saad, editor, Online Learning and Neural Networks. Cambridge University Press, Cambridge, UK",
+    "year": 1998
+  }, {
+    "title": "The tradeoffs of large scale learning",
+    "authors": ["L Bottou", "O Bousquet"],
+    "venue": "Suvrit Sra, Sebastian Nowozin, and Stephen J. Wright, editors, Optimization for Machine Learning, pages 351–368. MIT Press",
+    "year": 2011
+  }, {
+    "title": "Non-asymptotic analysis of stochastic approximation algorithms for machine learning",
+    "authors": ["F Bach", "E Moulines"],
+    "venue": "NIPS, pages 451–459",
+    "year": 2011
+  }, {
+    "title": "Acceleration of stochastic approximation by averaging",
+    "authors": ["B.T. Polyak", "A.B. Juditsky"],
+    "venue": "SIAM Journal on Control and Optimization",
+    "year": 1992
+  }, {
+    "title": "Hybrid deterministicstochastic methods for data fitting",
+    "authors": ["M Friedlander", "M Schmidt"],
+    "venue": "SIAM Journal on Scientific Computing",
+    "year": 2012
+  }, {
+    "title": "Adaptive subgradient methods for online learning and stochastic optimization",
+    "authors": ["J Duchi", "E Hazan", "Y Singer"],
+    "venue": "JMRL, 12:2121–2159",
+    "year": 2011
+  }, {
+    "title": "Beating sgd: Learning svms in sublinear time",
+    "authors": ["Elad Hazan", "Tomer Koren", "Nati Srebro"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2011
+  }, {
+    "title": "Loss-proportional subsampling for subsequent erm",
+    "authors": ["P Mineiro", "N Karampatziakis"],
+    "venue": "ICML",
+    "year": 2013
+  }, {
+    "title": "Adaptive importance sampling to accelerate training of a neural probabilistic language model",
+    "authors": ["J-S Senecal", "Y Bengio"],
+    "venue": "Technical report, IDIAP",
+    "year": 2003
+  }, {
+    "title": "Adaptive importance sampling to accelerate training of a neural probabilistic language model",
+    "authors": ["Yoshua Bengio", "J-S Senecal"],
+    "venue": "Neural Networks, IEEE Transactions on,",
+    "year": 2008
+  }, {
+    "title": "Simulation academic press",
+    "authors": ["SM Ross"],
+    "venue": "San Diego",
+    "year": 1997
+  }, {
+    "title": "Variational bayesian inference with stochastic search",
+    "authors": ["J Paisley", "D Blei", "M Jordan"],
+    "venue": "ICML",
+    "year": 2012
+  }, {
+    "title": "Curriculum learning",
+    "authors": ["Yoshua Bengio", "Jérôme Louradour", "Ronan Collobert", "Jason Weston"],
+    "venue": "Proceedings of the 26th Annual International Conference on Machine Learning,",
+    "year": 2009
+  }, {
+    "title": "Towards Good Practice in Large-Scale Learning for Image Classification",
+    "authors": ["F Perronnin", "Z Akata", "Z Harchaoui", "C Schmid"],
+    "venue": "CVPR",
+    "year": 2012
+  }, {
+    "title": "Histograms of oriented gradients for human detection",
+    "authors": ["N Dalal", "W Triggs"],
+    "venue": "CVPR",
+    "year": 2005
+  }, {
+    "title": "The Pascal Visual Object Classes (VOC) Challenge",
+    "authors": ["M Everingham", "L Van Gool", "C K I Williams", "J Winn", "A Zisserman"],
+    "venue": "IJCV",
+    "year": 2010
+  }, {
+    "title": "DeCAF : A Deep Convolutional Activation Feature for Generic Visual Recognition",
+    "authors": ["J Donahue", "Y Jia", "O Vinyals", "J Hoffman", "N Zhang", "E Tzeng", "T Darrell"],
+    "venue": "ICML",
+    "year": 2014
+  }, {
+    "title": "Learning and Transferring Mid-Level Image Representations using Convolutional Neural Networks",
+    "authors": ["M Oquab", "L Bottou", "I Laptev", "J Sivic"],
+    "venue": "CVPR",
+    "year": 2014
+  }, {
+    "title": "Rich feature hierarchies for accurate object detection and semantic segmentation",
+    "authors": ["R Girshick", "J Donahue", "T Darrell", "J Malik"],
+    "venue": "CVPR",
+    "year": 2014
+  }, {
+    "title": "ImageNet Classification with Deep Convolutional Neural Networks",
+    "authors": ["A Krizhevsky", "GE Hinton", "I Sutskever"],
+    "venue": "NIPS",
+    "year": 2012
+  }, {
+    "title": "Gradient-based learning applied to document recognition",
+    "authors": ["Yann LeCun", "Léon Bottou", "Yoshua Bengio", "Patrick Haffner"],
+    "venue": "Proceedings of the IEEE,",
+    "year": 1998
+  }, {
+    "title": "Non-negative matrix factorization as a feature selection tool for maximum margin classifiers",
+    "authors": ["Mithun Das Gupta", "Jing Xiao"],
+    "venue": "In Computer Vision and Pattern Recognition (CVPR),",
+    "year": 2011
+  }, {
+    "title": "Deterministic policy gradient algorithms",
+    "authors": ["David Silver", "Guy Lever", "Nicolas Heess", "Thomas Degris", "Daan Wierstra", "Martin Riedmiller"],
+    "venue": "In ICML,",
+    "year": 2014
+  }, {
+    "title": "Policy gradient in continuous time",
+    "authors": ["Rémi Munos"],
+    "year": 2006
+  }, {
+    "title": "Reinforcement Learning, volume 173 of SECS",
+    "authors": ["Richard S. Sutton", "editor"],
+    "venue": "Kluwer Academic Publishers,",
+    "year": 1992
+  }, {
+    "title": "Algorithms for Reinforcement Learning",
+    "authors": ["C. Szepesvari"],
+    "venue": "Synthesis lectures on artificial intelligence and machine learning. Morgan & Claypool",
+    "year": 2010
+  }, {
+    "title": "Global arrays: A nonuniform memory access programming model for high-performance computers",
+    "authors": ["Jaroslaw Nieplocha", "Robert J Harrison", "Richard J Littlefield"],
+    "venue": "The Journal of Supercomputing,",
+    "year": 1996
+  }, {
+    "title": "Stochastic variational inference",
+    "authors": ["M Hoffman", "D Blei", "C Wang", "J Paisley"],
+    "venue": "JMRL, 14(1):1303–1347",
+    "year": 2013
+  }, {
+    "title": "On the quantitative analysis of deep belief networks",
+    "authors": ["R Salakhutdinov", "I Murray"],
+    "venue": "ICML",
+    "year": 2008
+  }],
+  "id": "SP:11d79ea2841d2a8d82ee484df7b11ea65544f7a5",
+  "authors": [{
+    "name": "Guillaume Bouchard",
+    "affiliations": []
+  }, {
+    "name": "Théo Trouillon",
+    "affiliations": []
+  }, {
+    "name": "Julien Perez",
+    "affiliations": []
+  }, {
+    "name": "Adrien Gaidon",
+    "affiliations": []
+  }],
+  "abstractText": "Stochastic Gradient Descent (SGD) is one of the most widely used techniques for online optimization in machine learning. In this work, we accelerate SGD by adaptively learning how to sample the most useful training examples at each time step. First, we show that SGD can be used to learn the best possible sampling distribution of an importance sampling estimator. Second, we show that the sampling distribution of an SGD algorithm can be estimated online by incrementally minimizing the variance of the gradient. The resulting algorithm — called Adaptive Weighted SGD (AW-SGD) — maintains a set of parameters to optimize, as well as a set of parameters to sample learning examples. We show that AWSGD yields faster convergence in three different applications: (i) image classification with deep features, where the sampling of images depends on their labels, (ii) matrix factorization, where rows and columns are not sampled uniformly, and (iii) reinforcement learning, where the optimized and exploration policies are estimated at the same time, where our approach corresponds to an off-policy gradient algorithm.",
+  "title": "Online Learning to Sample"
+}

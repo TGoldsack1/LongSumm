@@ -1,0 +1,303 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Photo geolocation is an extremely challenging task since many photos offer only a few cues about their location and these cues can often be ambiguous. For instance, an image of a typical beach scene could be taken on many coasts across the world. Even when landmarks are present there can still be ambiguity: a photo of the Rialto Bridge could be taken either at its original location in Venice, Italy, or in Las Vegas which has a replica of the bridge! In the absence\nof obvious and discriminative landmarks, humans can fall back on their world knowledge and use multiple cues to infer the location of a photo. For example, the language of street signs or the driving direction of cars can help narrow down possible locations. Traditional computer vision algorithms typically lack this kind of world knowledge, relying on the features provided to them during training.\nMost previous work has therefore focused on covering restricted subsets of the problem, like landmark build-\n1\nar X\niv :1\n60 2.\n05 31\n4v 1\n[ cs\n.C V\n] 1\n7 Fe\nb 20\n16\nings [1, 37, 54], cities where street view imagery is available [7, 26, 52], or places where coverage of internet photos is dense enough to allow building a structure-frommotion reconstruction that a query photo can be matched against [31, 41]. In contrast, our goal is to localize any type of photo taken at any location. To our knowledge, very few other works have addressed this task [17, 18].\nWe treat the task of geolocation as a classification problem and subdivide the surface of the earth into a set of geographical cells which make up the target classes. We then train a convolutional neural network (CNN) [46] using millions of geotagged images. At inference time, our model outputs a discrete probability distribution over the earth, assigning each geographical cell a likelihood that the input photo was taken inside it.\nThe resulting model, which we call PlaNet, is capable of localizing a large variety of photos. Besides landmark buildings and street scenes, PlaNet can often predict the location of nature scenes like mountains, waterfalls or beaches with surprising accuracy. In cases of ambiguity, it will often output a distribution with multiple modes corresponding to plausible locations (Fig. 1). PlaNet outperforms the Im2GPS approach [17, 18] that shares a similar goal. A small-scale experiment shows that PlaNet even reaches superhuman performance at the task of geolocating street view scenes. Moreover, we show that the features learned by PlaNet can be used for image retrieval and achieve stateof-the-art results on the INRIA Holidays dataset [23].\nSometimes an image provides no useful cues: this is often the case with portraits, or photos of pets and common foods. However, we could still make predictions about the location of such photos if we also consider photos taken at roughly the same time either before or after the query. To this end, we have extended PlaNet to work on groups of photos by combining it with an LSTM approach. This method yields a 50% improvement over the single-image model when applied to photo albums. The reason for this improvement is that LSTMs learn to exploit temporal coherence in albums to correctly geolocate even those photos that the single-image model would fail to annotate confidently. For example, a photo of a croissant could be taken anywhere in the world, but if it is in the same album as a photo of the Eiffel Tower, the LSTM model will use this cue to geolocate it to Paris."
+  }, {
+    "heading": "2. Related Work",
+    "text": "Given a query photo, Im2GPS [17, 18] retrieves similar images from millions of geotagged Flickr photos and assigns the location of the closest match to the query. Image distances are computed using a combination of global image descriptors. Im2GPS shows that with enough data, even this simple approach can achieve surprisingly good results. We discuss Im2GPS in detail in Sec. 3.\nBecause photo coverage in rural areas is sparse, [32, 33] make additional use of satellite aerial imagery. [33] use CNNs to learn a joint embedding for ground and aerial images and localize a query image by matching it against a database of aerial images. [49] take a similar approach and use a CNN to transform ground-level features to the feature space of aerial images.\nImage retrieval based on local features, bags-of-visualwords (BoVWs) and inverted indices [35, 45] has been shown to be more accurate than global descriptors at matching buildings, but requires more space and lacks the invariance to match e.g. natural scenes or articulated objects. Most local feature based approaches therefore focus on localization within cities, either based on photos from photo sharing websites [5, 36] or street view [2, 7, 26, 27, 43, 51, 52]. Skyline2GPS [38] also uses street view data, but takes a unique approach that segments the skyline out of an image captured by an upward-facing camera and matches it against a 3D model of the city.\nWhile matching against geotagged images can provide the rough location of a query photo, some applications require the exact 6-dof camera pose. Pose estimation approaches achieve this goal using 3D models reconstructed using structure-from-motion from internet photos. A query image is localized by establishing correspondences between its interest points and the points in the 3D model and solving the resulting perspective-n-point (PnP) problem to obtain the camera parameters [30, 31, 40]. Because matching the query descriptors against the 3D model descriptors is expensive, some approaches combine this technique with efficient image retrieval based on inverted indices [5, 21, 42].\nInstead of matching against a flat collection of photos, landmark recognition systems [1, 14, 22, 37, 54] build a database of landmark buildings by clustering images from internet photo collections. The landmarks in a query image are recognized by retrieving matching database images and returning the landmark associated with them. Instead of using image retrieval, [4, 29] use SVMs trained on BoVW of landmark clusters to decide which landmark is shown in a query image. Instead of operating on image clusters, [16], train one exemplar SVM for each image in a dataset of street view images.\nA task related to image geolocation is scene recognition, for which the SUN database [50] is an established benchmark. The database consists of 131k images categorized into 908 scene categories such as “mountain“, “cathedral“ or “staircase“. The SUN survey paper [50] shows that Overfeat [44], a CNN trained on ImageNet [9] images, consistently outperforms other approaches, including global descriptors like GIST and local descriptors like SIFT, motivating our use of CNNs for image geolocation.\nIn Sec. 4, we extend PlaNet to geolocate sequences of images using LSTMs. Several previous approaches have\nalso realized the potential of exploiting temporal coherence to geolocate images. [6, 29] first cluster the photo collection into landmarks and then learn to predict the sequence of landmarks in a query photo sequence. While [6] train a Hidden Markov Model (HMM) on a dataset of photo albums to learn popular tourist routes, [29] train a structured SVM that uses temporal information as an additional feature. Images2GPS [25] also trains an HMM, but instead of landmarks, its classes are a set of geographical cells partitioning the surface of the earth. This is similar to our approach, however we use a much finer discretization.\nInstead of performing geolocation, [28] train a CNN on a large collection of geotagged Flickr photos to predict geographical attributes like “population“, “elevation“ or “household income“. [13] cluster street view imagery to discover latent scene types that are characteristic for certain geographical areas and analyze how these types correlate with geopolitical boundaries.\nIn summary, most previous approaches to photo geolocation are restricted to urban areas which are densely covered by street view imagery and tourist photos. Exceptions are Im2GPS [18, 17] and [32, 33, 49], which make additional use of satellite imagery. Prior work has shown that CNNs are well-suited for scene classification [50] and geographical attribute prediction [28], but to our knowledge ours is the first method that directly takes a classification approach to geolocation using CNNs."
+  }, {
+    "heading": "3. Image Geolocation with CNNs",
+    "text": "We pose the task of image geolocation as a classification problem. For this, we subdivide the earth into a set of geographical cells. The input to our CNN are the image pixels and the target output is a one-hot vector encoding the cell containing the geotag of the image. Given a test image, the output of this model is a probability distribution over the world. The advantage of this formulation over a regression from pixels to latitude/longitude coordinates is that the model can express its uncertainty about an image by assigning each cell a confidence that the image was taken there. In contrast, a regression model would be forced to pinpoint a single location and would have no natural way of expressing uncertainty about its prediction, especially in the presence of multi-modal answers (as are expected in this task).\nAdaptive partitioning using S2 Cells. We use Google’s open source S2 geometry library12 to partition the earth’s surface into a set of non-overlapping cells that define the classes of our model. The S2 library defines a hierarchical partitioning of the surface of a sphere by projecting the surfaces of an enclosing cube on it. The six sides of the cube\n1https://code.google.com/p/s2-geometry-library/ 2https://docs.google.com/presentation/d/1Hl4KapfAENAOf4gv-\npSngKwvS jwNVHRPZTTDzXXn6Q/view\nare subdivided hierarchically by six quad-trees. A node in a quad-tree defines a region on the surface of the sphere called an S2 cell. Fig. 3 illustrates this in 2D. We chose this subdivision scheme over a simple subdivision of latitude/longitude coordinates, because (i) lat/lon regions get elongated near the poles while S2 cells keep a close-toquadratic shape, and (ii) S2 cells have mostly uniform size (the ratio between the largest and smallest S2 cell is 2.08).\nA naive approach to define a tiling of the earth would be to use all S2 cells at a certain fixed depth in the hierarchy, resulting in a set of roughly equally sized cells (see Fig. 1). However, this would produce a very imbalanced class distribution since the geographical distribution of photos has strong peaks in densely populated areas. We therefore perform adaptive subdivision based on the photos’ geotags: starting at the roots, we recursively descend each quad-tree and subdivide cells until no cell contains more than a certain fixed number t1 of photos. This way, sparsely populated areas are covered by larger cells and densely populated areas are covered by finer cells. Then, we discard all cells containing less than a minimum of t2 photos. Therefore, PlaNet does not cover areas where photos are very unlikely to be taken, such as oceans or poles. We remove all images from the training set that are in any of the discarded cells. This adaptive tiling has several advantages over a uniform one: (i) training classes are more balanced, (ii) it makes effective use of the parameter space because more model capacity is spent on densely populated areas, (iii) the model can reach up to street-level accuracy in city areas where cells are small. Fig. 2 shows the S2 partitioning for our dataset.\nCNN training. We train a CNN based on the Inception architecture [46] with batch normalization [20]. The SoftMax output layer has one output for each S2 cells in the partitioning. We set the target output value to 1.0 at the index of the S2 cell the respective training image belongs to and all other outputs to 0.0. We initialize the weights of our model with random values and use the AdaGrad [11] stochastic gradient descent with a learning rate of 0.045.\nOur dataset consists of 126M photos with Exif geolocations mined from all over the web. We applied very little filtering, only excluding images that are non-photos (like diagrams, clip-art, etc.) and porn. Our dataset is therefore extremely noisy, including indoor photos, portraits, photos of pets, food, products and other photos not indicative of\nlocation. Moreover, the Exif geolocations may be incorrect by several hundred meters due to noise. We split the dataset into 91M training images and 34M validation images.\nFor the adaptive S2 cell partitioning (Sec. 3) we set t1 = 10, 000 and t2 = 50. The resulting partitioning consists of 26, 263 S2 cells (Fig. 2). Our Inception model has a total of 97,321,048 parameters. We train the model for 2.5 months on 200 CPU cores using the DistBelief framework [8] until the accuracy on the validation set converges. The long training time is due to the large variety of the training data and the large number of classes.\nWe ensure that none of the test sets we use in this paper have any (near-) duplicate images in the training set. For this, we use a CNN trained on near-duplicate images to compute a binary embedding for each training and test image and then remove test images whose Hamming distance to a training image is below an aggressively chosen threshold.\nGeolocation accuracy. To quantitatively measure the localization accuracy of the model, we collected a dataset of 2.3M geotagged Flickr photos from across the world. Other than selecting geotagged images with 1 to 5 textual tags, we did not apply any filtering. Therefore, most of the images have little to no cues about their location.\nTo compute localization error, we run inference and compute the distance between the center of the predicted S2 cell to the original location of the photo. We note that this error measure is pessimistic, because even if the ground truth location is within the predicted cell, the error can still be large depending on the cell size. Fig. 4 shows what fraction of this dataset was localized with a certain geographical distance of the ground truth locations. The blue curve shows the performance for the most confident prediction, and the other curves show the performance for the best of the top{2,3,4,5} predictions per image. Following [18], we added\napproximate geographical scales of streets, cities, regions, countries and continents. Despite the difficulty of the data, PlaNet is able to localize 3.6% of the images at street-level accuracy and 10.1% at city-level accuracy. 28.4% of the photos are correctly localized at country level and 48.0% at continent level. When considering the best of the top-5 predictions, the model localizes roughly twice as many images correctly at street, city, region and country level.\nQualitative Results. An important advantage of our localization-as-classification paradigm is that the model output is a probability distribution over the globe. This way, even if an image can not be confidently localized, the model outputs confidences for possible locations. To illustrate this, we trained a smaller model using only S2 cells at level 4 in the S2 hierarchy, resulting in a total of only 354 S2 cells. Fig. 1 shows the predictions of this model for test images with different levels of geographical ambiguity.\nFig. 5 shows examples of the different types of images\nPlaNet can localize. landmarks, which can also be recognized by landmark recognition engines [1, 37, 54], PlaNet can often correctly localize street scenes, landscapes, buildings of characteristic architecture, locally typical objects like red phone booths, and even some plants and animals. Fig. 6 shows some failure modes. Misclassifications often occur due to ambiguity, e.g., because certain landscapes or objects occur in multiple places, or are more typical for a certain place than the one the photo was taken (e.g., the kind of car in the first image is most typically found in Cuba).\nTo give a visual impression of the representations PlaNet has learned for individual S2 cells, Fig. 7 shows the test images that the model assigns to a given cell with the highest confidence. The model learns a very diverse representation of a single cell, containing the different landmarks, landscapes, or animals that a typical for a specific region.\nComparison to Im2GPS. As discussed in Sec. 2, most image-based localization approaches focus on photos taken\ninside cities. One of the few approaches that, like ours, aims at geolocating arbitrary photos is Im2GPS [17, 18]. However, instead of classification, Im2GPS is based on nearest neighbor matching. The original Im2GPS approach [17] matches the query image against a database of 6.5M Flickr images and returns the geolocation of the closest matching image. Images are represented by a combination of six different global image descriptors. A recent extension of Im2GPS [18] uses both an improved image representation and a more sophisticated localization technique. It estimates a per-pixel probability of being “ground“, “vertical“, “sky“, or “porous“ and computes color and texture histograms for each of these classes. Additionally, bag-ofvisual-word vectors of length 1k and 50k based on SIFT features are computed for each image. The geolocation of a query is estimated by retrieving nearest neighbors, geoclustering them with mean shift, training 1-vs-all SVMs for each resulting cluster, and finally picking the average GPS coordinate of the cluster whose SVM gives the query image the highest positive score.\nWe evaluate PlaNet on the Im2GPS test dataset [17] that consists of 237 geotagged photos from Flickr, curated such that most photos contain at least a few geographical cues. Tab. 1 compares the performance of PlaNet and both ver-\nsions of Im2GPS. The new version is a significant improvement over the old one. However, PlaNet outperforms even the new version with a considerable margin. In particular, PlaNet localizes 236% more images accurately at street level. The gap narrows at coarser scales, but even at country level PlaNet still localizes 51% more images accurately.\nA caveat of our evaluation is that PlaNet was trained on 14x more data than Im2GPS uses, which certainly gives PlaNet an advantage. However, note that because Im2GPS performs a nearest neighbor search, its runtime grows with the number of images while CNN evaluation speed is independent of the amount of training data. Since the Im2GPS feature vectors have a dimensionality of 100,000, Im2GPS would require 8.5GB to represent our corpus of 91M training examples (assuming one byte per descriptor dimension, not counting the space required for a search index). In contrast, our model uses only 377 MB, which even fits into the memory of a smartphone.\nComparison to human performance. To find out how PlaNet compares with human intuition, we let it compete against 10 well-traveled human subjects in a game of Geoguessr (www.geoguessr.com). Geoguessr presents the player with a random street view panorama (sampled from all street view panoramas across the world) and asks them to place a marker on a map at the location the panorama was captured. Players are allowed to pan and zoom in the panorama, but may not navigate to adjacent panoramas. The map is zoomable, so the location can be specified as precisely as the player wants. For this experiment, we used the game’s “challenge mode” where two players are shown the same set of 5 panoramas. We entered the PlaNet guesses manually by taking a screenshot of the view presented by the game, running inference on it and entering the center of the highest confidence S2 cell as the guess of the PlaNet player. For a fair comparison, we did not allow the human subjects to pan and zoom, so they did not use more informa-\ntion than we gave to the model. For each subject, we used a different set of panoramas, so humans and PlaNet played a total of 50 different rounds.\nIn total, PlaNet won 28 of the 50 rounds with a median localization error of 1131.7 km, while the median human localization error was 2320.75 km. Fig. 8 shows what percentage of panoramas were localized within which distance by humans and PlaNet respectively. Neither humans nor PlaNet were able to localize photos below street or city level, showing that this task was even harder than the Flickr dataset and the Im2GPS dataset. Fig. 9 shows some example panoramas from the game together with the guessed locations. Most panoramas were taken in rural areas containing little to no geographical cues.\nWhen asked what cues they used, human subjects said they looked for any type of signs, the types of vegetation, the architectural style, the color of lane markings and the direction of traffic on the street. Furthermore, humans knew that street view is not available in certain countries such as China allowing them to further narrow down their guesses. One would expect that these cues, especially street signs, together with world knowledge and common sense should give humans an unfair advantage over PlaNet, which was trained solely on image pixels and geolocations. Yet, PlaNet was able to outperform humans by a considerable margin. For example, PlaNet localized 17 panoramas at country granularity (750 km) while humans only localized 11 panoramas within this radius. We think PlaNet has an advantage over humans because it has seen many more places than any human can ever visit and has learned subtle cues of different scenes that are even hard for a well-traveled human to distinguish.\nFeatures for image retrieval. A recent study [39] showed that the activations of Overfeat [44], a CNN trained on ImageNet [9] can serve as powerful features for several computer vision tasks, including image retrieval. Since PlaNet was trained for location recognition, its features should be well-suited for image retrieval of tourist photos. To test this, we evaluate the PlaNet features on the INRIA Holidays dataset [23], consisting of 1,491 personal holiday photos, including landmarks, cities and natural scenes. We extract image embeddings from the final layer below the SoftMax layer (a 2048-dim. vector) and rank images by the Euclidean distance between their embedding vectors. As can be seen in Tab. 2, the PlaNet features outperform the Overfeat features. This is expected since our training data is more similar to the photos from the Holidays dataset than ImageNet. The same observation was made by [3] who found that re-training on a landmark dataset improves retrieval performance of CNN features compared to those from a model trained on ImageNet. Their features even outperform ours, which is likely because [3] use a carefully crafted landmark dataset for re-training while we applied\nonly minimal filtering. Using the spatial search and augmentation techniques described in [39], PlaNet even outperforms state-of-the-art local feature based image retrieval approaches on the Holidays dataset. We note that the Euclidean distance between these image embeddings is not necessarily meaningful as PlaNet was trained for classification. We expect Euclidean embeddings trained for image retrieval using a triplet loss [48] to deliver even higher mAP.\nModel analysis. For a deeper analysis of PlaNet’s performance we manually classified the images of the Im2GPS test set into different scene types. Tab. 3 shows the median per-category error of PlaNet and Im2GPS. The results show that PlaNet’s location discretization hurts its accuracy when pinpointing the locations of landmarks. However, PlaNet’s clear strength is scenes, especially city scenes, which give it the overall advantage.\nTo analyze which parts of the input image are most important for the classifier’s decision, we employ a method introduced by Zeiler et al. [53]. We plot an activation map\nwhere the value of each pixel is the classifier’s confidence in the ground truth geolocation if the corresponding part of the image is occluded by a gray box (Fig. 10)."
+  }, {
+    "heading": "4. Sequence Geolocation with LSTMs",
+    "text": "While PlaNet is capable of localizing a large variety of images, many images are ambiguous or do not contain enough information that would allow to localize them. However we can exploit the fact that photos naturally occur in sequences, e.g., photo albums, that have a high geographical correlation. Intuitively, if we can confidently localize some of the photos in an album, we can use this information to also localize the photos with uncertain location. Assigning each photo in an album a location is a sequence-tosequence problem which requires a model that accumulates a state from previously seen examples and makes the decision for the current example based on both the state and the current example. Therefore, long-short term memory (LSTM) architectures [19] seem like a good fit for this task. We now explore how to address the problem of predicting photo sequence geolocations using LSTMs.\nTraining Data. For this task, we collected a dataset of 29.7M public photo albums with geotags from Google+, which we split into 23.5M training albums (490M images) and 6.2M testing albums (126M) images. We use the S2 quantization scheme from the previous section to assign labels to the images.\nModel architecture. The basic structure of our model is as follows (Fig. 11a): Given an image, we extract an embedding vector from the final layer before the SoftMax layer in PlaNet. This vector is fed into the LSTM unit. The output vector of the LSTM is then fed into a SoftMax layer that performs the classification into S2 cells. We feed the images of an album into the model in chronological order. For the Inception part, we re-use the parameters of the singleimage model. During training, we keep the Inception part fixed and only train the LSTM units and the SoftMax layer.\nResults. We compare this model to the single-image PlaNet model and a baseline that simply averages the single-image\nPlaNet predictions of all images in an album and assigns the average to all images. The results are shown in Tab. 4 (first 3 rows). Averaging within albums (’PlaNet avg’) already yields a significant improvement over single-image PlaNet (45.7% relative on street level), since it transfers more confident predictions to ambiguous images. However, the LSTM model clearly outperforms the averaging technique (50.5% relative improvement on the street level). Visual inspection of results showed that if an image with high location confidence is followed by several images with lower location confidence, the LSTM model assigns the low-confidence images locations close to the high-confidence image. Thus, while the original PlaNet model tends to “jump around”, the LSTM model tends to predict close-by locations unless there is strong evidence of a location change. The LSTM model outperforms the averaging baseline because the base-\nline assigns all images in an album the same confidences and can thus not produce accurate predictions for albums that include different locations (such as albums of trips).\nA problem with this simple LSTM model is that many albums contain a number of images in the beginning that contain no helpful visual information. Due to its unidirectional nature, this model cannot fix wrong predictions that occur in the beginning of the sequence after observing a photo with a confident location. For this reason, we now evaluate a model where the LSTM ingests multiple photos from the album before making its first prediction.\nLabel offset. The idea of this model is to shift the labels such that inference is postponed for several time steps (Fig. 11b). The main motivation under this idea is that this model can accumulate information from several images in a sequence before making predictions. Nevertheless, we found that using offsets does not improve localization accuracy (Tab. 4, LSTM off1, LSTM off2). We assume this is because the mapping from input image to output labels becomes more complex, making prediction more difficult for all photos, while improving predictions just for a limited amount of photos. Moreover, this approach does not solve the problem universally: For example, if we offset the label by 2 steps, but the first image with high location confidence occurs only after 3 steps, the prediction for the first image will likely still be wrong. To fix this, we now consider models that condition their predictions on all images in the sequence instead of only previous ones.\nRepeated sequences. We first evaluate a model that was trained on sequences that had been constructed by concatenating two instances of the same sequence (Fig. 11c). For this model, we take predictions only for the images from the second half of the sequence (i.e. the repeated part). Thus, all predictions are conditioned on observations from all images. At inference time, passing the sequence to the model for the first time can be viewed as an encoding stage where the LSTM builds up an internal state based on the images. The second pass is the decoding stage where at each image, the LSTM makes a prediction based on its state and the current image. Results show that this approach outperforms the single-pass LSTMs (Tab. 4, LSTM rep), achieving a 7.8% relative improvement at street level, at the cost of a twofold increase in inference time. However, by visually inspecting the results we observed a problem with this approach: if there are low-confidence images at the beginning of the sequence, they tend to get assigned to the last confident location in the sequence, because the model learns to rely on its previous prediction. Therefore, predictions from the end of the sequence get carried over to the beginning.\nBi-directional LSTM. A well-known neural network architecture that conditions the predictions on the whole sequence are bi-directional LSTM (BLSTM) [15]. This model can be seen as a concatenation of two LSTM models, where the first one does a forward pass, while the second does a backward pass on a sequence (Fig. 11d). Bidirectional LSTMs cannot be trained with truncated backpropagation through time [12] and thus require to unroll the LSTMs to the full length of the sequence. To reduce the computational cost of training, we had to limit the length of the sequences to 25 images. This causes a decrease in total accuracy since longer albums typically yield higher accuracy than shorter ones. Since our experiments on this data are not directly comparable to the previous ones, we also evaluate the repeated LSTM model on sequences truncated to 25 images. As the results show (Tab. 4: LSTM rep 25, BLSTM 25), BLSTMs clearly outperform repeated LSTMs (16.6% relative improvement on street level). However, because they are not tractable for long sequences, the repeated model might still be preferable in practice."
+  }, {
+    "heading": "5. Conclusion",
+    "text": "We presented PlaNet, a CNN for image geolocation. Regarding problem as classification, PlaNet produces a probability distribution over the globe. This allows it to express its uncertainty about the location of a photo and assign probability mass to potential locations. While previous work mainly focused on photos taken inside cities, PlaNet is able to localize landscapes, locally typical objects, and even plants and animals. Our experiments show that PlaNet far outperforms other methods for geolocation of generic pho-\ntos and even reaches superhuman performance. We further extended PlaNet to photo album geolocation by combining it with LSTMs. Our experiments show that using contextual information for image-based localization makes it reach 50% higher performance than the single-image model."
+  }],
+  "year": 2016,
+  "references": [{
+    "title": "Retrieving Landmark and Non-Landmark Images from Community Photo Collections",
+    "authors": ["Y. Avrithis", "Y. Kalantidis", "G. Tolias", "E. Spyrou"],
+    "venue": "ACM Multimedia",
+    "year": 2010
+  }, {
+    "title": "Handling urban location recognition as a 2D homothetic problem",
+    "authors": ["G. Baatz", "K. Koeser", "D. Chen", "R. Grzeszczuk", "M. Pollefeys"],
+    "venue": "ECCV",
+    "year": 2010
+  }, {
+    "title": "Neural codes for image retrieval",
+    "authors": ["A. Babenko", "A. Slesarev", "A. Chigorin", "V. Lempitsky"],
+    "venue": "ECCV",
+    "year": 2014
+  }, {
+    "title": "Leveraging Structure from Motion to Learn Discriminative Codebooks for Scalable Landmark Classification",
+    "authors": ["A. Bergamo", "S.N. Sinha", "L. Torresani"],
+    "venue": "CVPR",
+    "year": 2013
+  }, {
+    "title": "Graph-Based Discriminative Learning for Location Recognition",
+    "authors": ["S. Cao", "N. Snavely"],
+    "venue": "IJCV, 112(2):239–254",
+    "year": 2015
+  }, {
+    "title": "Clues from the Beaten Path: Location Estimation with Bursty Sequences of Tourist Photos",
+    "authors": ["C.-Y. Chen", "K. Grauman"],
+    "venue": "CVPR",
+    "year": 2011
+  }, {
+    "title": "City-scale landmark identification on mobile devices",
+    "authors": ["D. Chen", "G. Baatz", "K. Köser", "S. Tsai", "R. Vedantham", "T. Pylvänäinen", "K. Roimela", "X. Chen", "J. Bach", "M. Pollefeys", "B. Girod", "R. Grzeszczuk"],
+    "venue": "CVPR",
+    "year": 2011
+  }, {
+    "title": "Large Scale Distributed Deep Networks",
+    "authors": ["J. Dean", "G.S. Corrado", "R. Monga", "K. Chen", "M. Devin", "Q.V. Le", "M.Z. Mao", "M. Ranzato", "A. Senior", "P. Tucker", "K. Yang", "A.Y. Ng"],
+    "venue": "NIPS",
+    "year": 2012
+  }, {
+    "title": "ImageNet: A Large-Scale Hierarchical Image Database",
+    "authors": ["J. Deng", "W. Dong", "R. Socher", "L.-J. Li", "K. Li", "L. Fei-Fei"],
+    "venue": "CVPR",
+    "year": 2009
+  }, {
+    "title": "Evaluation of gist descriptors for web-scale image search",
+    "authors": ["M. Douze", "H. Jégou", "S. Harsimrat", "L. Amsaleg", "C. Schmid"],
+    "venue": "CIVR",
+    "year": 2009
+  }, {
+    "title": "Adaptive Subgradient Methods for Online Learning and Stochastic Optimization",
+    "authors": ["J. Duchi", "E. Hazan", "Y. Singer"],
+    "venue": "JMLR, 12:2121–2159",
+    "year": 2011
+  }, {
+    "title": "Finding Structure in Time",
+    "authors": ["J. Elman"],
+    "venue": "Cognitive Science, 14(2):179–211",
+    "year": 1990
+  }, {
+    "title": "Unsupervised Nonparametric Geospatial Modeling from Ground Imagery",
+    "authors": ["N. Frey", "A. Torralba", "C. Stauffer"],
+    "venue": "WACV",
+    "year": 2014
+  }, {
+    "title": "I Know What You Did Last Summer: Object-Level Auto-Annotation of Holiday Snaps",
+    "authors": ["S. Gammeter", "T. Quack", "L. Van Gool"],
+    "venue": "ICCV",
+    "year": 2009
+  }, {
+    "title": "Framewise Phoneme Classification with Bidirectional LSTM and Other Neural Network Architectures",
+    "authors": ["A. Graves", "J. Schmidthuber"],
+    "venue": "Neural Networks, 18(5-6)",
+    "year": 2005
+  }, {
+    "title": "Learning perlocation classifiers for visual place recognition",
+    "authors": ["P. Gronat", "G. Obozinski", "J. Sivic", "T. Pajdla"],
+    "venue": "CVPR",
+    "year": 2013
+  }, {
+    "title": "IM2GPS: estimating geographic information from a single image",
+    "authors": ["J. Hays", "A. Efros"],
+    "venue": "CVPR",
+    "year": 2008
+  }, {
+    "title": "Large-Scale Image Geolocalization",
+    "authors": ["J. Hays", "A. Efros"],
+    "venue": "J. Choi and G. Friedland, editors, Multimodal Location Estimation of Videos and Images. Springer",
+    "year": 2014
+  }, {
+    "title": "Long short-term memory",
+    "authors": ["S. Hochreiter", "J. Schmidthuber"],
+    "venue": "Neural Computation, 9(8)",
+    "year": 1997
+  }, {
+    "title": "Batch Normalization: Accelerating Deep Network Training by Reducing Internal Covariate Shift",
+    "authors": ["S. Ioffe", "C. Szegedy"],
+    "venue": "ICML",
+    "year": 2015
+  }, {
+    "title": "From structure-from-motion point clouds to fast location recognition",
+    "authors": ["A. Irschara", "C. Zach", "J.-M. Frahm", "H. Bischof"],
+    "venue": "CVPR",
+    "year": 2009
+  }, {
+    "title": "From images to scenes: Compressing an image cluster into a single scene model for place recognition",
+    "authors": ["E. Johns", "G.-Z. Yang"],
+    "venue": "ICCV",
+    "year": 2011
+  }, {
+    "title": "Hamming embedding and weak geometric consistency for large scale image search",
+    "authors": ["H. Jégou", "M. Douze", "C. Schmid"],
+    "venue": "ECCV",
+    "year": 2008
+  }, {
+    "title": "Improving Bag-of- Features for Large Scale Image Search",
+    "authors": ["H. Jégou", "M. Douze", "C. Schmid"],
+    "venue": "IJCV, 87(3)",
+    "year": 2010
+  }, {
+    "title": "Image Sequence Geolocation with Human Travel Priors",
+    "authors": ["E. Kalogerakis", "O. Vesselova", "J. Hays", "A. Efros", "A. Hertzmann"],
+    "venue": "ICCV",
+    "year": 2009
+  }, {
+    "title": "Predicting Good Features for Image Geo-Localization Using Per-Bundle VLAD",
+    "authors": ["H.J. Kim", "E. Dunn", "J.-M. Frahm"],
+    "venue": "ICCV",
+    "year": 2015
+  }, {
+    "title": "Avoiding confusing features in place recognition",
+    "authors": ["J. Knopp", "J. Sivic", "T. Pajdla"],
+    "venue": "ECCV",
+    "year": 2010
+  }, {
+    "title": "Predicting Geoinformative Attributes in Large-Scale Image Collections Using Convolutional Neural Networks",
+    "authors": ["S. Lee", "H. Zhang", "D.J. Crandall"],
+    "venue": "WACV",
+    "year": 2015
+  }, {
+    "title": "Landmark classification in large-scale image collections",
+    "authors": ["Y. Li", "D.J. Crandall", "D.P. Huttenlocher"],
+    "venue": "ICCV",
+    "year": 2009
+  }, {
+    "title": "Location Recognition using Prioritized Feature Matching",
+    "authors": ["Y. Li", "N. Snavely", "D. Huttenlocher", "P. Fua"],
+    "venue": "ECCV",
+    "year": 2010
+  }, {
+    "title": "Worldwide Pose Estimation Using 3D Point Clouds",
+    "authors": ["Y. Li", "N. Snavely", "D. Huttenlocher", "P. Fua"],
+    "venue": "ECCV",
+    "year": 2012
+  }, {
+    "title": "Cross-view Image Geolocalization",
+    "authors": ["T.-Y. Lin", "S. Belongie", "J. Hays"],
+    "venue": "CVPR",
+    "year": 2013
+  }, {
+    "title": "Learning Deep Representations for Ground-to-Aerial Geolocalization",
+    "authors": ["T.-Y. Lin", "Y. Cui", "S. Belongie", "J. Hays"],
+    "venue": "CVPR",
+    "year": 2015
+  }, {
+    "title": "Learning a Fine Vocabulary",
+    "authors": ["A. Mikulik", "M. Perdoch", "O. Chum", "J. Matas"],
+    "venue": "ECCV",
+    "year": 2010
+  }, {
+    "title": "Scalable recognition with a vocabulary tree",
+    "authors": ["D. Nistér", "H. Stewénius"],
+    "venue": "CVPR",
+    "year": 2006
+  }, {
+    "title": "Object Retrieval with Large Vocabularies and Fast Spatial Matching",
+    "authors": ["J. Philbin", "O. Chum", "M. Isard", "J. Sivic", "A. Zisserman"],
+    "venue": "CVPR",
+    "year": 2007
+  }, {
+    "title": "World-Scale Mining of Objects and Events from Community Photo Collections",
+    "authors": ["T. Quack", "B. Leibe", "L. Van Gool"],
+    "venue": "CIVR",
+    "year": 2008
+  }, {
+    "title": "SKY- LINE2GPS: Localization in urban canyons using omniskylines",
+    "authors": ["S. Ramalingam", "S. Bouaziz", "P. Sturm", "M. Brand"],
+    "venue": "IROS",
+    "year": 2010
+  }, {
+    "title": "CNN features off-the-shelf: An astounding baseline for recognition",
+    "authors": ["A.S. Razavian", "H. Azizpour", "J. Sullivan", "S. Carlsson"],
+    "venue": "CVPR 2014 DeepVision workshop",
+    "year": 2014
+  }, {
+    "title": "Fast image-based localization using direct 2d-to-3d matching",
+    "authors": ["T. Sattler", "B. Leibe", "L. Kobbelt"],
+    "venue": "ICCV",
+    "year": 2011
+  }, {
+    "title": "Improving Image-Based Localization by Active Correspondence Search",
+    "authors": ["T. Sattler", "B. Leibe", "L. Kobbelt"],
+    "venue": "ECCV",
+    "year": 2012
+  }, {
+    "title": "Image Retrieval for Image-Based Localization Revisited",
+    "authors": ["T. Sattler", "T. Weyand", "B. Leibe", "L. Kobbelt"],
+    "venue": "BMVC",
+    "year": 2012
+  }, {
+    "title": "City-Scale Location Recognition",
+    "authors": ["G. Schindler", "M. Brown", "R. Szeliski"],
+    "venue": "CVPR",
+    "year": 2007
+  }, {
+    "title": "OverFeat: Integrated Recognition",
+    "authors": ["P. Sermanet", "D. Eigen", "X. Zhang", "M. Mathieu", "R. Fergus", "Y. LeCun"],
+    "venue": "Localization and Detection using Convolutional Networks. In ICLR",
+    "year": 2014
+  }, {
+    "title": "Video Google: A Text Retrieval Approach to Object Matching in Videos",
+    "authors": ["J. Sivic", "A. Zisserman"],
+    "venue": "ICCV, volume 2",
+    "year": 2003
+  }, {
+    "title": "Going Deeper with Convolutions",
+    "authors": ["C. Szegedy", "W. Liu", "Y. Jia", "P. Sermanet", "S. Reed", "D. Anguelov", "D. Erhan", "V. Vanhoucke", "A. Rabinovich"],
+    "venue": "CVPR",
+    "year": 2015
+  }, {
+    "title": "To aggregate or not to aggregate: selective matchkernels for image search",
+    "authors": ["G. Tolias", "Y. Avrithis", "H. Jegou"],
+    "venue": "ICCV",
+    "year": 2013
+  }, {
+    "title": "Learning fine-grained image similarity with deep ranking",
+    "authors": ["J. Wang", "Y. Song", "T. Leung", "C. Rosenberg", "J. Wang", "J. Philbin", "B. Chen", "Y. Wu"],
+    "venue": "CVPR",
+    "year": 2014
+  }, {
+    "title": "Wide-Area Image Geolocalization with Aerial Reference Imagery",
+    "authors": ["S. Workman", "R. Souvenir", "N. Jacobs"],
+    "venue": "ICCV",
+    "year": 2015
+  }, {
+    "title": "SUN Database: Exploring a Large Collection of Scene Categories",
+    "authors": ["J. Xiao", "K.A. Ehinger", "J. Hays", "A. Torralba", "A. Oliva"],
+    "venue": "IJCV",
+    "year": 2014
+  }, {
+    "title": "Accurate Image Localization Based on Google Maps Street View",
+    "authors": ["A.R. Zamir", "M. Shah"],
+    "venue": "ECCV",
+    "year": 2010
+  }, {
+    "title": "Image Geo-Localization Based on Multiple Nearest Neighbor Feature Matching Using Generalized Graphs",
+    "authors": ["A.R. Zamir", "M. Shah"],
+    "venue": "PAMI, 36(8)",
+    "year": 2014
+  }, {
+    "title": "Visualizing and Understanding Convolutional Networks",
+    "authors": ["M. Zeiler", "R. Fergus"],
+    "venue": "ECCV",
+    "year": 2014
+  }, {
+    "title": "Tour the world: Building a Web-Scale Landmark Recognition Engine",
+    "authors": ["Y.-T. Zheng", "M. Zhao", "Y. Song", "H. Adam", "U. Buddemeier", "A. Bissacco", "F. Brucher", "T.-S. Chua", "H. Neven"],
+    "venue": "CVPR",
+    "year": 2009
+  }],
+  "id": "SP:1b93a123d352ea09b4c8aaac933f1d4c8bd42009",
+  "authors": [{
+    "name": "Tobias Weyand",
+    "affiliations": []
+  }, {
+    "name": "Ilya Kostrikov",
+    "affiliations": []
+  }, {
+    "name": "James Philbin",
+    "affiliations": []
+  }],
+  "abstractText": "Is it possible to build a system to determine the location where a photo was taken using just its pixels? In general, the problem seems exceptionally difficult: it is trivial to construct situations where no location can be inferred. Yet images often contain informative cues such as landmarks, weather patterns, vegetation, road markings, and architectural details, which in combination may allow one to determine an approximate location and occasionally an exact location. Websites such as GeoGuessr and View from your Window suggest that humans are relatively good at integrating these cues to geolocate images, especially enmasse. In computer vision, the photo geolocation problem is usually approached using image retrieval methods. In contrast, we pose the problem as one of classification by subdividing the surface of the earth into thousands of multiscale geographic cells, and train a deep network using millions of geotagged images. While previous approaches only recognize landmarks or perform approximate matching using global image descriptors, our model is able to use and integrate multiple visible cues. We show that the resulting model, called PlaNet, outperforms previous approaches and even attains superhuman levels of accuracy in some cases. Moreover, we extend our model to photo albums by combining it with a long short-term memory (LSTM) architecture. By learning to exploit temporal coherence to geolocate uncertain photos, we demonstrate that this model achieves a 50% performance improvement over the singleimage model.",
+  "title": "PlaNet - Photo Geolocation with Convolutional Neural Networks"
+}

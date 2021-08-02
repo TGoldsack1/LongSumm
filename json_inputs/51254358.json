@@ -1,0 +1,475 @@
+{
+  "sections": [{
+    "text": "In this paper, we propose a novel deep neural network named CODEnn (Code-Description Embedding Neural Network). Instead of matching text similarity, CODEnn jointly embeds code snippets and natural language descriptions into a high-dimensional vector space, in such a way that code snippet and its corresponding description have similar vectors. Using the unified vector representation, code snippets related to a natural language query can be retrieved according to their vectors. Semantically related words can also be recognized and irrelevant/noisy keywords in queries can be handled.\nAs a proof-of-concept application, we implement a code search tool named DeepCS using the proposed CODEnn model. We empirically evaluate DeepCS on a large scale codebase collected from GitHub. The experimental results show that our approach can effectively retrieve relevant code snippets and outperforms previous techniques.\nCCS CONCEPTS • Software and its engineering→ Reusability;\nKEYWORDS code search, deep learning, joint embedding ACM Reference Format: Xiaodong Gu1, Hongyu Zhang2, and Sunghun Kim1,3. 2018. Deep Code Search. In ICSE ’18: ICSE ’18: 40th International Conference on Software Engineering , May 27-June 3, 2018, Gothenburg, Sweden. ACM, New York, NY, USA, 12 pages. https://doi.org/10.1145/3180155.3180167\nPermission to make digital or hard copies of all or part of this work for personal or classroom use is granted without fee provided that copies are not made or distributed for profit or commercial advantage and that copies bear this notice and the full citation on the first page. Copyrights for components of this work owned by others than the author(s) must be honored. Abstracting with credit is permitted. To copy otherwise, or republish, to post on servers or to redistribute to lists, requires prior specific permission and/or a fee. Request permissions from permissions@acm.org. ICSE ’18, May 27-June 3, 2018, Gothenburg, Sweden © 2018 Copyright held by the owner/author(s). Publication rights licensed to the Association for Computing Machinery. ACM ISBN 978-1-4503-5638-1/18/05. . . $15.00 https://doi.org/10.1145/3180155.3180167"
+  }, {
+    "heading": "1 INTRODUCTION",
+    "text": "Code search is a very common activity in software development practices [57, 68]. To implement a certain functionality, for example, to parse XML files, developers usually search and reuse previously written code by performing free-text queries over a large-scale codebase.\nMany code search approaches have been proposed [13, 15, 29, 31, 32, 35, 44, 45, 47, 62], most of them being based on information retrieval (IR) techniques. For example, Linstead et al. [43] proposed Sourcerer, an information retrieval based code search tool that combines the textual content of a program with structural information. McMillan et al. [47] proposed Portfolio, which returns a chain of functions through keyword matching and PageRank. Lu et al. [44] expanded a query with synonyms obtained from WordNet and then performed keyword matching of method signatures. Lv et al. [45] proposed CodeHow, which combines text similarity and API matching through an extended Boolean model.\nA fundamental problem of the IR-based code search is the mismatch between the high-level intent reflected in the natural language queries and low-level implementation details in the source code [12, 46]. Source code and natural language queries are heterogeneous. They may not share common lexical tokens, synonyms, or language structures. Instead, they may only be semantically related. For example, a relevant snippet for the query “read an object from an xml” could be as follows: public static < S > S deserialize(Class c, File xml) {\ntry { JAXBContext context = JAXBContext.newInstance(c); Unmarshaller unmarshaller = context.createUnmarshaller(); S deserialized = (S) unmarshaller.unmarshal(xml); return deserialized; } catch (JAXBException ex) { log.error(\"Error-deserializing-object-from-XML\", ex); return null;\n} }\nExisting approaches may not be able to return this code snippet as it does not contain keywords such as read and object or their synonyms such as load and instance. Therefore, an effective code search engine requires a higher-level semantic mapping between code and natural language queries. Furthermore, the existing approaches have difficulties in query understanding [27, 29, 45]. They cannot effectively handle irrelevant/noisy keywords in queries [27]. Therefore, an effective code search engine should also be able to understand the semantic meanings of natural language queries and source code in order to improve the accuracy of code search.\nIn our previouswork, we introduced theDeepAPI framework [27], which is a deep learning based method that learns the semantics of queries and the corresponding API sequences. However, searching source code is much more difficult than generating APIs, because\nthe semantics of code snippets are related not only to the API sequences but also to other source code aspects such as tokens and method names. For example, DeepAPI could return the same API ImageIO.write for the query save image as png and save image as jpg. Nevertheless, the actual code snippets for answering the two queries are different in terms of source code tokens. Therefore, the code search problem requires models that can exploit more aspects of the source code.\nIn this paper, we propose a novel deep neural network named CODEnn (Code-Description Embedding Neural Network). To bridge the lexical gap between queries and source code, CODEnn jointly embeds code snippets and natural language descriptions into a high-dimensional vector space, in such a way that code snippet and its corresponding description have similar vectors. With the unified vector representation, code snippets semantically related to a natural language query can be retrieved according to their vectors. Semantically related words can also be recognized and irrelevant/noisy keywords in queries can be handled.\nUsing CODEnn, we implement a code search tool, DeepCS as a proof of concept. DeepCS trains the CODEnn model on a corpus of 18.2 million Java code snippets (in the form of commented methods) from GitHub. Then, it reads code snippets from a codebase and embeds them into vectors using the trained CODEnn model. Finally, when a user query arrives, DeepCS finds code snippets that have the nearest vectors to the query vector and return them.\nTo evaluate the effectiveness of DeepCS, we perform code search on a search codebase using 50 real-world queries obtained from Stack Overflow. Our results show that DeepCS returns more relevant code snippets than the two related approaches, that is, CodeHow [45] and a conventional Lucene-based code search tool [5]. On average, the first relevant code snippet returned by DeepCS is ranked 3.5, while the first relevant results returned by CodeHow [45] and Lucene [43] are ranked 5.5 and 6.0, respectively. For 76% of the queries, the relevant code snippets can be found within the top 5 returned results. The evaluation results confirm the effectiveness of DeepCS.\nTo our knowledge, we are the first to propose deep learning based code search. The main contributions of our work are as follows: • We propose a novel deep neural network, CODEnn, to learn a unified vector representation of both source code and natural language queries. • We develop DeepCS, a tool that utilizes CODEnn to retrieve relevant code snippets for given natural language queries. • We empirically evaluateDeepCS using a large scale codebase.\nThe rest of this paper is organized as follows. Section 2 describes the background of the deep learning based embedding models. Section 3 describes the proposed deep neural network for code search. Section 4 describes the detailed design of our approach. Section 5 presents the evaluation results. Section 6 discusses our work, followed by Section 7 that presents the related work. We conclude the paper in Section 8."
+  }, {
+    "heading": "2 BACKGROUND",
+    "text": "Our work adopts recent advanced techniques from deep learning and natural language processing [10, 17, 70]. In this section, we discuss the background of these techniques."
+  }, {
+    "heading": "2.1 Embedding Techniques",
+    "text": "Embedding (also known as distributed representation [50, 72]) is a technique for learning vector representations of entities such as words, sentences and images in such a way that similar entities have vectors close to each other [48, 50].\nA typical embedding technique is word embedding, which represents words as fixed-length vectors so that similar words are close to each other in the vector space [48, 50]. For example, suppose the word execute is represented as [0.12, -0.32, 0.01] and the word run is represented as [0.12, -0.31, 0.02]. From their vectors, we can estimate their distance and identify their semantic relation. Word embedding is usually realized using a machine learning model such as CBOW and Skip-Gram [48]. These models build a neural network that captures the relations between a word and its contextual words. The vector representations of words, as parameters of the network, are trained with a text corpus [50].\nLikewise, a sentence (i.e., a sequence of words) can also be embedded as a vector [59]. A simple way of sentence embedding is, for example, to view it as a bag of words and add up all its word vectors [39]."
+  }, {
+    "heading": "2.2 RNN for Sequence Embedding",
+    "text": "We now introduce a widely-used deep neural network, the Recurrent Neural Networks (RNN) [49, 59] for the embedding of sequential data such as natural language sentences. The Recurrent Neural Network is a class of neural networks where hidden layers are recurrently used for computation. This creates an internal state of the network to record dynamic temporal behavior. Figure 1a shows the basic structure of an RNN. The neural network includes three layers, an input layer which maps each input to a vector, a recurrent hidden layer which recurrently computes and updates a hidden state after reading each input, and an output layer which utilizes the hidden state for specific tasks. Unlike traditional feedforward neural networks, RNNs can embed sequential inputs such as sentences using their internal memory [25].\nConsider a natural language sentence with a sequence of T words s=w1, ...,wT , RNN embeds it through the following computations: it reads words in the sentence one by one, and updates a hidden state at each time step. Each wordwt is first mapped to a d-dimensional vectorwt ∈Rd by a one-hot representation [72] or word embedding [50]. Then, the hidden state (values in the hidden layer) ht is updated at time t by considering the input wordwt and the preceding hidden state ht−1:\nht = tanh(W [ht−1;wt ]), ∀t = 1, 2, ..., T (1)\nwhere [a;b]∈R2d represents the concatenation of two vectors,W ∈ R2d×d is the matrix of trainable parameters in the RNN, while tanh is a non-linearity activation function of the RNN. Finally, the embedding vector of the sentence is summarized from the hidden states h1, ...,hT . A typical way is to select the last hidden statehT as the embedding vector. The embedding vector can also be summarized using other computations such as the maxpooling [36]:\ns = maxpooling([h1, ..., hT ]) (2) Maxpooling is an operation that selects the maximum value in each fixed-size region over a matrix. Figure 2 shows an example of maxpooling over a sequence of hidden vectors h1, ...,hT . Each column represents a hidden vector. The window size of each region is set to 1×T in this example. The result is a fixed-length vector whose elements are the maximum values of each row. Maxpooling can capture the most important feature (one with the highest value) for each region and can transform sentences of variable lengths into a fixed-length vector.\nFigure 1b shows an example of how RNN embeds a sentence (e.g., parse xml file) into a vector. To facilitate understanding, we expand the recurrent hidden layer for each time step. The RNN reads words in the sentence one by one, and updates a hidden state at each time step. When it reads the first word parse, it maps the word into a vector w1 and computes the current hidden state h1 using w1. Then, it reads the second word xml, embeds it into w2, and updates the hidden state h1 to h2 using w2. The procedure continues until the RNN receives the last word file and outputs the final state h3. The final state h3 can be used as the embedding c of the whole sentence.\nThe embedding of the sentence, i.e., the sentence vector, can be used for specific applications. For example, one can build a language model conditioning on the sentence vector for machine translation [17]. One can also embed two sentences (a question sentence and an answer sentence) and compare their vectors for answer selection [21, 71]."
+  }, {
+    "heading": "2.3 Joint Embedding of Heterogeneous Data",
+    "text": "Suppose there are two heterogeneous data sets X and Y. We want to learn a correlation between them, namely, f : X → Y (3) For example, suppose X is a set of images and Y is a set of natural language sentences, f can be the correlation between the images and the sentences (i.e., image captioning). Since the two data sources are heterogeneous, it is difficult to discover the correlation f directly. Thus, we need a bridge to connect these two levels of information.\nJoint Embedding, also known as multi-modal embedding [78], is a technique to jointly embed/correlate heterogeneous data into a unified vector space so that semantically similar concepts across the two modalities occupy nearby regions of the space [33]. The joint embedding of X and Y can be formulated as:\nX ϕ −→ VX → J (VX, VY ) ← VY ψ ←− Y (4)\nwhere ϕ:X→Rd is an embedding function to map X into a ddimensional vector space V ; ψ :Y→Rd is an embedding function to map Y into the same vector space V ; J (·, ·) is a similarity measure (e.g., cosine) to score the matching degrees of VX and VY in order to learn the mapping functions. Through joint embedding, heterogeneous data can be easily correlated through their vectors.\nJoint embedding has been widely used in many tasks [22, 74, 78]. For example, in computer vision, Karpathy and Li [33] use a Convolutional Neural Network (CNN) [22], a deep neural network as the ϕ and an RNN as theψ , to jointly embed both image and text into the same vector space for labeling images [33]."
+  }, {
+    "heading": "3 A DEEP NEURAL NETWORK FOR CODE SEARCH",
+    "text": "Inspired by existing joint embedding techniques [21, 22, 33, 78], we propose a novel deep neural network named CODEnn (CodeDescription Embedding Neural Network) for the code search problem. Figure 3 illustrates the key idea. Natural language queries and code snippets are heterogeneous and cannot be easily matched according to their lexical tokens. To bridge the gap, CODEnn jointly embeds code snippets and natural language descriptions into a unified vector space so that a query and the corresponding code snippets are embedded into nearby vectors and can be matched by vector similarities."
+  }, {
+    "heading": "3.1 Architecture",
+    "text": "As introduced in Section 2.3, a joint embeddingmodel requires three components: the embedding functions ϕ:X→Rd and ψ :Y→Rd , as well as the similarity measure J (·, ·). CODEnn realizes these components with deep neural networks.\nFigure 4 shows the overall architecture of CODEnn. The neural network consists of three modules, each corresponding to a component of joint embedding: • a code embedding network (CoNN) to embed source code into vectors. • a description embedding network (DeNN) to embed natural language descriptions into vectors. • a similarity module that measures the degree of similarity between code and descriptions.\nThe following subsections describe the detailed design of these modules.\n3.1.1 Code Embedding Network. The code embedding network embeds source code into vectors. Source code is not simply plain text. It contains multiple aspects of information such as tokens, control flows and APIs [46]. In our model, we consider three aspects\nof source code: the method name, the API invocation sequence, and the tokens contained in the source code. They are commonly used in existing code search approaches [19, 27, 41, 44, 45]. For each code snippet (at the method level), we extract these three aspects of information. Each is embedded individually and then combined into a single vector representing the entire code.\nConsider an input code snippet C=[M,A, Γ], where M=w1,..., wNM is the method name represented as a sequence of NM camel split tokens [1]; A=a1, ...,aNA is the API sequence with NA consecutive API method invocations, and Γ={τ1, ...,τNΓ } is the set of tokens in the snippet. The neural network embeds the three aspects as follows: for the method nameM , it embeds the sequence of camel split tokens using an RNN with maxpooling:\nht = tanh(W M [ht−1;wt ]), ∀t = 1, 2, ..., NM m = maxpooling([h1, ..., hNM ])\n(5)\nwherewt ∈Rd is the embedding vector of tokenwt , [a;b]∈R2d represents the concatenation of two vectors,WM ∈R2d×d is the matrix of trainable parameters in the RNN, tanh is the activation function of the RNN. A method name is thus embedded as a d-dimensional vectorm.\nLikewise, the API sequence A is embedded into a vector a using an RNN with maxpooling:\nht = tanh(W A[ht−1;at ]), ∀t = 1, 2, ..., NA a = maxpooling([h1, ..., hNA ])\n(6)\nwhere at ∈Rd is the embedding vector of API at ,W A is the matrix of trainable parameters in the RNN.\nFor the tokens Γ, as they have no strict order in the source code, they are simply embedded via a multilayer perceptron (MLP), i.e., the conventional fully connected layer [52]:\nhi = tanh(W Γτi ), ∀i = 1, 2, ..., NΓ (7) where τi∈Rd represents the embedded representation of the token τi ,W Γ is the matrix of trainable parameters in the MLP, hi , i=1, ...,NΓ are the embedding vectors of all individual tokens. The individual vectors are also summarized to a single vector t via maxpooling:\nt = maxpooling([h1, ..., hNΓ ]) (8)\nFinally, the vectors of the three aspects are fused into one vector through a fully connected layer:\nc = tanh(W C [m;a ; t ]) (9) where [a;b;c] represents the concatenation of three vectors,WC is the matrix of trainable parameters in the MLP. The output vector c represents the final embedding of the code snippet.\n3.1.2 Description Embedding Network. The description embedding network (DeNN) embeds natural language descriptions into vectors. Consider a description D=w1, ...,wND comprising a sequence of ND words. DeNN embeds it into a vectord using an RNN with maxpooling:\nht = tanh(W D [ht−1;wt ]), ∀t = 1, 2, ..., ND d = maxpooling([h1, ..., hND ])\n(10)\nwhere wt ∈Rd represents the embedded representation of the description wordwt ,W D is the matrix of trainable parameters in the RNN, ht , t=1, ...ND are the hidden states of the RNN.\n3.1.3 SimilarityModule. Wehave described the transformations that map the code and description into vectors (i.e., the c and d). Since we want the vectors of code and description to be jointly embedded, we measure the similarity between the two vectors.\nWe use the cosine similarity for the measurement, which is defined as:\ncos(c, d ) = c Td\n∥ c ∥ ∥ d ∥ (11)\nwhere c and d are the vectors of code and a description respectively. The higher the similarity, the more related the code is to the description.\nOverall, CODEnn takes a ⟨code, description⟩ pair as input and predicts their cosine similarity cos(c,d)."
+  }, {
+    "heading": "3.2 Model Training",
+    "text": "Now we present how to train the CODEnn model to embed both code and descriptions into a unified vector space. The high-level goal of the joint embedding is: if a code snippet and a description have similar semantics, their embedded vectors should be close to each other. In other words, given an arbitrary code snippet C and\nan arbitrary description D, we want it to predict a high similarity if D is a correct description of C , and a little similarity otherwise.\nAt training time, we construct each training instance as a triple ⟨C,D+,D-⟩: for each code snippet C , there is a positive description D+ (a correct description ofC) as well as a negative description (an incorrect description of C) D- randomly chosen from the pool of all D+’s. When trained on the set of ⟨C,D+,D-⟩ triples, the CODEnn predicts the cosine similarities of both ⟨C,D+⟩ and ⟨C,D-⟩ pairs and minimizes the ranking loss [18, 22]: L(θ ) =\n∑ <C,D+,D->∈P max (0, ϵ − cos(c, d +) + cos(c, d-)) (12)\nwhere θ denotes the model parameters, P denotes the training dataset, ϵ is a constant margin. c , d+ and d- are the embedded vectors of C , D+ and D-, respectively. A small, fixed ϵ value of 0.05 is used in all the experiments. Intuitively, the ranking loss encourages the cosine similarity between a code snippet and its correct description to go up, and the cosine similarities between a code snippet and incorrect descriptions to go down."
+  }, {
+    "heading": "4 DEEPCS: DEEP LEARNING BASED CODE SEARCH",
+    "text": "In this section, we describe DeepCS, a code search tool based on the proposed CODEnn model. DeepCS recommends top K most relevant code snippets for a given natural language query. Figure 5 shows the overall architecture. It includes three main phases: offline training, offline code embedding, and online code search.\nWe begin by collecting a large-scale corpus of code snippets, i.e., Java methods with corresponding descriptions. We extract subelements (including method names, tokens, and API sequences) from the methods. Then, we use the corpus to train the CODEnn model (the offline training phase). For a given codebase from which users would like to search for code snippets, DeepCS extracts code elements for each Javamethod in the search codebase, and computes a code vector using the CoNNmodule of the trained CODEnnmodel (the offline embedding phase). Finally, when a user query arrives, DeepCS first computes the vector representation of the query using the DeNN module of the CODEnn model, and then returns code snippets whose vectors are close to the query vector (the online code search phase).\nIn theory, our approach could search for source code written in any programming languages. In this paper, we limit our scope to the Java code. The following sections describe the detailed steps of our approach."
+  }, {
+    "heading": "4.1 Collecting Training Corpus",
+    "text": "As described in Section 3, the CODEnn model requires a large-scale training corpus that contains code elements and the corresponding descriptions, i.e., the ⟨method name, API sequence, tokens, description⟩ tuples. Figure 6 shows an excerpt of the training corpus.\nWe build the training tuples using Java methods that have documentation comments1 from open-source projects on GitHub [3]. For each Java method, we use the method declaration as the code element and the first sentence of its documentation comment as its 1A documentation comment in JAVA starts with slash-asterisk-asterisk (/∗∗) and ends with asterisk-slash (∗/)\nnatural language description. According to the Javadoc guidance2, the first sentence is usually a summary of a method. To prepare the data, we download Java projects from GitHub created from August, 2008 to June, 2016. To remove toy or experimental programs, we exclude any projects without a star. We select only the Java methods that have documentation comments from the downloaded projects. Finally, we obtain a corpus comprising 18,233,872 commented Java methods.\nHaving collected the corpus of commented code snippets, we extract the ⟨method name, API sequence, tokens, description⟩ tuples as follows: Method Name Extraction: For each Java method, we extract its name and parse the name into a sequence of tokens according to camel case [1]. For example, the method name listFiles will be parsed into the tokens list and files. API Sequence Extraction:We extract an API sequence from each Java method using the same procedures as described in DeepAPI [27] – parsing the AST using the Eclipse JDT compiler [2] and traversing the AST. The API sequences are produced as follows [27]: • For each constructor invocation new C(), we produce C.new and append it to the API sequence. • For each method call o.m() where o is an instance of class C , we produce C.m and append it to the API sequence. • For a method call passed as a parameter, we append the method before the calling method. For example, o1.m1(o2 .m2(),o3.m3()), we produce a sequence C2.m2-C3.m3-C1.m1, where Ci is the class of the instance oi . • For a sequence of statements s1; s2;...;sN , we extract the API sequence ai from each statement si , concatenate them to the API sequence a1-a2-...-aN . • For conditional statements such as if(s1){s2;}else{s3;}, we create a sequence from all possible branches, that is, a1-a2-a3, where ai is the API sequence extracted from the statement si . • For loop statements such as while(s1){s2;}, we produce a sequence a1-a2, where a1 and a2 are API sequences extracted from the statement s1 and s2, respectively.\nToken Extraction: To collect tokens from a Java method, we tokenize the method body, split each token according to camel case [1], and remove the duplicated tokens. We also remove stop words (such as the and in) and Java keywords as they frequently occur in source code and are not discriminative. Description Extraction: To extract the documentation comment, we use the Eclipse JDT compiler [2] to parse the AST from a Java method and extract the JavaDoc Comment from the AST.\nFigure 7 shows an example of code elements and documentation comments extracted from a Java method DateUtils .toCalendar3 in the Apache commons-lang library."
+  }, {
+    "heading": "4.2 Training CODEnn Model",
+    "text": "We use the large-scale corpus described in the previous section to train the CODEnn model, following the method described in Section 3.2.\n2http://www.oracle.com/technetwork/articles/java/index-137868.html 3https://github.com/apache/commons-lang/blob/master/src/main/java/org/apache/ commons/lang3/time/DateUtils.java\nThe detailed implementation of the CODEnn model is as follows: we use the bi-directional LSTM [70], a state-of-the-art kind of RNN for the RNN implementation. All LSTMs have 200 hidden units in each direction. We set the dimension of word embedding to 100. The CODEnn has two types of MLPs, the embedding MLP for embedding individual tokens and the fusion MLP to combine the embeddings of different aspects. We set the number of hidden units as 100 for the embedding MLP and 400 for the fusion MLP.\nThe CODEnn model is trained via the mini-batch Adam algorithm [37, 40]. We set the batch size (i.e., the number of instances per batch) as 128. For training the neural networks, we limit the size of the vocabulary to 10,000 words that are most frequently used in the training dataset.\nWe build our model on Keras [4] and Theano [6], two opensource deep learning frameworks. We train our models on a server\nwith one Nvidia K40 GPU. The training lasts ∼50 hours with 500 epochs."
+  }, {
+    "heading": "4.3 Searching Code Snippets",
+    "text": "Given a user’s free-text query, DeepCS returns the relevant code snippets through the trained CODEnn model. It first computes the code vector for each code snippet (i.e., a Java method) in the search codebase. Then, it selects and returns the code snippets that have the top K nearest vectors to the query vector.\nMore specially, before a search starts, DeepCS embeds all code snippets in the codebase into vectors using the trained CoNN module of CODEnn in an off-line manner. During the on-line search, when a developer enters a natural language query, DeepCS first embeds the query into a vector using the trained DeNN module of CODEnn. Then, it estimates the cosine similarities between the query vector and all code vectors using Equation 11. Finally, the top K code snippets whose vectors are most similar to the query vector are returned as the search results. K is set to 10 in our experiments."
+  }, {
+    "heading": "5 EVALUATION",
+    "text": "In this section, we evaluate DeepCS through experiments. We also compare DeepCS with related code search approaches."
+  }, {
+    "heading": "5.1 Experimental Setup",
+    "text": "5.1.1 Search Codebase. To better evaluate DeepCS, our experiments are performed over a search codebase, which is different from the training corpus. Code snippets that match a user query are retrieved from the search codebase. In practice, the search codebase could be an organization’s local codebase or any codebase created from open source projects.\nTo construct the search codebase, we choose the Java projects that have at least 20 stars in GitHub. Different from the training corpus, they are considered in isolation and contain all code (including those do not have Javadoc comments). There are 9,950 projects in total. We select all 16,262,602 methods from these projects. For each Java method, we extract a ⟨method name, API sequence, tokens⟩ triple to generate its code vector.\n5.1.2 Query Subjects. To select code search queries for the evaluation, we adopt a systematic procedure used in [41]4. We build a benchmark of queries from the top 50 voted Java programming questions in Stack Overflow. To achieve so, we browse the list of Java-tagged questions in Stack Overflow and sort them according to the votes that each one receives5. We manually check the sorted list sequentially, and add questions that satisfy the following conditions to the benchmark: (1) The question is a concrete Java programming task. We exclude questions about problems, knowledge, configurations, experience and questions whose descriptions are vague and abstract. For example, Failed to load the JNI Library, What is the difference between StringBuilder and StringBuffer?, andWhy does Java have transient fields?. (2) The accepted answer to the question contains a Java code snippet. (3) The question is not a duplicate of the previous questions. We filter out questions that are tagged as “duplicated”.\nThe full list of the 50 selected queries can be found in Table 1. For each query, two developers manually inspect the top 10 results returned by DeepCS and label their relevance to the query. Then they discuss the inconsistent labels and relabel them. The procedure repeats until a consensus is reached.\n5.1.3 Performance Measure. We use four common metrics to measure the effectiveness of code search, namely, FRank, SuccessRate@k, Precision@k, and Mean Reciprocal Rank (MRR). They are widely used metrics in information retrieval and the code search literature [41, 45, 62, 79].\nThe FRank (also known as best hit rank [41]) is the rank of the first hit result in the result list [62]. It is important as users scan the results from top to bottom. A smaller FRank implies lower inspection effort for finding the desired result. We use FRank to assess the effectiveness of a single code search query.\nThe SuccessRate@k (also known as success percentage at k [41]) measures the percentage of queries for which more than one correct result could exist in the top k ranked results [35, 41, 79]. In our evaluations it is calculated as follows:\nSuccessRate@k = 1|Q | Q∑ q=1 δ (FRankq ≤ k ) (13)\nwhere Q is a set of queries, δ (·) is a function which returns 1 if the input is true and 0 otherwise. SuccessRate@k is important because a better code search engine should allow developers to discover the needed code by inspecting fewer returned results. The higher the metric value, the better the code search performance.\nThe Precision@k [45, 57] measures the percentage of relevant results in the top k returned results for each query. In our evaluations\n4http://taoxie.cs.illinois.edu/racs/subjects.html 5http://stackoverflow.com/questions/tagged/java?sort=votes&pagesize=15\nit is calculated as follows:\nPrecision@k = #relevant results in the top k results k\n(14) Precision@k is important because developers often inspect multiple results of different usages to learn from [62]. A better code search engine should allow developers to inspect less noisy results. The higher the metric values, the better the code search performance. We evaluate SuccessRate@k and Precision@k when k’s value is 1, 5, and 10. These values reflect the typical sizes of results that users would inspect [41].\nThe MRR [45, 79] is the average of the reciprocal ranks of results of a set of queries Q . The reciprocal rank of a query is the inverse of the rank of the first hit result [26]. MRR is calculated as follows:\nMRR = 1 |Q | |Q |∑ q=1 1 FRankq\n(15)\nThe higher the MRR value, the better the code search performance.\n5.1.4 Comparison Methods. We compare the effectiveness of our approach with CodeHow [45] and a conventional Lucene-based code search tool [5].\nCodeHow is a state-of-the-art code search engine proposed recently. It is an information retrieval based code search tool that incorporates an extended Boolean model and API matching. It first retrieves relevant APIs to a query by matching the query with the API documentation. Then, it searches code by considering both plain code and the related APIs. LikeDeepCS, CodeHow also considers multiple aspects of source code such as method name and APIs. It combines multiple aspects using an Extended Boolean Model [45]. The facts that CodeHow also considers APIs and is also built for large-scale code search make it an ideal baseline for our experiments.\nLucene is a popular, conventional text search engine behind many existing code search tools such as Sourcerer [43]. Sourcerer combines Lucene with code properties such as FQN (full qualified name) of entities and code popularity to retrieve the code snippets. In our implementation of the Lucene-based code search tool, we consider the heuristic of FQN. We did not include the code popularity heuristic (computed using PageRank) as it does not significantly improve the code search performance [43].\nWe use the same experimental setting for CodeHow and the Lucene-based tool as used for evaluating DeepCS."
+  }, {
+    "heading": "5.2 Results",
+    "text": "Table 1 shows the evaluation results of DeepCS and related approaches for each query in the benchmark. The columnQuestion ID shows the original ID of the question in Stack Overflow where the query comes from. The column FRank shows the FRank result of each approach. The symbol ‘NF’ stands for Not Found which means that no relevant result has been returned within the top K results (K=10).\nThe results show that DeepCS produces generally more relevant results than Lucene and CodeHow. Figure 8a shows the statistical summary of FRank for the three approaches. The symbol ‘+’ indicates the average FRank value achieved by each approach. We conservatively treat the FRank as 11 for queries that fail to obtain relevant results within the top 10 returned results. We observe that DeepCS achieves more relevant results with an average FRank of\n3.5, which is smaller than the average FRank achieved by CodeHow (5.5) and Lucene (6.0). The FRank values of DeepCS concentrate on the range from 1 to 4, while CodeHow and Lucene produce larger variance and many less relevant results. Figure 8b, 8c and 8d show the statistics of Precision@k for the three approaches when k is 1, 5 and 10, respectively. We observe that DeepCS achieves better overall precision values than CodeHow and the Lucene-based tool.\nTo test the statistical significance, we apply the Wilcoxon signedrank test (p<0.05) for the comparison of FRank and Precision@k between DeepCS and the two related approaches for all the queries. We conservatively treat the FRank as 11 for queries that fail to obtain relevant results within the top 10 returned results. The pvalues for the comparisons of DeepCS with Lucene and CodeHow are all less than 0.05, indicating the statistical significance of the improvement of DeepCS over the related approaches.\nTable 2 shows the overall performance of the three approaches, measured in terms of SuccessRate@k, Precision@k and MRR. The columns R@1, R@5 and R@10 show the results of SuccessRate@k\nwhen k is 1, 5 and 10, respectively. The columns P@1, P@5 and P@10 show the results of the average Precision@k over all queries when k is 1, 5 and 10, respectively. The column MRR shows the MRR values of the three approaches. The results show that DeepCS returns more relevant code snippets than CodeHow and Lucene. For example, the R@5 value is 0.76, which means that for 76% of the queries, the relevant code snippets can be found within the top 5 return results. The P@5 value is 0.5, which means that 50% of the top 5 results are deemed accurate. For the SuccessRate@k, the improvements to CodeHow are 21%, 31% and 30%, respectively. For the Precision@k, the improvements to CodeHow are 21%, 72% and 75%, respectively. For the MRR, the improvement to CodeHow is 33%. Overall, our approach improves the accuracy of related techniques on all metrics."
+  }, {
+    "heading": "5.3 Examples of Code Search Results",
+    "text": "We now provide concrete examples of code search results that demonstrate the advantages of DeepCS.\nFigure 9a and 9b show the results for two queries: queue an event to be run on the thread and run an event on a thread queue. The two queries have the same set of keywords with different word sequences. The keyword queue in the two queries have different meanings and it could be difficult for an IR-based approach to distinguish. Still, DeepCS can understand the meaning of the two queries and return relevant snippets. Apparently, DeepCS has the ability to recognize query semantics.\nThe ability of query understanding enables DeepCS to perform a more robust code search. Its search results are less affected by\npublic boolean enqueue(EventHandler handler, Event event) { synchronized(monitor) {\n•••••• handlers[tail] = handler; events[tail] = event; tail++; if (handlers.length <= tail)\ntail = 0; monitor.notify();\n} return true;\n}\n(a) The third result of the query “queue an event to be run on the thread”\nirrelevant or noisy keywords. For example, the query get the content of an input stream as a string using a specified character encoding contains 9 keywords. CodeHow returns many snippets that are related to less relevant keywords such as specified and character. DeepCS, on the other hand, can successfully identify the importance of different keywords and understand the key point of the query (Figure 10).\nAnother advantage of DeepCS relates to associative search. That is, it not only seeks snippets with matched keywords but also recommends those without matched keywords but are semantically related. This is important because it significantly increases the search scope especially when the codebase is small. Besides, developers need snippets of multiple usages [62]. The associative search provides more options of code snippets for developers to learn from. Figure 11a shows the first result of the query read an object from an xml file. As discussed in Section 1, traditional IR-based approaches may only match snippets that contain keywords such as xml, object and read. However, as shown in the figure, DeepCS successfully recognizes the query semantic and returns results of xml deserialize, even the keywords do not exist in the result. By contrast, CodeHow only returns snippets containing read, object and xml, narrowing down the search scope. The example indicates that DeepCS searches code by understanding the semantics instead of just matching keywords. Similarly, the query initialization of an arraylist in one line in Table 1 returns snippets containing “new ArrayList⟨⟩” although the snippet does not include the keyword initialization. Figure 11b shows another example of the associative search. When searching play a song. DeepCS not only returns snippets with matching keywords but also recommends results with semantically related words such as audio and voice."
+  }, {
+    "heading": "6 DISCUSSIONS",
+    "text": ""
+  }, {
+    "heading": "6.1 Why does DeepCS Work?",
+    "text": "We have identified three advantages of DeepCS that may explain its effectiveness in code search: A unified representation of heterogeneous data Source code and natural language queries are heterogeneous. By jointly embedding source code and natural language query into the same vector representation, their similarities can be measured more accurately. Better query understanding throughdeep learningUnlike traditional techniques, DeepCS learns queries and source code representations with deep learning. Characteristics of queries, such as semantically related words and word orders, are considered in these models [27]. Therefore, it can recognize the semantics of query and code better. For example, it can distinguish the query queue an event to be run on the thread from the query run an event on the event queue. Clustering snippets by natural language semanticsAn advantage of our approach is that it embeds semantically similar code snippets into vectors that are close to each other. Semantically similar code snippets are grouped according to their semantics. Therefore, in addition to the exact matching snippets, DeepCS also recommends the semantically related ones."
+  }, {
+    "heading": "6.2 Limitation of DeepCS",
+    "text": "Despite the advantages such as associative search, DeepCS could still return inaccurate results. It sometimes ranks partially relevant results higher than the exact matching ones. Figure 12 shows the result for the query generate md5. The exactly matching result is\nranked 7 in the result list, while partially related results such as generate checksum are recommended before the exact results. This is because DeepCS ranks results by just considering their semantic vectors. In future work, more code features (such as programming context) [58] could be considered in our model to further adjust the results."
+  }, {
+    "heading": "6.3 Threats to Validity",
+    "text": "Our goal is to improve the performance of code search over GitHub, thus both training and search are performed over GitHub corpus. There is a threat of overlap between the training and search codebases. To mitigate this threat, in our experiments, the training and search codebases are constructed to be significantly different. The training codebase only contains code that has corresponding descriptions, while the search codebase is considered in isolation and contains all code (including those do not have descriptions). We believe the threat of overfitting for this overlap is not significant as our training codebase considers a vast majority of code in Github. The most important goal of our experiments is to evaluate DeepCS in a real-world code search scenario. For that, we used 50 real queries collected from Stack Overflow to test the effectiveness of DeepCS. These queries are not descriptions/comments of Java methods and are not used for training.\nIn our experiments, the relevancy of returned results were manually graded and could suffer from subjectivity bias. To mitigate this threat, (i) the manual analysis was performed independently by two developers and (ii) the developers performed an open discussion to resolve conflict grades for the 50 questions. In the future, we will further mitigate this threat by inviting more developers for the grading.\nIn the grading of relevancy, we consider only the top 10 results. Queries that fail are identically assigned with an FRank of 11 and could be biased from the real relevancy of code snippets. However, we believe that the setting is reasonable. In real-world code search, developers usually inspect the top K results and ignore the remaining. That means it does not make much difference if a code snippet appears at rank 11 or 20 if K is 10.\nLike related work (e.g., [14, 41]), we evaluate DeepCS with popular Stack Overflow questions. SO questions may not be representative to all possible queries for code search engines. To mitigate this threat, (i) DeepCS is not trained on SO questions but on large scale Github corpus. (ii) We select the most frequently asked questions which might be also commonly asked by developers in other search engines. In the future, we will extend the scale and scope of test queries."
+  }, {
+    "heading": "7 RELATEDWORK",
+    "text": ""
+  }, {
+    "heading": "7.1 Code Search",
+    "text": "In code search, a line of work has investigated marrying stateof-the-art information retrieval and natural language processing techniques [13–15, 32, 35, 41, 45–47, 61, 81, 82]. Much of the existing work focuses on query expansion and reformulation [29, 31, 44]. For example, Hill et al. [30] reformulated queries with natural language phrasal representations of method signatures. Haiduc et al. [29] proposed to reformulate queries based on machine learning. Their method trains a machine learning model that automatically recommends a reformulation strategy based on the query properties. Lu et al. [44] proposed to extend a query with synonyms generated from WordNet. There is also much work that takes into account code characteristics. For example, McMillan et al. [47] proposed Portfolio, a code search engine that combines keyword matching with PageRank to return a chain of functions. Lv et al. [45] proposed CodeHow, a code search tool that incorporates an extended Boolean model and API matching. Ponzanelli et al. [61] proposed an approach that automatically retrieves pertinent discussions from Stack Overflow given a context in the IDE. Recently Li et al. [41] proposed RACS, a code search framework for JavaScript that considers relationships (e.g., sequencing, condition, and callback relationships) among the invoked API methods.\nAs described in Section 6, DeepCS differs from existing code search techniques in that it does not rely on information retrieval techniques. It measures the similarity between code snippets and user queries through joint embedding and deep learning. Thus, it can better understand code and query semantics.\nAs the keyword based approaches are inefficient on recognizing semantics, researchers have drawn increasing attention on semantics based code search [34, 65, 69]. For example, Reiss [65] proposed the semantics-based code search, which uses user specifications to characterize the requirement and uses transformations to adapt the searching results. However, Reiss’s approach differs significantly fromDeepCS. It does not consider the semantics of natural language queries. Furthermore, it requires users to provide not only natural language queries but also other specifications such as method declarations and test cases.\nBesides code search, there have been many other information retrieval tasks in software engineering [8, 9, 16, 23, 24, 29, 51, 55, 63, 67] such as bug localization [66, 73, 80], feature localization [19], traceability links recovery [20] and community Question Answering [11]. Ye et al. [80] proposed to embed words into vector representations to bridge the lexical gap between source code and natural language for SE-related text retrieval tasks. Different from DeepCS, the vector representations learned by their method are at the level of individual words and tokens instead of the whole query sentences. Their method is based on a bag-of-words assumption, and word sequences are not considered."
+  }, {
+    "heading": "7.2 Deep Learning for Source Code",
+    "text": "Recently, researchers have investigated possible applications of deep learning techniques to source code [7, 38, 53, 56, 60, 64, 75, 76]. A typical use of deep learning is code generation [42, 54]. For example, Mou et al. [54] proposed to generate code from natural language\nuser intentions using an RNN Encoder-Decoder model. Their results show the feasibility of applying deep learning techniques to code generation from a highly homogeneous dataset (simple programming assignments). Gu et al. [27] applies deep learning for API learning, that is, generating API usage sequences for a given natural language query. They also apply deep learning to migrate APIs between different programming languages [28]. Deep learning is also applied to code completion [64, 77]. For example, White et al. [77] applied the RNN language model to source code files and showed its effectiveness in predicting software tokens. Recently, White et al. [76] also applied deep learning to code clone detection. Their framework automatically links patterns mined at the lexical level with patterns mined at the syntactic level. In our work, we explore the application of deep learning to code search."
+  }, {
+    "heading": "8 CONCLUSION",
+    "text": "In this paper, we propose a novel deep neural network named CODEnn for code search. Instead of matching text similarity, CODEnn learns a unified vector representation of both source code and natural language queries so that code snippets semantically related to a query can be retrieved according to their vectors. As a proofof-concept application, we implement a code search tool DeepCS based on the proposed CODEnn model. Our experimental study has shown that the proposed approach is effective and outperforms the related approaches. Our source code and data are available at: https://github.com/guxd/deep-code-search\nIn the future, we will investigate more aspects of source code such as control structures to better represent high-level semantics of source code. The deep neural network we designed may also benefit other software engineering problems such as bug localization."
+  }, {
+    "heading": "9 ACKNOWLEDGMENT",
+    "text": "The authors would like to thank Dongmei Zhang at Microsoft Research Asia for her support for this project and insightful comments on the paper."
+  }],
+  "year": 2019,
+  "references": [{
+    "title": "A convolutional attention network for extreme summarization of source code",
+    "authors": ["M. Allamanis", "H. Peng", "C. Sutton"],
+    "venue": "International Conference on Machine Learning (ICML),",
+    "year": 2016
+  }, {
+    "title": "Reducing the effort of bug report triage: Recommenders for development-oriented decisions",
+    "authors": ["J. Anvik", "G.C. Murphy"],
+    "venue": "ACM Transactions on Software Engineering and Methodology (TOSEM), 20(3):10,",
+    "year": 2011
+  }, {
+    "title": "Linking e-mails and source code artifacts",
+    "authors": ["A. Bacchelli", "M. Lanza", "R. Robbes"],
+    "venue": "Proceedings of the 32nd ACM/IEEE International Conference on Software Engineering-Volume 1, pages 375–384. ACM,",
+    "year": 2010
+  }, {
+    "title": "Neural machine translation by jointly learning to align and translate",
+    "authors": ["D. Bahdanau", "K. Cho", "Y. Bengio"],
+    "venue": "arXiv preprint arXiv:1409.0473,",
+    "year": 2014
+  }, {
+    "title": "Facilitating crowd sourced software engineering via stack overflow",
+    "authors": ["O. Barzilay", "C. Treude", "A. Zagalsky"],
+    "venue": "Finding Source Code on the Web for Remix and Reuse, pages 289–308. Springer,",
+    "year": 2013
+  }, {
+    "title": "Program understanding and the concept assignment problem",
+    "authors": ["T.J. Biggerstaff", "B.G. Mitbander", "D.E. Webster"],
+    "venue": "Communications of the ACM, 37(5):72–82,",
+    "year": 1994
+  }, {
+    "title": "Example-centric programming: integrating web search into the development environment",
+    "authors": ["J. Brandt", "M. Dontcheva", "M. Weskamp", "S.R. Klemmer"],
+    "venue": "Proceedings of the SIGCHI Conference on Human Factors in Computing Systems, pages 513–522. ACM,",
+    "year": 2010
+  }, {
+    "title": "NLP2Code: Code snippet content assist via natural language tasks",
+    "authors": ["B.A. Campbell", "C. Treude"],
+    "venue": "arXiv preprint arXiv:1701.05648,",
+    "year": 2017
+  }, {
+    "title": "Searching connected API subgraph via text phrases",
+    "authors": ["W.-K. Chan", "H. Cheng", "D. Lo"],
+    "venue": "Proceedings of the ACM SIGSOFT 20th International Symposium on the Foundations of Software Engineering, page 10. ACM,",
+    "year": 2012
+  }, {
+    "title": "On the reduction of verbose queries in text retrieval based software maintenance",
+    "authors": ["O. Chaparro", "A. Marcus"],
+    "venue": "Proceedings of the 38th International Conference on Software Engineering Companion, pages 716–718. ACM,",
+    "year": 2016
+  }, {
+    "title": "Learning phrase representations using RNN encoder–decoder for statistical machine translation",
+    "authors": ["K. Cho", "B. Van Merriënboer", "Ç. Gülçehre", "D. Bahdanau", "F. Bougares", "H. Schwenk", "Y. Bengio"],
+    "venue": "Proceedings of the 2014 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 1724–1734, Doha, Qatar, Oct.",
+    "year": 2014
+  }, {
+    "title": "Natural language processing (almost) from scratch",
+    "authors": ["R. Collobert", "J. Weston", "L. Bottou", "M. Karlen", "K. Kavukcuoglu", "P. Kuksa"],
+    "venue": "Journal of Machine Learning Research, 12(Aug):2493–2537,",
+    "year": 2011
+  }, {
+    "title": "Exploring the use of deep learning for feature location",
+    "authors": ["C.S. Corley", "K. Damevski", "N.A. Kraft"],
+    "venue": "Software Maintenance and Evolution (ICSME), 2015 IEEE International Conference on, pages 556–560. IEEE,",
+    "year": 2015
+  }, {
+    "title": "Recovering traceability links between an api and its learning resources",
+    "authors": ["B. Dagenais", "M.P. Robillard"],
+    "venue": "2012 34th International Conference on Software Engineering (ICSE), pages 47–57. IEEE,",
+    "year": 2012
+  }, {
+    "title": "Applying deep learning to answer selection: A study and an open task",
+    "authors": ["M. Feng", "B. Xiang", "M.R. Glass", "L. Wang", "B. Zhou"],
+    "venue": "2015 IEEE Workshop on Automatic Speech Recognition and Understanding (ASRU), pages 813–820. IEEE,",
+    "year": 2015
+  }, {
+    "title": "DeViSE: A deep visual-semantic embedding model",
+    "authors": ["A. Frome", "G.S. Corrado", "J. Shlens", "S. Bengio", "J. Dean", "T. Mikolov"],
+    "venue": "In Advances in neural information processing systems,",
+    "year": 2013
+  }, {
+    "title": "Design and evaluation of a multi-recommendation system for local code search",
+    "authors": ["X. Ge", "D.C. Shepherd", "K. Damevski", "E. Murphy-Hill"],
+    "venue": "Journal of Visual Languages & Computing,",
+    "year": 2016
+  }, {
+    "title": "An exploratory study of the pull-based software development model",
+    "authors": ["G. Gousios", "M. Pinzger", "A. v. Deursen"],
+    "venue": "In Proceedings of the 36th International Conference on Software Engineering,",
+    "year": 2014
+  }, {
+    "title": "A novel connectionist system for unconstrained handwriting recognition",
+    "authors": ["A. Graves", "M. Liwicki", "S. Fernández", "R. Bertolami", "H. Bunke", "J. Schmidhuber"],
+    "venue": "IEEE transactions on pattern analysis and machine intelligence, 31(5):855–868,",
+    "year": 2009
+  }, {
+    "title": "A search engine for finding highly relevant applications",
+    "authors": ["M. Grechanik", "C. Fu", "Q. Xie", "C. McMillan", "D. Poshyvanyk", "C. Cumby"],
+    "venue": "2010 ACM/IEEE 32nd International Conference on Software Engineering, volume 1, pages 475–484. IEEE,",
+    "year": 2010
+  }, {
+    "title": "Deep API learning",
+    "authors": ["X. Gu", "H. Zhang", "D. Zhang", "S. Kim"],
+    "venue": "Proceedings of the ACM SIGSOFT 20th International Symposium on the Foundations of Software Engineering (FSE’16),",
+    "year": 2016
+  }, {
+    "title": "DeepAM: Migrate APIs with multi-modal sequence to sequence learning",
+    "authors": ["X. Gu", "H. Zhang", "D. Zhang", "S. Kim"],
+    "venue": "Proceedings of the Twenty-Sixth International Joint Conferences on Artifical Intelligence (IJCAI’17),",
+    "year": 2017
+  }, {
+    "title": "Automatic query reformulations for text retrieval in software engineering",
+    "authors": ["S. Haiduc", "G. Bavota", "A. Marcus", "R. Oliveto", "A. De Lucia", "T. Menzies"],
+    "venue": "Proceedings of the 2013 International Conference on Software Engineering, pages 842–851. IEEE Press,",
+    "year": 2013
+  }, {
+    "title": "Improving source code search with natural language phrasal representations of method signatures",
+    "authors": ["E. Hill", "L. Pollock", "K. Vijay-Shanker"],
+    "venue": "Proceedings of the 2011 26th IEEE/ACM International Conference on Automated Software Engineering, pages 524–527. IEEE Computer Society,",
+    "year": 2011
+  }, {
+    "title": "NL-based query refinement and contextualized code search results: A user study",
+    "authors": ["E. Hill", "M. Roldan-Vega", "J.A. Fails", "G. Mallet"],
+    "venue": "Software Maintenance, Reengineering and Reverse Engineering (CSMR-WCRE), 2014 Software Evolution Week-IEEE Conference on, pages 34–43. IEEE,",
+    "year": 2014
+  }, {
+    "title": "The end-to-end use of source code examples: An exploratory study",
+    "authors": ["R. Holmes", "R. Cottrell", "R.J. Walker", "J. Denzinger"],
+    "venue": "Software Maintenance, 2009. ICSM 2009. IEEE International Conference on, pages 555–558. IEEE,",
+    "year": 2009
+  }, {
+    "title": "Deep visual-semantic alignments for generating image descriptions",
+    "authors": ["A. Karpathy", "L. Fei-Fei"],
+    "venue": "Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition, pages 3128–3137,",
+    "year": 2015
+  }, {
+    "title": "Repairing programs with semantic code search (T)",
+    "authors": ["Y. Ke", "K.T. Stolee", "C. Le Goues", "Y. Brun"],
+    "venue": "Automated Software Engineering (ASE), 2015 30th IEEE/ACM International Conference on, pages 295–306. IEEE,",
+    "year": 2015
+  }, {
+    "title": "Spottingworking code examples",
+    "authors": ["I. Keivanloo", "J. Rilling", "Y. Zou"],
+    "venue": "Proceedings of the 36th International Conference on Software Engineering, pages 664–675. ACM,",
+    "year": 2014
+  }, {
+    "title": "Convolutional neural networks for sentence classification",
+    "authors": ["Y. Kim"],
+    "venue": "arXiv preprint arXiv:1408.5882,",
+    "year": 2014
+  }, {
+    "title": "Adam: A method for stochastic optimization",
+    "authors": ["D. Kingma", "J. Ba"],
+    "venue": "arXiv preprint arXiv:1412.6980,",
+    "year": 2014
+  }, {
+    "title": "Combining deep learning with information retrieval to localize buggy files for bug reports (n)",
+    "authors": ["A.N. Lam", "A.T. Nguyen", "H.A. Nguyen", "T.N. Nguyen"],
+    "venue": "Automated Software Engineering (ASE), 2015 30th IEEE/ACM International Conference on, pages 476–481. IEEE,",
+    "year": 2015
+  }, {
+    "title": "Distributed representations of sentences and documents",
+    "authors": ["Q. Le", "T. Mikolov"],
+    "venue": "Proceedings of the 31st International Conference on Machine Learning (ICML-14), pages 1188–1196,",
+    "year": 2014
+  }, {
+    "title": "Efficient mini-batch training for stochastic optimization",
+    "authors": ["M. Li", "T. Zhang", "Y. Chen", "A.J. Smola"],
+    "venue": "Proceedings of the 20th ACM SIGKDD international conference on Knowledge discovery and data mining, pages 661–670. ACM,",
+    "year": 2014
+  }, {
+    "title": "Relationship-aware code search for JavaScript frameworks",
+    "authors": ["X. Li", "Z. Wang", "Q. Wang", "S. Yan", "T. Xie", "H. Mei"],
+    "venue": "Proceedings of the ACM SIGSOFT 24th International Symposium on the Foundations of Software Engineering. ACM,",
+    "year": 2016
+  }, {
+    "title": "Latent predictor networks for code generation",
+    "authors": ["W. Ling", "E. Grefenstette", "K.M. Hermann", "T. Kocisky", "A. Senior", "F. Wang", "P. Blunsom"],
+    "venue": "arXiv preprint arXiv:1603.06744,",
+    "year": 2016
+  }, {
+    "title": "Sourcerer: mining and searching internet-scale software repositories",
+    "authors": ["E. Linstead", "S. Bajracharya", "T. Ngo", "P. Rigor", "C. Lopes", "P. Baldi"],
+    "venue": "Data Mining and Knowledge Discovery, 18:300–336,",
+    "year": 2009
+  }, {
+    "title": "Query expansion via wordnet for effective code search",
+    "authors": ["M. Lu", "X. Sun", "S. Wang", "D. Lo", "Y. Duan"],
+    "venue": "2015 IEEE 22nd International Conference on Software Analysis, Evolution, and Reengineering (SANER), pages 545–549. IEEE,",
+    "year": 2015
+  }, {
+    "title": "CodeHow: Effective code search based on API understanding and extended boolean model",
+    "authors": ["F. Lv", "H. Zhang", "J. Lou", "S. Wang", "D. Zhang", "J. Zhao"],
+    "venue": "Proceedings of the 30th IEEE/ACM International Conference on Automated Software Engineering (ASE 2015). IEEE,",
+    "year": 2015
+  }, {
+    "title": "Exemplar: A source code search engine for finding highly relevant applications",
+    "authors": ["C. McMillan", "M. Grechanik", "D. Poshyvanyk", "C. Fu", "Q. Xie"],
+    "venue": "IEEE Transactions on Software Engineering, 38(5):1069–1087,",
+    "year": 2012
+  }, {
+    "title": "Portfolio: finding relevant functions and their usage",
+    "authors": ["C. McMillan", "M. Grechanik", "D. Poshyvanyk", "Q. Xie", "C. Fu"],
+    "venue": "Proceedings of the 33rd International Conference on Software Engineering (ICSE’11), pages 111–120. IEEE,",
+    "year": 2011
+  }, {
+    "title": "Efficient estimation of word representations in vector space",
+    "authors": ["T. Mikolov", "K. Chen", "G. Corrado", "J. Dean"],
+    "venue": "arXiv preprint arXiv:1301.3781,",
+    "year": 2013
+  }, {
+    "title": "Recurrent neural network based language model",
+    "authors": ["T. Mikolov", "M. Karafiát", "L. Burget", "J. Cernockỳ", "S. Khudanpur"],
+    "venue": "INTERSPEECH 2010, 11th Annual Conference of the International Speech Communication Association, Makuhari, Chiba, Japan, September 26-30, 2010, pages 1045–1048,",
+    "year": 2010
+  }, {
+    "title": "Distributed representations of words and phrases and their compositionality",
+    "authors": ["T. Mikolov", "I. Sutskever", "K. Chen", "G.S. Corrado", "J. Dean"],
+    "venue": "Advances in neural information processing systems, pages 3111–3119,",
+    "year": 2013
+  }, {
+    "title": "A large scale empirical study on software reuse in mobile apps",
+    "authors": ["I.J. Mojica", "B. Adams", "M. Nagappan", "S. Dienst", "T. Berger", "A.E. Hassan"],
+    "venue": "IEEE Software, 31(2):78–86,",
+    "year": 2014
+  }, {
+    "title": "Training feedforward neural networks using genetic algorithms",
+    "authors": ["D.J. Montana", "L. Davis"],
+    "venue": "IJCAI, volume 89, pages 762–767,",
+    "year": 1989
+  }, {
+    "title": "Convolutional neural networks over tree structures for programming language processing",
+    "authors": ["L. Mou", "G. Li", "L. Zhang", "T. Wang", "Z. Jin"],
+    "venue": "Proceedings of the Thirtieth AAAI Conference on Artificial Intelligence, AAAI’16, pages 1287–1293. AAAI Press,",
+    "year": 2016
+  }, {
+    "title": "On end-to-end program generation from user intention by deep neural networks",
+    "authors": ["L. Mou", "R. Men", "G. Li", "L. Zhang", "Z. Jin"],
+    "venue": "arXiv,",
+    "year": 2015
+  }, {
+    "title": "Software engineering for the web: the state of the practice",
+    "authors": ["A. Nederlof", "A. Mesbah", "A. v. Deursen"],
+    "venue": "In Companion Proceedings of the 36th International Conference on Software Engineering,",
+    "year": 2014
+  }, {
+    "title": "Exploring api embedding for api usages and applications",
+    "authors": ["T.D. Nguyen", "A.T. Nguyen", "H.D. Phan", "T.N. Nguyen"],
+    "venue": "Proceedings of the 39th International Conference on Software Engineering, pages 438–449. IEEE Press,",
+    "year": 2017
+  }, {
+    "title": "Query expansion based on crowd knowledge for code search",
+    "authors": ["L. Nie", "H. Jiang", "Z. Ren", "Z. Sun", "X. Li"],
+    "venue": "IEEE Transactions on Services Computing, 9(5):771–783,",
+    "year": 2016
+  }, {
+    "title": "Learning to rank code examples for code search engines",
+    "authors": ["H. Niu", "I. Keivanloo", "Y. Zou"],
+    "venue": "Empirical Software Engineering, pages 1–33,",
+    "year": 2016
+  }, {
+    "title": "Deep sentence embedding using the long short term memory network: Analysis and application to information retrieval",
+    "authors": ["H. Palangi", "L. Deng", "Y. Shen", "J. Gao", "X. He", "J. Chen", "X. Song", "R.K. Ward"],
+    "venue": "CoRR, abs/1502.06922,",
+    "year": 2015
+  }, {
+    "title": "Building program vector representations for deep learning",
+    "authors": ["H. Peng", "L. Mou", "G. Li", "Y. Liu", "L. Zhang", "Z. Jin"],
+    "venue": "Proceedings of the 8th International Conference on Knowledge Science, Engineering and Management - Volume 9403, KSEM 2015, pages 547–553, New York, NY, USA,",
+    "year": 2015
+  }, {
+    "title": "Mining stackoverflow to turn the ide into a self-confident programming prompter",
+    "authors": ["L. Ponzanelli", "G. Bavota", "M. Di Penta", "R. Oliveto", "M. Lanza"],
+    "venue": "Proceedings of the 11th Working Conference on Mining Software Repositories, pages 102–111. ACM,",
+    "year": 2014
+  }, {
+    "title": "SWIM: synthesizing what I mean: code search and idiomatic snippet synthesis",
+    "authors": ["M. Raghothaman", "Y. Wei", "Y. Hamadi"],
+    "venue": "Proceedings of the 38th International Conference on Software Engineering, pages 357–367. ACM,",
+    "year": 2016
+  }, {
+    "title": "Patterns of co-evolution between requirements and source code",
+    "authors": ["M. Rahimi", "J. Cleland-Huang"],
+    "venue": "2015 IEEE Fifth International Workshop on Requirements Patterns (RePa), pages 25–31. IEEE,",
+    "year": 2015
+  }, {
+    "title": "Code completion with statistical language models",
+    "authors": ["V. Raychev", "M. Vechev", "E. Yahav"],
+    "venue": "In Proceedings of the 35th ACM SIGPLAN Conference on Programming Language Design and Implementation. ACM,",
+    "year": 2014
+  }, {
+    "title": "Semantics-based code search",
+    "authors": ["S.P. Reiss"],
+    "venue": "Proceedings of the 31st International Conference on Software Engineering, pages 243–253. IEEE Computer Society,",
+    "year": 2009
+  }, {
+    "title": "Fault localization with nearest neighbor queries",
+    "authors": ["M. Renieres", "S.P. Reiss"],
+    "venue": "Automated Software Engineering, 2003. Proceedings. 18th IEEE International Conference on, pages 30–39, Oct",
+    "year": 2003
+  }, {
+    "title": "Discovering essential code elements in informal documentation",
+    "authors": ["P.C. Rigby", "M.P. Robillard"],
+    "venue": "Proceedings of the 2013 International Conference on Software Engineering, pages 832–841. IEEE Press,",
+    "year": 2013
+  }, {
+    "title": "An examination of software engineering work practices",
+    "authors": ["J. Singer", "T. Lethbridge", "N. Vinson", "N. Anquetil"],
+    "venue": "CASCON First Decade High Impact Papers, pages 174–188. IBM Corp.,",
+    "year": 2010
+  }, {
+    "title": "Solving the search for source code",
+    "authors": ["K.T. Stolee", "S. Elbaum", "D. Dobos"],
+    "venue": "ACM Transactions on Software Engineering and Methodology (TOSEM), 23(3):26,",
+    "year": 2014
+  }, {
+    "title": "Sequence to sequence learning with neural networks",
+    "authors": ["I. Sutskever", "O. Vinyals", "Q.V. Le"],
+    "venue": "Advances in neural information processing systems, pages 3104–3112,",
+    "year": 2014
+  }, {
+    "title": "Lstm-based deep learning models for non-factoid answer selection",
+    "authors": ["M. Tan", "B. Xiang", "B. Zhou"],
+    "venue": "arXiv preprint arXiv:1511.04108,",
+    "year": 2015
+  }, {
+    "title": "Word representations: a simple and general method for semi-supervised learning",
+    "authors": ["J. Turian", "L. Ratinov", "Y. Bengio"],
+    "venue": "Proceedings of the 48th annual meeting of the association for computational linguistics, pages 384–394. Association for Computational Linguistics,",
+    "year": 2010
+  }, {
+    "title": "Using a distributed representation of words in localizing relevant files for bug reports",
+    "authors": ["Y. Uneno", "O. Mizuno", "E.-H. Choi"],
+    "venue": "Software Quality, Reliability and Security (QRS), 2016 IEEE International Conference on, pages 183–190. IEEE,",
+    "year": 2016
+  }, {
+    "title": "Wsabie: scaling up to large vocabulary image annotation",
+    "authors": ["J. Weston", "S. Bengio", "N. Usunier"],
+    "venue": "Proceedings of the Twenty-Second international joint conference on Artificial Intelligence-Volume Volume Three, pages 2764–2770. AAAI Press,",
+    "year": 2011
+  }, {
+    "title": "Sorting and transforming program repair ingredients via deep learning code similarities",
+    "authors": ["M. White", "M. Tufano", "M. Martinez", "M. Monperrus", "D. Poshyvanyk"],
+    "venue": "arXiv preprint arXiv:1707.04742,",
+    "year": 2017
+  }, {
+    "title": "Deep learning code fragments for code clone detection",
+    "authors": ["M. White", "M. Tufano", "C. Vendome", "D. Poshyvanyk"],
+    "venue": "Proceedings of the 31th IEEE/ACM International Conference on Automated Software Engineering (ASE 2016),",
+    "year": 2016
+  }, {
+    "title": "Toward deep learning software repositories",
+    "authors": ["M. White", "C. Vendome", "M. Linares-Vásquez", "D. Poshyvanyk"],
+    "venue": "Mining Software Repositories (MSR), 2015 IEEE/ACM 12th Working Conference on, pages 334–345. IEEE,",
+    "year": 2015
+  }, {
+    "title": "Jointly modeling deep video and compositional text to bridge vision and language in a unified framework",
+    "authors": ["R. Xu", "C. Xiong", "W. Chen", "J.J. Corso"],
+    "venue": "AAAI, pages 2346–2352. Citeseer,",
+    "year": 2015
+  }, {
+    "title": "Learning to rank relevant files for bug reports using domain knowledge",
+    "authors": ["X. Ye", "R. Bunescu", "C. Liu"],
+    "venue": "Proceedings of the 22nd ACM SIGSOFT International Symposium on Foundations of Software Engineering, pages 689–699. ACM,",
+    "year": 2014
+  }, {
+    "title": "From word embeddings to document similarities for improved information retrieval in software engineering",
+    "authors": ["X. Ye", "H. Shen", "X. Ma", "R. Bunescu", "C. Liu"],
+    "venue": "Proceedings of the 38th International Conference on Software Engineering, pages 404–415. ACM,",
+    "year": 2016
+  }, {
+    "title": "Bing developer assistant: Improving developer productivity by recommending sample code",
+    "authors": ["H. Zhang", "A. Jain", "G. Khandelwal", "C. Kaushik", "S. Ge", "W. Hu"],
+    "venue": "Proceedings of the 2016 24th ACM SIGSOFT International Symposium on Foundations of Software Engineering, FSE 2016, pages 956–961. ACM,",
+    "year": 2016
+  }, {
+    "title": "API Deprecation: A retrospective analysis and detection method for code examples on the web",
+    "authors": ["J. Zhou", "R.J. Walker"],
+    "venue": "Proceedings of the ACM SIGSOFT 20th International Symposium on the Foundations of Software Engineering (FSE’16). ACM,",
+    "year": 2016
+  }],
+  "id": "SP:e033a0b29af2939fd44e5765d03380c08897a9e8",
+  "authors": [{
+    "name": "Xiaodong Gu",
+    "affiliations": []
+  }, {
+    "name": "Hongyu Zhang",
+    "affiliations": []
+  }, {
+    "name": "Sunghun Kim",
+    "affiliations": []
+  }],
+  "abstractText": "To implement a program functionality, developers can reuse previously written code snippets by searching through a large-scale codebase. Over the years, many code search tools have been proposed to help developers. The existing approaches often treat source code as textual documents and utilize information retrieval models to retrieve relevant code snippets that match a given query. These approaches mainly rely on the textual similarity between source code and natural language query. They lack a deep understanding of the semantics of queries and source code. In this paper, we propose a novel deep neural network named CODEnn (Code-Description Embedding Neural Network). Instead of matching text similarity, CODEnn jointly embeds code snippets and natural language descriptions into a high-dimensional vector space, in such a way that code snippet and its corresponding description have similar vectors. Using the unified vector representation, code snippets related to a natural language query can be retrieved according to their vectors. Semantically related words can also be recognized and irrelevant/noisy keywords in queries can be handled. As a proof-of-concept application, we implement a code search tool named DeepCS using the proposed CODEnn model. We empirically evaluate DeepCS on a large scale codebase collected from GitHub. The experimental results show that our approach can effectively retrieve relevant code snippets and outperforms previous techniques.",
+  "title": "Deep Code Search"
+}

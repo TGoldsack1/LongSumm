@@ -1,0 +1,351 @@
+{
+  "sections": [{
+    "heading": "1 Introduction",
+    "text": "Batch Normalization (Batch Norm or BN) [1] has been established as a very effective component in deep learning, largely helping push the frontier in computer vision [2,3] and beyond [4]. BN normalizes the features by the mean and variance computed within a (mini-)batch. This has been shown by many practices to ease optimization and enable very deep networks to converge. The stochastic uncertainty of the batch statistics also acts as a regularizer that can benefit generalization. BN has been a foundation of many state-of-the-art algorithms.\nDespite its great success, BN exhibits drawbacks that are also caused by its distinct behavior of normalizing along the batch dimension. In particular, it is required for BN to work with a sufficiently large batch size (e.g ., 32 per worker1 [1,2,3]). A small batch leads to inaccurate estimation of the batch statistics, and reducing BN’s batch size increases the model error dramatically (Figure 1).\n1 In the context of this paper, we use “batch size” to refer to the number of samples per worker (e.g ., GPU). BN’s statistics are computed for each worker, but not broadcast across workers, as is standard in many libraries.\nAs a result, many recent models [2,3,5,6,7] are trained with non-trivial batch sizes that are memory-consuming. The heavy reliance on BN’s effectiveness to train models in turn prohibits people from exploring higher-capacity models that would be limited by memory.\nThe restriction on batch sizes is more demanding in computer vision tasks including detection [8,9,10], segmentation [11,10], video recognition [12,13], and other high-level systems built on them. E.g., the Fast/er and Mask R-CNN frameworks [8,9,10] use a batch size of 1 or 2 images because of higher resolution, where BN is “frozen” by transforming to a linear layer [3]; in video classification with 3D convolutions [12,13], the presence of spatial-temporal features introduces a trade-off between the temporal length and batch size. The usage of BN often requires these systems to compromise between the model design and batch sizes.\nThis paper presents Group Normalization (GN) as a simple alternative to BN. We notice that many classical features like SIFT [14] and HOG [15] are group-wise features and involve group-wise normalization. For example, a HOG vector is the outcome of several spatial cells where each cell is represented by a normalized orientation histogram. Analogously, we propose GN as a layer that divides channels into groups and normalizes the features within each group (Figure 2). GN does not exploit the batch dimension, and its computation is independent of batch sizes.\nGN behaves very stably over a wide range of batch sizes (Figure 1). With a batch size of 2 samples, GN has 10.6% lower error than its BN counterpart for ResNet-50 [3] in ImageNet [16]. With a regular batch size, GN is comparably good as BN (with a gap of ∼0.5%) and outperforms other normalization variants [17,18,19]. Moreover, although the batch size may change, GN can naturally transfer from pre-training to fine-tuning. GN shows improved results vs. its BN counterpart on Mask R-CNN for COCO object detection and segmentation [20], and on 3D convolutional networks for Kinetics video classification [21]. The effectiveness of GN in ImageNet, COCO, and Kinetics demonstrates that GN is a competitive alternative to BN that has been dominant in these tasks.\nThere have been existing methods, such as Layer Normalization (LN) [17] and Instance Normalization (IN) [18] (Figure 2), that also avoid normalizing along the batch dimension. These methods are effective for training sequential models (RNN/LSTM [22,23]) or generative models (GANs [24,25]). But as we will show by experiments, both LN and IN have limited success in visual recognition, for\nwhich GN presents better results. Conversely, GN could be used in place of LN and IN and thus is applicable for sequential or generative models. This is beyond the focus of this paper, but it is suggestive for future research."
+  }, {
+    "heading": "2 Related Work",
+    "text": "Normalization. Normalization layers in deep networks had been widely used before the development of BN. Local Response Normalization (LRN) [26,27,28] was a component in AlexNet [28] and following models [29,30,31]. LRN computes the statistics in a small neighborhood for each pixel.\nBatch Normalization [1] performs more global normalization along the batch dimension (and as importantly, it suggests to do this for all layers). But the concept of “batch” is not always present, or it may change from time to time. For example, batch-wise normalization is not legitimate at inference time, so the mean and variance are pre-computed from the training set [1], often by running average; consequently, there is no normalization performed when testing. The pre-computed statistics may also change when the target data distribution changes [32]. These issues lead to inconsistency at training, transferring, and testing time. In addition, as aforementioned, reducing the batch size can have dramatic impact on the estimated batch statistics.\nSeveral normalization methods [17,18,19,33,34] have been proposed to avoid exploiting the batch dimension. Layer Normalization (LN) [17] operates along the channel dimension, and Instance Normalization (IN) [18] performs BN-like computation but only for each sample (Figure 2). Instead of operating on features, Weight Normalization (WN) [19] proposes to normalize the filter weights. These methods do not suffer from the issues caused by the batch dimension, but they have not been able to approach BN’s accuracy in many visual recognition tasks. We compare with these methods in context of the remaining sections.\nAddressing small batches. Ioffe [35] proposes Batch Renormalization (BR) that alleviates BN’s issue involving small batches. BR introduces two extra parameters that constrain the estimated mean and variance of BN within a certain range, reducing their drift when the batch size is small. BR has better accuracy than BN in the small-batch regime. But BR is also batch-dependent, and when the batch size decreases its accuracy still degrades [35].\nThere are also attempts to avoid using small batches. The object detector in [36] performs synchronized BN whose mean and variance are computed across multiple GPUs. However, this method does not solve the problem of small batches; instead, it migrates the algorithm problem to engineering and hardware demands, using a number of GPUs proportional to BN’s requirements. Moreover, the synchronized BN computation prevents using asynchronous solvers (ASGD [37]), a practical solution to large-scale training widely used in industry. These issues can limit the scope of using synchronized BN.\nInstead of addressing the batch statistics computation (e.g ., [35,36]), our normalization method inherently avoids this computation.\nGroup-wise computation. Group convolutions have been presented by AlexNet [28] for distributing a model into two GPUs. The concept of groups as a dimension for model design has been more widely studied recently. The work of ResNeXt [7] investigates the trade-off between depth, width, and groups, and it suggests that a larger number of groups can improve accuracy under similar computational cost. MobileNet [38] and Xception [39] exploit channel-wise (also called “depth-wise”) convolutions, which are group convolutions with a group number equal to the channel number. ShuffleNet [40] proposes a channel shuffle operation that permutes the axes of grouped features. These methods all involve dividing the channel dimension into groups. Despite the relation to these methods, GN does not require group convolutions. GN is a generic layer, as we evaluate in standard ResNets [3]."
+  }, {
+    "heading": "3 Group Normalization",
+    "text": "The channels of visual representations are not entirely independent. Classical features of SIFT [14], HOG [15], and GIST [41] are group-wise representations by design, where each group of channels is constructed by some kind of histogram. These features are often processed by group-wise normalization over each histogram or each orientation. Higher-level features such as VLAD [42] and Fisher Vectors (FV) [43] are also group-wise features where a group can be thought of as the sub-vector computed with respect to a cluster.\nAnalogously, it is not necessary to think of deep neural network features as unstructured vectors. For example, for conv1 (the first convolutional layer) of a network, it is reasonable to expect a filter and its horizontal flipping to exhibit similar distributions of filter responses on natural images. If conv1 happens to approximately learn this pair of filters, or if the horizontal flipping (or other transformations) is made into the architectures by design [44,45], then the corresponding channels of these filters can be normalized together.\nThe higher-level layers are more abstract and their behaviors are not as intuitive. However, in addition to orientations (SIFT [14], HOG [15], or [44,45]), there are many factors that could lead to grouping, e.g ., frequency, shapes, illumination, textures. Their coefficients can be interdependent. In fact, a wellaccepted computational model in neuroscience is to normalize across the cell\nresponses [46,47,48,49], “with various receptive-field centers (covering the visual field) and with various spatiotemporal frequency tunings” (p183, [46]); this can happen not only in the primary visual cortex, but also “throughout the visual system” [49]. Motivated by these works, we propose new generic group-wise normalization for deep neural networks.\nFormulation. We first describe a general formulation of feature normalization, and then present GN in this formulation. A family of feature normalization methods, including BN, LN, IN, and GN, perform the following computation:\nx̂i = 1\nσi (xi − µi). (1)\nHere x is the feature computed by a layer, and i is an index. In the case of 2D images, i = (iN , iC , iH , iW ) is a 4D vector indexing the features in (N,C,H,W ) order, where N is the batch axis, C is the channel axis, and H and W are the spatial height and width axes.\nµ and σ in (1) are the mean and standard deviation (std) computed by:\nµi = 1\nm\n∑\nk∈Si\nxk, σi =\n√\n1\nm\n∑\nk∈Si\n(xk − µi)2 + ǫ, (2)\nwith ǫ as a small constant. Si is the set of pixels in which the mean and std are computed, and m is the size of this set. Many types of feature normalization methods mainly differ in how the set Si is defined (Figure 2), discussed as follows.\nIn Batch Norm [1], the set Si is defined as:\nSi = {k | kC = iC}, (3)\nwhere iC (and kC) denotes the sub-index of i (and k) along the C axis. This means that the pixels sharing the same channel index are normalized together, i.e., for each channel, BN computes µ and σ along the (N,H,W ) axes. In Layer Norm [17], the set is:\nSi = {k | kN = iN}, (4)\nmeaning that LN computes µ and σ along the (C,H,W ) axes for each sample. In Instance Norm [18], the set is:\nSi = {k | kN = iN , kC = iC}. (5)\nmeaning that IN computes µ and σ along the (H,W ) axes for each sample and each channel. The relations among BN, LN, and IN are in Figure 2.\nAs in [1], all methods of BN, LN, and IN learn a per-channel linear transform to compensate for the possible lost of representational ability:\nyi = γx̂i + β, (6)\nwhere γ and β are trainable scale and shift (indexed by iC in all case, which we omit for simplifying notations).\nGroup Norm. A Group Norm layer computes µ and σ in Si defined as:\nSi = {k | kN = iN , ⌊ kC C/G ⌋ = ⌊ iC C/G ⌋}. (7)\nHere G is the number of groups, which is a pre-defined hyper-parameter (G = 32 by default). C/G is the number of channels per group. ⌊·⌋ is the floor operation, and “⌊ kCC/G⌋ = ⌊ iC C/G⌋” means that the indexes i and k are in the same group of channels, assuming each group of channels are stored in a sequential order along the C axis. GN computes µ and σ along the (H,W ) axes and along a group of CG channels. The computation of GN is illustrated in Figure 2 (rightmost), which is a simple case of 2 groups (G = 2) each having 3 channels.\nGiven Si in Eqn.(7), a GN layer is defined by Eqn.(1), (2), and (6). Specifically, the pixels in the same group are normalized together by the same µ and σ. GN also learns the per-channel γ and β.\nRelation to Prior Work. LN, IN, and GN all perform independent computations along the batch axis. The two extreme cases of GN are equivalent to LN and IN (Figure 2).\nGN becomes LN [17] if we set the group number as G = 1. LN assumes all channels in a layer make “similar contributions” [17]. Unlike the case of fully-connected layers studied in [17], this assumption can be less valid with the presence of convolutions, as discussed in [17]. GN is less restricted than LN, because each group of channels (instead of all of them) are assumed to subject to the shared mean and variance; the model still has flexibility of learning a different distribution for each group. This leads to improved representational power of GN over LN, as shown by the lower training and validation error in experiments (Figure 4).\nGN becomes IN [18] if we set the group number as G = C (i.e., one channel per group). But IN can only rely on the spatial dimension for computing the mean and variance and it misses the opportunity of exploiting the channel dependence.\nImplementation. GN can be easily implemented by a few lines of code in PyTorch [50] and TensorFlow [51] where automatic differentiation is supported. Figure 3 shows the code based on TensorFlow. In fact, we only need to specify how the mean and variance (“moments”) are computed, along the appropriate axes as defined by the normalization method."
+  }, {
+    "heading": "4 Experiments",
+    "text": ""
+  }, {
+    "heading": "4.1 Image Classification in ImageNet",
+    "text": "Implementation details. As standard practice [3,52], we use 8 GPUs to train all models, and the batch mean and variance of BN are computed within each GPU. We use the method of [53] to initialize all convolutions for all models. We use 1 to initialize all γ parameters, except for each residual block’s last normalization layer where we initialize γ by 0 following [54] (such that the initial state of a residual block is identity). We use a weight decay of 0.0001 for all weight layers, including γ and β (following [52] but unlike [3,54]). We train 100 epochs for all models, and decrease the learning rate by 10× at 30, 60, and 90 epochs. During training, we adopt the data augmentation of [31] as implemented by [52]. We evaluate the top-1 classification error on the center crops of 224×224 pixels in the validation set. To reduce random variations, we report the median error rate of the final 5 epochs [54]. Other implementation details follow [52].\nOur baseline is the ResNet trained with BN [3]. To compare with LN, IN, and GN, we replace BN with the specific variant. We use the same hyper-parameters for all models. We set G = 32 for GN by default.\nComparison of feature normalization methods. We first experiment with a regular batch size of 32 images (per GPU) [1,3]. BN works successfully in this regime, so this is a strong baseline to compare with. Figure 4 shows the error curves, and Table 1 shows the final results. All of these normalization methods are able to converge. LN has a small degradation of 1.7% comparing with BN. This is an encouraging result, as it suggests that normalizing along all channels (as done by LN) of a convolutional network is reasonably good. IN also makes the model converge, but is 4.8% worse than BN.\nIn this regime where BN works well, GN is able to approach BN’s accuracy, with a decent degradation of 0.5% in the validation set. Actually, Figure 4 (left) shows that GN has lower training error than BN, indicating that GN is effective for easing optimization. The slightly higher validation error of GN implies that GN loses some regularization ability of BN. This is understandable, because BN’s mean and variance computation introduces uncertainty caused by the stochastic batch sampling, which helps regularization [1]. This uncertainty is missing in GN (and LN/IN). But it is possible that GN combined with a suitable regularizer will improve results. This can be a future research topic.\nSmall batch sizes. Although BN benefits from the stochasticity under some situations, its error increases when the batch size becomes smaller and the uncertainty gets bigger. We show this in Figure 1, Figure 5, and Table 2.\nWe evaluate batch sizes of 32, 16, 8, 4, 2 images per GPU. In all cases, the BN mean and variance are computed within each GPU and not synchronized.\nAll models are trained in 8 GPUs. In this set of experiments, we adopt the linear learning rate scaling rule [55,56,54] to adapt to batch size changes — we use a learning rate of 0.1 [3] for the batch size of 32, and 0.1N/32 for a batch size of N . This linear scaling rule works well for BN if the total batch size changes (by changing the number of GPUs) but the per-GPU batch size does not change [54]. We keep the same number of training epochs for all cases (Figure 5, x-axis). All other hyper-parameters are unchanged.\nFigure 5 (left) shows that BN’s error becomes considerably higher with small batch sizes. GN’s behavior is more stable and insensitive to the batch size. Actually, Figure 5 (right) shows that GN has very similar curves (subject to random variations) across a wide range of batch sizes from 32 to 2. For a batch size of 2, GN has 10.6% lower error rate than its BN counterpart (24.1% vs. 34.7%).\nThese results indicate that the batch mean and variance estimation can be overly stochastic and inaccurate, especially when they are computed over 4 or 2 images. However, this stochasticity disappears if the statistics are computed from 1 image, in which case BN becomes similar to IN at training time. We see that IN has a better result (28.4%) than BN with a batch size of 2 (34.7%).\nThe robust results of GN in Table 2 demonstrate GN’s strength. It allows to remove the batch size constraint imposed by BN, which can give considerably more memory (e.g ., 16× or more). This will make it possible to train highercapacity models that would be otherwise bottlenecked by memory limitation. We hope this will create new opportunities in architecture design.\nComparison with Batch Renorm (BR). BR [35] introduces two extra parameters (r and d in [35]) that constrain the estimated mean and variance of BN. Their values are controlled by rmax and dmax. To apply BR to ResNet-50, we have carefully chosen these hyper-parameters, and found that rmax = 1.5 and dmax = 0.5 work best for ResNet-50. With a batch size of 4, ResNet-50 trained with BR has an error rate of 26.3%. This is better than BN’s 27.3%, but still 2.1% higher than GN’s 24.2%.\nGroup division. Thus far all presented GN models are trained with a group number of G = 32. Next we evaluate different ways of dividing into groups. With a given fixed group number, GN performs reasonably well for all values of G we\nstudied (Table 3, right panel). In the extreme case of G = 1, GN is equivalent to LN, and its error rate is higher than all cases of G > 1 studied.\nWe also evaluate fixing the number of channels per group (Table 3, left panel). Note that because the layers can have different channel numbers, the group number G can change across layers in this setting. In the extreme case of 1 channel per group, GN is equivalent to IN. Even if using as few as 2 channels per group, GN has substantially lower error than IN (25.6% vs. 28.4%). This result shows the effect of grouping channels when performing normalization.\nDeeper models. We have also compared GN with BN on ResNet-101 [3]. With a batch size of 32, our BN baseline of ResNet-101 has 22.0% validation error, and the GN counterpart has 22.4%, slightly worse by 0.4%. With a batch size of 2, GN ResNet-101’s error is 23.0%. This is still a decently stable result considering the very small batch size, and it is 8.9% better than the BN counterpart’s 31.9%.\nResults and analysis of VGG models. To study GN/BN compared to no normalization, we consider VGG-16 [57] that can be healthily trained without normalization layers. We apply BN or GN right after each convolutional layer. Figure 6 shows the evolution of the feature distributions of conv5 3 (the last convolutional layer). GN and BN behave qualitatively similar, while being substantially different with the variant that uses no normalization; this phenomenon is also observed for all other convolutional layers. This comparison suggests that performing normalization is essential for controlling the distribution of features.\nFor VGG-16, GN is better than BN by 0.4% (Figure 6, right). This possibly implies that VGG-16 benefits less from BN’s regularization effect, and GN (that leads to lower training error) is superior to BN in this case."
+  }, {
+    "heading": "4.2 Object Detection and Segmentation in COCO",
+    "text": "Next we evaluate fine-tuning the models for transferring to object detection and segmentation. These computer vision tasks in general benefit from higherresolution input, so the batch size tends to be small in common practice (1\nor 2 images/GPU [8,9,10,58]). As a result, BN is turned into a linear layer y = γσ (x−µ)+β where µ and σ are pre-computed from the pre-trained model and frozen [3]. We denote this as BN*, which in fact performs no normalization during fine-tuning. We have also tried a variant that fine-tunes BN (normalization is performed and not frozen) and found it works poorly (reducing ∼6 AP with a batch size of 2), so we ignore this variant.\nWe experiment on the Mask R-CNN baselines [10], implemented in the publicly available codebase of Detectron [59]. We use the end-to-end variant with the same hyper-parameters as in [59]. We replace BN* with GN during fine-tuning, using the corresponding models pre-trained from ImageNet.2 During fine-tuning, we use a weight decay of 0 for the γ and β parameters, which is important for good detection results when γ and β are being tuned. We fine-tune with a batch size of 1 image/GPU and 8 GPUs.\nThe models are trained in the COCO train2017 set and evaluated in the COCO val2017 set (a.k.a minival). We report the standard COCO metrics of Average Precision (AP), AP50, and AP75, for bounding box detection (AP\nbbox) and instance segmentation (APmask).\nResults of C4 backbone. Table 4 shows the comparison of GN vs. BN* on Mask R-CNN using a conv4 backbone (“C4” [10]). This C4 variant uses ResNet’s layers of up to conv4 to extract feature maps, and ResNet’s conv5 layers as the Region-of-Interest (RoI) heads for classification and regression. As they are inherited from the pre-trained model, the backbone and head both involve normalization layers.\nOn this baseline, GN improves over BN* by 1.1 box AP and 0.8 mask AP. We note that the pre-trained GN model is slightly worse than BN in ImageNet (24.1% vs. 23.6%), but GN still outperforms BN* for fine-tuning. BN* creates inconsistency between pre-training and fine-tuning (frozen), which may explain the degradation.\nResults of FPN backbone. Next we compare GN and BN* on Mask R-CNN using a Feature Pyramid Network (FPN) backbone [60], the currently state-ofthe-art framework in COCO. Unlike the C4 variant, FPN exploits all pre-trained\n2 Detectron [59] uses pre-trained models provided by the authors of [3]. For fair comparisons, we instead use the models pre-trained in this paper. The object detection and segmentation accuracy is statistically similar between these pre-trained models.\nlayers to construct a pyramid, and appends randomly initialized layers as the head. In [60], the box head consists of two hidden fully-connected layers (2fc). We find that replacing the 2fc box head with 4conv1fc (similar to [61]) can better leverage GN. The resulting comparisons are in Table 5.\nAs a baseline, BN* has 38.6 box AP using the 4conv1fc head, on par with its 2fc counterpart using the same pre-trained model (38.5 AP). By adding GN to all convolutional layers of the box head (but still using the BN* backbone), we increase the box AP by 0.9 to 39.5 (2nd row, Table 5). This ablation shows that a substantial portion of GN’s improvement for detection is from normalization in the head (which is also done by the C4 variant). On the contrary, applying BN to the box head (that has 512 RoIs per image) does not provide satisfactory result and is ∼9 AP worse — in detection, the batch of RoIs are sampled from the same image and their distribution is not i.i.d., and the non-i.i.d. distribution is also an issue that degrades BN’s batch statistics estimation [35]. GN does not suffer from this problem.\nNext we replace the FPN backbone with the GN-based counterpart, i.e., the GN pre-trained model is used during fine-tuning (3rd row, Table 5). Applying GN to the backbone alone contributes a 0.5 AP gain (from 39.5 to 40.0), suggesting that GN helps when transferring features.\nTable 6 shows the full results of GN (applied to the backbone, box head, and mask head), compared with the Detectron baseline [59] based on BN*. Using the same hyper-parameters as [59], GN increases over BN* by a healthy margin. Moreover, we found that GN is not fully trained with the default schedule in [59], so we also tried increasing the iterations from 180k to 270k (BN* does not benefit from longer training). Our final ResNet-50 GN model (“long”, Table 6) is 2.2 points box AP and 1.6 points mask AP better than its BN* variant.\nTraining Mask R-CNN from scratch. GN allows us to easily investigate training object detectors from scratch (without any pre-training). We show the results in Table 7, where the GN models are trained for 270k iterations. To our knowledge, our numbers (41.0 box AP and 36.4 mask AP) are the best from-scratch results in COCO reported to date; they can even compete with the ImageNet-pretrained results in Table 6. As a reference, with synchronous BN [36], a concurrent work [62] achieves a from-scratch result of 34.5 box AP using R50 and 36.3 using a specialized backbone."
+  }, {
+    "heading": "4.3 Video Classification in Kinetics",
+    "text": "Lastly we evaluate video classification in the Kinetics dataset [21]. This task is memory-demanding and imposes constraints on the batch sizes.\nWe experiment with Inflated 3D (I3D) convolutional networks [13]. We use the ResNet-50 I3D baseline as described in [63]. The models are pre-trained from ImageNet. For both BN and GN, we extend the normalization from over (H,W ) to over (T,H,W ), where T is the temporal axis. We train in the 400-class Kinetics training set and evaluate in the validation set. We report the top-1 and top-5 classification accuracy, using standard 10-clip testing that averages softmax scores from 10 clips regularly sampled.\nWe study two different temporal lengths: 32-frame and 64-frame input clips. The 32-frame clip is regularly sampled with a frame interval of 2 from the raw video, and the 64-frame clip is sampled continuously. The model is fully convolutional in spacetime, so the 64-frame variant consumes about 2× more memory. We study a batch size of 8 or 4 clips/GPU for the 32-frame variant, and 4 clips/GPU for the 64-frame variant due to memory limitation.\nResults of 32-frame inputs. Table 8 (col. 1, 2) shows the video classification accuracy in Kinetics using 32-frame clips. For the batch size of 8, GN is slightly worse than BN by 0.3% top-1 accuracy and 0.1% top-5. This shows that GN is competitive with BN when BN works well. For the smaller batch size of 4, GN’s accuracy is kept similar (72.8 / 90.6 vs. 73.0 / 90.6), but is better than BN’s 72.1 / 90.0. BN’s accuracy is decreased by 1.2% when the batch size decreases from 8 to 4. Figure 7 shows the error curves. BN’s error curves (left) have a noticeable gap when the batch size decreases from 8 to 4, while GN’s error curves (right) are very similar.\nResults of 64-frame inputs. Table 8 (col. 3) shows the results of using 64- frame clips. In this case, BN has a result of 73.3 / 90.8. These appear to be\nacceptable numbers (vs. 73.3 / 90.7 of 32-frame, batch size 8), but the trade-off between the temporal length (64 vs. 32) and batch size (4 vs. 8) could have been overlooked. Comparing col. 3 and col. 2 in Table 8, we find that the temporal length actually has positive impact (+1.2%), but it is veiled by BN’s negative effect of the smaller batch size.\nGN does not suffer from this trade-off. The 64-frame variant of GN has 74.5 / 91.7 accuracy, showing healthy gains over its BN counterpart and all BN variants. GN helps the model benefit from temporal length, and the longer clip boosts the top-1 accuracy by 1.7% (top-5 1.1%) with the same batch size.\nThe improvement of GN on detection, segmentation, and video classification demonstrates that GN is a strong alternative to the powerful and currently dominant BN technique in these tasks."
+  }, {
+    "heading": "5 Discussion and Future Work",
+    "text": "We have presented GN as an effective normalization layer without exploiting the batch dimension. We have evaluated GN’s behaviors in a variety of applications. We note, however, that BN has been so influential that many state-of-the-art systems and their hyper-parameters have been designed for it, which may not be optimal for GN-based models. It is possible that re-designing the systems or searching new hyper-parameters for GN will give better results."
+  }],
+  "references": [{
+    "title": "Batch normalization: Accelerating deep network training by reducing internal covariate shift",
+    "authors": ["S. Ioffe", "C. Szegedy"],
+    "venue": "ICML.",
+    "year": 2015
+  }, {
+    "title": "Rethinking the inception architecture for computer vision",
+    "authors": ["C. Szegedy", "V. Vanhoucke", "S. Ioffe", "J. Shlens", "Z. Wojna"],
+    "venue": "CVPR.",
+    "year": 2016
+  }, {
+    "title": "Deep residual learning for image recognition",
+    "authors": ["K. He", "X. Zhang", "S. Ren", "J. Sun"],
+    "venue": "CVPR.",
+    "year": 2016
+  }, {
+    "title": "Mastering the game of go without human knowledge",
+    "authors": ["D. Silver", "J. Schrittwieser", "K. Simonyan", "I. Antonoglou", "A. Huang", "A. Guez", "T. Hubert", "L. Baker", "M. Lai", "A. Bolton", "Y. Chen", "T. Lillicrap", "F. Hui", "L. Sifre", "G. van den Driessche", "T. Graepel", "D. Hassabis"],
+    "venue": "Nature",
+    "year": 2017
+  }, {
+    "title": "Inception-v4, inception-resnet and the impact of residual connections on learning",
+    "authors": ["C. Szegedy", "S. Ioffe", "V. Vanhoucke"],
+    "venue": "ICLR Workshop.",
+    "year": 2016
+  }, {
+    "title": "Densely connected convolutional networks",
+    "authors": ["G. Huang", "Z. Liu", "L. van der Maaten", "K.Q. Weinberger"],
+    "venue": "CVPR.",
+    "year": 2017
+  }, {
+    "title": "Aggregated residual transformations for deep neural networks",
+    "authors": ["S. Xie", "R. Girshick", "P. Dollár", "Z. Tu", "K. He"],
+    "venue": "CVPR.",
+    "year": 2017
+  }, {
+    "title": "Fast R-CNN",
+    "authors": ["R. Girshick"],
+    "venue": "ICCV.",
+    "year": 2015
+  }, {
+    "title": "Faster R-CNN: Towards real-time object detection with region proposal networks",
+    "authors": ["S. Ren", "K. He", "R. Girshick", "J. Sun"],
+    "venue": "NIPS.",
+    "year": 2015
+  }, {
+    "title": "Mask R-CNN",
+    "authors": ["K. He", "G. Gkioxari", "P. Dollár", "R. Girshick"],
+    "venue": "ICCV.",
+    "year": 2017
+  }, {
+    "title": "Fully convolutional networks for semantic segmentation",
+    "authors": ["J. Long", "E. Shelhamer", "T. Darrell"],
+    "venue": "CVPR.",
+    "year": 2015
+  }, {
+    "title": "Learning spatiotemporal features with 3D convolutional networks",
+    "authors": ["D. Tran", "L. Bourdev", "R. Fergus", "L. Torresani", "M. Paluri"],
+    "venue": "ICCV.",
+    "year": 2015
+  }, {
+    "title": "Quo vadis, action recognition? a new model and the kinetics dataset",
+    "authors": ["J. Carreira", "A. Zisserman"],
+    "venue": "CVPR.",
+    "year": 2017
+  }, {
+    "title": "Distinctive image features from scale-invariant keypoints",
+    "authors": ["D.G. Lowe"],
+    "venue": "IJCV",
+    "year": 2004
+  }, {
+    "title": "Histograms of oriented gradients for human detection",
+    "authors": ["N. Dalal", "B. Triggs"],
+    "venue": "CVPR.",
+    "year": 2005
+  }, {
+    "title": "ImageNet Large Scale Visual Recognition Challenge",
+    "authors": ["O. Russakovsky", "J. Deng", "H. Su", "J. Krause", "S. Satheesh", "S. Ma", "Z. Huang", "A. Karpathy", "A. Khosla", "M. Bernstein", "A.C. Berg", "L. Fei-Fei"],
+    "venue": "IJCV",
+    "year": 2015
+  }, {
+    "title": "Layer normalization",
+    "authors": ["J.L. Ba", "J.R. Kiros", "G.E. Hinton"],
+    "venue": "arXiv:1607.06450",
+    "year": 2016
+  }, {
+    "title": "Instance normalization: The missing ingredient for fast stylization",
+    "authors": ["D. Ulyanov", "A. Vedaldi", "V. Lempitsky"],
+    "venue": "arXiv:1607.08022",
+    "year": 2016
+  }, {
+    "title": "Weight normalization: A simple reparameterization to accelerate training of deep neural networks",
+    "authors": ["T. Salimans", "D.P. Kingma"],
+    "venue": "NIPS.",
+    "year": 2016
+  }, {
+    "title": "Microsoft COCO: Common objects in context",
+    "authors": ["T.Y. Lin", "M. Maire", "S. Belongie", "J. Hays", "P. Perona", "D. Ramanan", "P. Dollár", "C.L. Zitnick"],
+    "venue": "ECCV.",
+    "year": 2014
+  }, {
+    "title": "The Kinetics human action video dataset",
+    "authors": ["W. Kay", "J. Carreira", "K. Simonyan", "B. Zhang", "C. Hillier", "S. Vijayanarasimhan", "F. Viola", "T. Green", "T. Back", "P Natsev"],
+    "venue": "arXiv:1705.06950",
+    "year": 2017
+  }, {
+    "title": "Learning representations by backpropagating errors",
+    "authors": ["D.E. Rumelhart", "G.E. Hinton", "R.J. Williams"],
+    "venue": "Nature",
+    "year": 1986
+  }, {
+    "title": "Long short-term memory",
+    "authors": ["S. Hochreiter", "J. Schmidhuber"],
+    "venue": "Neural computation",
+    "year": 1997
+  }, {
+    "title": "Generative adversarial nets",
+    "authors": ["I. Goodfellow", "J. Pouget-Abadie", "M. Mirza", "B. Xu", "D. Warde-Farley", "S. Ozair", "A. Courville", "Y. Bengio"],
+    "venue": "NIPS.",
+    "year": 2014
+  }, {
+    "title": "Image-to-image translation with conditional adversarial networks",
+    "authors": ["P. Isola", "J.Y. Zhu", "T. Zhou", "A.A. Efros"],
+    "venue": "CVPR.",
+    "year": 2017
+  }, {
+    "title": "Nonlinear image representation using divisive normalization",
+    "authors": ["S. Lyu", "E.P. Simoncelli"],
+    "venue": "CVPR.",
+    "year": 2008
+  }, {
+    "title": "What is the best multi-stage architecture for object recognition",
+    "authors": ["K. Jarrett", "K. Kavukcuoglu", "Y LeCun"],
+    "year": 2009
+  }, {
+    "title": "Imagenet classification with deep convolutional neural networks",
+    "authors": ["A. Krizhevsky", "I. Sutskever", "G. Hinton"],
+    "venue": "NIPS.",
+    "year": 2012
+  }, {
+    "title": "Visualizing and understanding convolutional neural networks",
+    "authors": ["M.D. Zeiler", "R. Fergus"],
+    "venue": "ECCV.",
+    "year": 2014
+  }, {
+    "title": "Overfeat: Integrated recognition, localization and detection using convolutional networks",
+    "authors": ["P. Sermanet", "D. Eigen", "X. Zhang", "M. Mathieu", "R. Fergus", "Y. LeCun"],
+    "venue": "ICLR.",
+    "year": 2014
+  }, {
+    "title": "Going deeper with convolutions",
+    "authors": ["C. Szegedy", "W. Liu", "Y. Jia", "P. Sermanet", "S. Reed", "D. Anguelov", "D. Erhan", "V. Vanhoucke", "A. Rabinovich"],
+    "venue": "CVPR.",
+    "year": 2015
+  }, {
+    "title": "Learning multiple visual domains with residual adapters",
+    "authors": ["S.A. Rebuffi", "H. Bilen", "A. Vedaldi"],
+    "venue": "NIPS.",
+    "year": 2017
+  }, {
+    "title": "Normalization propagation: A parametric technique for removing internal covariate shift in deep networks",
+    "authors": ["D. Arpit", "Y. Zhou", "B. Kota", "V. Govindaraju"],
+    "venue": "ICML.",
+    "year": 2016
+  }, {
+    "title": "Normalizing the normalizers: Comparing and extending network normalization schemes",
+    "authors": ["M. Ren", "R. Liao", "R. Urtasun", "F.H. Sinz", "R.S. Zemel"],
+    "venue": "ICLR.",
+    "year": 2017
+  }, {
+    "title": "Batch renormalization: Towards reducing minibatch dependence in batchnormalized models",
+    "authors": ["S. Ioffe"],
+    "venue": "NIPS.",
+    "year": 2017
+  }, {
+    "title": "MegDet: A large mini-batch object detector",
+    "authors": ["C. Peng", "T. Xiao", "Z. Li", "Y. Jiang", "X. Zhang", "K. Jia", "G. Yu", "J. Sun"],
+    "venue": "CVPR.",
+    "year": 2018
+  }, {
+    "title": "Large scale distributed deep networks",
+    "authors": ["J. Dean", "G. Corrado", "R. Monga", "K. Chen", "M. Devin", "M. Mao", "A. Senior", "P. Tucker", "K. Yang", "Le", "Q.V"],
+    "venue": "NIPS.",
+    "year": 2012
+  }, {
+    "title": "MobileNets: Efficient convolutional neural networks for mobile vision applications",
+    "authors": ["A.G. Howard", "M. Zhu", "B. Chen", "D. Kalenichenko", "W. Wang", "T. Weyand", "M. Andreetto", "H. Adam"],
+    "venue": "arXiv:1704.04861",
+    "year": 2017
+  }, {
+    "title": "Xception: Deep learning with depthwise separable convolutions",
+    "authors": ["F. Chollet"],
+    "venue": "CVPR.",
+    "year": 2017
+  }, {
+    "title": "ShuffleNet: An extremely efficient convolutional neural network for mobile devices",
+    "authors": ["X. Zhang", "X. Zhou", "M. Lin", "J. Sun"],
+    "venue": "CVPR.",
+    "year": 2018
+  }, {
+    "title": "Modeling the shape of the scene: A holistic representation of the spatial envelope",
+    "authors": ["A. Oliva", "A. Torralba"],
+    "venue": "IJCV",
+    "year": 2001
+  }, {
+    "title": "Aggregating local descriptors into a compact image representation",
+    "authors": ["H. Jegou", "M. Douze", "C. Schmid", "P. Perez"],
+    "venue": "CVPR.",
+    "year": 2010
+  }, {
+    "title": "Fisher kernels on visual vocabularies for image categorization",
+    "authors": ["F. Perronnin", "C. Dance"],
+    "venue": "CVPR.",
+    "year": 2007
+  }, {
+    "title": "Exploiting cyclic symmetry in convolutional neural networks",
+    "authors": ["S. Dieleman", "J. De Fauw", "K. Kavukcuoglu"],
+    "venue": "ICML.",
+    "year": 2016
+  }, {
+    "title": "Group equivariant convolutional networks",
+    "authors": ["T. Cohen", "M. Welling"],
+    "venue": "ICML.",
+    "year": 2016
+  }, {
+    "title": "Normalization of cell responses in cat striate cortex",
+    "authors": ["D.J. Heeger"],
+    "venue": "Visual neuroscience",
+    "year": 1992
+  }, {
+    "title": "Natural signal statistics and sensory gain control",
+    "authors": ["O. Schwartz", "E.P. Simoncelli"],
+    "venue": "Nature neuroscience",
+    "year": 2001
+  }, {
+    "title": "Natural image statistics and neural representation",
+    "authors": ["E.P. Simoncelli", "B.A. Olshausen"],
+    "venue": "Annual review of neuroscience",
+    "year": 2001
+  }, {
+    "title": "Normalization as a canonical neural computation",
+    "authors": ["M. Carandini", "D.J. Heeger"],
+    "venue": "Nature Reviews Neuroscience",
+    "year": 2012
+  }, {
+    "title": "Automatic differentiation in pytorch",
+    "authors": ["A. Paszke", "S. Gross", "S. Chintala", "G. Chanan", "E. Yang", "Z. DeVito", "Z. Lin", "A. Desmaison", "L. Antiga", "A. Lerer"],
+    "year": 2017
+  }, {
+    "title": "Tensorflow: A system for large-scale machine learning",
+    "authors": ["M. Abadi", "P. Barham", "J. Chen", "Z. Chen", "A. Davis", "J. Dean", "M. Devin", "S. Ghemawat", "G. Irving", "M Isard"],
+    "venue": "Operating Systems Design and Implementation (OSDI).",
+    "year": 2016
+  }, {
+    "title": "Training and investigating Residual Nets",
+    "authors": ["S. Gross", "M. Wilber"],
+    "venue": "https://github.com/facebook/fb.resnet.torch",
+    "year": 2016
+  }, {
+    "title": "Delving deep into rectifiers: Surpassing humanlevel performance on imagenet classification",
+    "authors": ["K. He", "X. Zhang", "S. Ren", "J. Sun"],
+    "venue": "ICCV.",
+    "year": 2015
+  }, {
+    "title": "Accurate, large minibatch SGD: Training ImageNet in 1 hour",
+    "authors": ["P. Goyal", "P. Dollár", "R. Girshick", "P. Noordhuis", "L. Wesolowski", "A. Kyrola", "A. Tulloch", "Y. Jia", "K. He"],
+    "venue": "arXiv:1706.02677",
+    "year": 2017
+  }, {
+    "title": "One weird trick for parallelizing convolutional neural networks",
+    "authors": ["A. Krizhevsky"],
+    "venue": "arXiv:1404.5997",
+    "year": 2014
+  }, {
+    "title": "Optimization methods for large-scale machine learning",
+    "authors": ["L. Bottou", "F.E. Curtis", "J. Nocedal"],
+    "venue": "arXiv:1606.04838",
+    "year": 2016
+  }, {
+    "title": "Very deep convolutional networks for large-scale image recognition",
+    "authors": ["K. Simonyan", "A. Zisserman"],
+    "venue": "ICLR.",
+    "year": 2015
+  }, {
+    "title": "Focal loss for dense object detection",
+    "authors": ["T.Y. Lin", "P. Goyal", "R. Girshick", "K. He", "P. Dollár"],
+    "venue": "ICCV.",
+    "year": 2017
+  }, {
+    "title": "Detectron",
+    "authors": ["R. Girshick", "I. Radosavovic", "G. Gkioxari", "P. Dollár", "K. He"],
+    "venue": "https://github.com/facebookresearch/detectron",
+    "year": 2018
+  }, {
+    "title": "Feature pyramid networks for object detection",
+    "authors": ["T.Y. Lin", "P. Dollár", "R. Girshick", "K. He", "B. Hariharan", "S. Belongie"],
+    "venue": "CVPR.",
+    "year": 2017
+  }, {
+    "title": "Object detection networks on convolutional feature maps",
+    "authors": ["S. Ren", "K. He", "R. Girshick", "X. Zhang", "J. Sun"],
+    "venue": "TPAMI",
+    "year": 2017
+  }, {
+    "title": "DetNet: A backbone network for object detection",
+    "authors": ["Z. Li", "C. Peng", "G. Yu", "X. Zhang", "Y. Deng", "J. Sun"],
+    "venue": "arXiv:1804.06215",
+    "year": 2018
+  }, {
+    "title": "Non-local neural networks",
+    "authors": ["X. Wang", "R. Girshick", "A. Gupta", "K. He"],
+    "venue": "CVPR.",
+    "year": 2018
+  }],
+  "id": "SP:9f7919a5677290ab2eca4fa8056bdbbf7c0b11d6",
+  "authors": [{
+    "name": "Yuxin Wu",
+    "affiliations": []
+  }, {
+    "name": "Kaiming He",
+    "affiliations": []
+  }],
+  "abstractText": "Batch Normalization (BN) is a milestone technique in the development of deep learning, enabling various networks to train. However, normalizing along the batch dimension introduces problems — BN’s error increases rapidly when the batch size becomes smaller, caused by inaccurate batch statistics estimation. This limits BN’s usage for training larger models and transferring features to computer vision tasks including detection, segmentation, and video, which require small batches constrained by memory consumption. In this paper, we present Group Normalization (GN) as a simple alternative to BN. GN divides the channels into groups and computes within each group the mean and variance for normalization. GN’s computation is independent of batch sizes, and its accuracy is stable in a wide range of batch sizes. On ResNet-50 trained in ImageNet, GN has 10.6% lower error than its BN counterpart when using a batch size of 2; when using typical batch sizes, GN is comparably good with BN and outperforms other normalization variants. Moreover, GN can be naturally transferred from pre-training to fine-tuning. GN can outperform its BN-based counterparts for object detection and segmentation in COCO, and for video classification in Kinetics, showing that GN can effectively replace the powerful BN in a variety of tasks. GN can be easily implemented by a few lines of code.",
+  "title": "Group Normalization"
+}

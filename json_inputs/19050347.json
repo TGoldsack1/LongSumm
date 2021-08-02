@@ -1,0 +1,157 @@
+{
+  "sections": [{
+    "text": "I. INTRODUCTION\nThe last years the re-appearance of Convolutional Neural Networks (CNNs), whose origin traces back to the 1970s and 1980s, has led to significant advances in many computer vision tasks, such as image classification [14], object detection [8], semantic scene segmentation [16], instance segmentation [9], and monocular depth estimation [6] to name a few. The majority of these works rely on finetuning or slightly altering a CNN architecture, typically the VGG network [19], resulting in task-specific CNNs with long inference times that each require a single GPU to run. Admittedly, this is not enough for autonomous driving applications where many of the aforementioned tasks should run in parallel, in real-time, and on a limited number of GPU devices. Furthermore, as shown in recent works [13], [20], [22] there is merit in combining multiple tasks in a single integrated architecture, as one task might benefit from another leaving smaller space for ’blindspots’, which is crucial for self-driving vehicles.\nMotivated by these observations, in this paper we focus on street scene understanding and present an efficient implementation that combines the tasks of semantic scene segmentation, instance segmentation, and monocular depth estimation. Unlike state-of-the-art methods, that use networks with huge number of parameters and long inference times (e.g. VGG [19], SegNet [2], FCN [16]), we build upon a real-time architecture, in particular ENet [18] that has proven to offer image processing rates higher than 10 fps on a single GPU device. Specifically, we use a common ENet encoding step for all tasks, but introduce a branched ENet architecture for the decoding step (i.e. one branch for each of the three different tasks). Fig. 1 gives an overview of our approach.\nAlthough we do not introduce a new architecture, in this paper we show how to efficiently combine existing components to build a solid architecture for real-time scene understanding. In Sec. II we describe related work on integrated architectures that tackle multiple tasks. Next, we present the implementation details of our method in Sec. III. Finally, in Sec. IV and V we report results for each of the tasks and provide some insights into the strengths and limitations of the presented approach."
+  }, {
+    "heading": "II. RELATED WORK",
+    "text": "The amount of research performed in literature on the three main tasks studied in this paper, i.e. semantic scene segmentation, instance segmentation, and monocular depth estimation, is vast. In what follows, we solely focus on related works that have combined one or more of these tasks in a single integrated architecture.\nEigen and Fergus [5] addressed the tasks of depth prediction, surface normal estimation, and semantic labeling using a multiscale convolutional network architecture that progressively refines predictions from a sequence of scales. Uhrig et al. [22] presented a method that leverages a FCN network to predict semantic labels, depth, and an instancebased encoding using each pixel’s direction towards its corresponding instance center and consequently applying lowlevel computer vision techniques. Kokkinos [13] went one step further from the previous approaches, and introduced a CNN, namely UberNet, that jointly handles low-, mid-\nar X\niv :1\n70 8.\n02 55\n0v 1\n[ cs\n.C V\n] 8\nA ug\n2 01\n7\n, and high-level vision tasks in a unified architecture. His universal network tackles boundary detection, normal estimation, saliency estimation, semantic segmentation, human part segmentation, semantic boundary detection, region proposal generation, and object detection. Despite obtaining competitive performance while jointly addressing many different tasks, all these approaches suffer from poor inference times making them unsuitable for real-time autonomous driving applications with high frame-rate demands.\nRecently, Teichmann et al. [20] argued that improving the computational times is more important than improving performance, especially for the case of self-driving vehicles. They presented an approach to joint classification, detection, and semantic segmentation via a unified architecture where the encoder is shared amongst the three tasks, marginally reaching a computational time of 10 fps on the KITTI dataset. Our approach also focuses on further improving the computational times but addresses different tasks, in particular semantic scene segmentation, instance segmentation, and monocular depth estimation, and achieves a computational time of 21 fps on the Cityscapes dataset. To our knowledge this is the first system to estimate depth, semantic and instance segmentation at these frame-rates."
+  }, {
+    "heading": "III. METHOD",
+    "text": "In order to predict depth, semantic and instance segmentation in real-time, we modify the ENet architecture into a multi-branched network, having three output branches, one for each task (see Fig. 1). The original network, as described in [18], consists of an encoding step that has three stages (stage 1, 2, 3) and a decoding step that has two stages (stage 4, 5). Since the ENet decoding step is merely for upscaling and finetuning the output of the encoding step, sharing the full encoder (stages 1, 2, 3) between all branches would lead to poor results. Instead, our multi-branch network is constructed as follows: our shared ”encoder” consists of stages 1 and 2 of the original Enet network, before continuing to each branch that combines stage 3 of the original ENet encoder with stages 4 and 5 of the original ENet decoder. In what follows, we dive into the details of the individual branches that each performs one task.\nSemantic segmentation The semantic segmentation branch is trained using the standard pixel-wise cross-entropy loss. The classes are weighted using the method described in [18] and trained until convergence. The semantic segmentation is used for free space detection as well for classifying the objects found by the instance segmentation branch.\nInstance segmentation In order to perform instance segmentation using a typical feed-forward network without having to resort to slower detect-and-segment approaches, we use a recently introduced discriminative loss function [4] suited for real-time instance segmentation that can be plugged into an off-the-shelf network. The intuition behind the proposed loss function is that pixel embeddings (i.e. the network’s output for each pixel) with the same label (i.e. same instance) should end up close together, while\nembeddings with a different label (i.e. different instance) should end up far apart.\nInspired by Weinberger et al. [23] and other distance metric learning approaches, the authors propose a loss function with two competing terms to achieve this objective: a variance term pulling pixel embeddings towards the mean embedding of their cluster, and a distance term pushing the clusters away from each other. To relax the constraints on the network, the variance and distance terms are hinged: embeddings within a distance of δv from their cluster centers are no longer attracted to it and cluster centers further apart than 2δv are no longer repulsed. A small regularization pullforce that draws all clusters towards the origin keeps the activations bounded. These three terms can be written as follows, with C the number of clusters in ground truth, Nc the number of elements in cluster c, xi an embedding, µc the mean embedding of cluster c, ‖·‖ the L2 distance, and [x]+ = max(0, x) denotes the hinge: Lvar = 1 C ∑C c=1 1 Nc ∑Nc i=1 [‖µc − xi‖ − δv] 2 + Ldist = 1 C(C−1) ∑C cA=1 ∑C cB=1,cA 6=cB [2δd − ‖µcA − µcB‖] 2 +\nLreg = 1 C ∑C c=1‖µc‖ (1) The final loss can then be written as the sum of the above terms: Linst = Lvar + Ldist + Lreg . When the loss has converged, all pixel embeddings are within a distance of δv from their cluster center and all cluster centers are at least 2δd apart. By setting δd > 2δv , each embedding is closer to all embeddings of its own cluster than to any embedding of a different cluster. During inference we can then threshold with bandwidth b = δv around any embedding to select all embeddings belonging to the same cluster. Since the loss on the test set will not be zero, we apply a GPU accelerated variant of the mean-shift algorithm [7] to shift to a center pixel around which we threshold, avoiding outliers.\nDepth estimation from a single image The standard loss used in most regression problems, like monocular depth estimation, is the L2 loss. It minimizes the difference between predicted D and ground truth D∗ depth: L2(D,D∗) = 1n ∑ i d 2 i , with d = D − D∗. Recently, Eigen and Fergus [5] added two more terms to the typical L2 loss for the depth estimation task; one for scale invariance (− 12n2 ( ∑ i di)\n2), and another for similarity in local structure ( 1n ∑ i[(∇xdi)2 + (∇ydi)2], with ∇x and ∇y denoting the horizontal and vertical image gradients). Instead, the depth estimation branch uses the reverse Huber loss (berHu) [17],\nLdep = { |d| |d| ≤ c d2+c2\n2c |d| > c, (2)\nthat shows a good balance between penalizing high residuals that usually account for the mean depth and low residuals that explain the smaller depth details. We have experimentally found that this choice yields a better final error than using the"
+  }, {
+    "heading": "SEMANTIC SEGMENTATION RESULTS ON THE CITYSCAPES BENCHMARK.",
+    "text": ""
+  }, {
+    "heading": "INSTANCE SEGMENTATION RESULTS ON THE CITYSCAPES BENCHMARK.",
+    "text": "L2 loss, even with the added terms. Notice that, the reverse Huber loss formulation above is continuous and first order differentiable at point c, which is set to c = 15maxi(di) as in [15]. We use the SGM-calculated disparity depth maps of the Cityscapes dataset as ground truth for this task.\nTraining To train our multi-task network, the three losses described above are summed and equally weighted. Although different weights can also be used for each task we found that using equal weights already leads to good performance. We start from a pretrained encoder, trained for Cityscapes segmentation, and continue training the three tasks together. We train with a batch size of 10 at a resolution of 1024x512 and use Adam with a learning rate of 5e-4. Note that, we keep the parameters of the batch norm layers fixed."
+  }, {
+    "heading": "IV. RESULTS",
+    "text": "Semantic and instance segmentation We report Cityscapes semantic segmentation results in Tab. I and instance segmentation results on the car class in Tab. II. We notice that by jointly training our network for 3 different tasks, we match and even slightly outperform standard ENet for semantic scene segmentation. This justifies our hypothesis that training with multiple tasks at once can increase the performance of each individual task.\nAs expected, our result for instance segmentation lacks behind the other methods on the Cityscapes benchmark, since they are all optimized for accuracy and are far from real-time. They either rely on a big network or use highly accurate pre-generated semantic segmentation labels, which explains their significantly higher performance, compared to our result. Nevertheless, this work can serve as a baseline for methods that also focus on speed.\nDepth In Fig. 2 we plot for each car in the dataset its ground truth depth versus its predicted depth, which is calculated as an average over the predicted depth map masked out with the ground truth instance mask. The expected trend of nearby cars being predicted more accurately than faraway cars is clearly visible. Some of the extreme outliers"
+  }, {
+    "heading": "SOME CAUTION NECESSARY WHEN COMPARING WITH [22] (SECT. IV).",
+    "text": "are caused by cars that are mostly occluded and thus only consist of a few pixels. These extreme cases can in principle be detected and filtered out using the instance mask. We encourage others to include similar plots in their work on car depth estimation, as it is more informative than a single summary number.\nNevertheless, we follow [22] and report three metrics in Tab. III: mean absolute error (MAE), root mean squared error (RMSE) and absolute relative error (ARD). Note that we calculate the depth of each car by average pooling the predicted depth map with the ground truth instance masks. This is unlike [22], who calculate the depth with the predicted instance masks, and report the metrics only over predicted cars that match with ground truth cars. This means that the metric they report does not take the depth estimation of undetected smaller or badly visible cars into account, leading to a number that is dependent on the instance segmentation performance. By reporting the numbers over the ground truth car masks we avoid this entanglement, but some caution is necessary when comparing the numbers. We provide the numbers at different maximum depths of 100m, 50m and 25m.\nMulti-task network and speed In Tab. IV we provide a comparison between training the tasks separately (each running on an ENet of their own), versus training them together with a shared encoder as explained in the previous section. The benefits of training the three tasks together in a single multi-task network are clear: the speed almost doubles and the memory usage decreases drastically. This makes our approach suitable for real-time autonomous driving applications that require a low memory footprint. Important to note is that the accuracy of the individual tasks does not"
+  }, {
+    "heading": "SEMANTIC SEGMENTATION (IOUC ), INSTANCE SEGMENTATION (AP),",
+    "text": ""
+  }, {
+    "heading": "VERSUS TOGETHER.",
+    "text": "decrease when training together: in fact we even notice a slight performance increase. This suggests that the shared encoder can effectively learn to exploit the common structure of the three related semantic tasks."
+  }, {
+    "heading": "V. CONCLUSION",
+    "text": "Overall, our system is fast but lags behind the state-of-art in terms of segmentation accuracy. Nevertheless, we believe that it can serve as a low-complexity baseline for other multitask approaches that focus on speed, and as a starting point for further exploration of the speed-accuracy trade-off in scene understanding. Furthermore, we observe that jointly training tasks can potentially lead to increased performance. Acknowledgement: The work was supported by Toyota, and was carried out at the TRACE Lab at KU Leuven (Toyota Research on Automated Cars in Europe - Leuven)."
+  }],
+  "year": 2017,
+  "references": [{
+    "title": "Pixelwise instance segmentation with a dynamically instantiated network",
+    "authors": ["Anurag Arnab", "Philip H.S. Torr"],
+    "year": 2017
+  }, {
+    "title": "Segnet: A deep convolutional encoder-decoder architecture for image segmentation",
+    "authors": ["Vijay Badrinarayanan", "Alex Kendall", "Roberto Cipolla"],
+    "venue": "arXiv preprint arXiv:1511.00561,",
+    "year": 2015
+  }, {
+    "title": "Deep watershed transform for instance segmentation",
+    "authors": ["Min Bai", "Raquel Urtasun"],
+    "venue": "arXiv preprint arXiv:1611.08303,",
+    "year": 2016
+  }, {
+    "title": "Semantic instance segmentation with a discriminative loss function",
+    "authors": ["Bert De Brabandere", "Davy Neven", "Luc Van Gool"],
+    "venue": "arXiv preprint arXiv:XXXX.XXXXX,",
+    "year": 2017
+  }, {
+    "title": "Predicting depth, surface normals and semantic labels with a common multi-scale convolutional architecture",
+    "authors": ["David Eigen", "Rob Fergus"],
+    "venue": "In ICCV,",
+    "year": 2015
+  }, {
+    "title": "Depth map prediction from a single image using a multi-scale deep network",
+    "authors": ["David Eigen", "Christian Puhrsch", "Rob Fergus"],
+    "venue": "In NIPS,",
+    "year": 2014
+  }, {
+    "title": "The estimation of the gradient of a density function, with applications in pattern recognition",
+    "authors": ["Keinosuke Fukunaga", "Larry Hostetler"],
+    "venue": "IEEE Transactions on information theory,",
+    "year": 1975
+  }, {
+    "title": "Rich feature hierarchies for accurate object detection and semantic segmentation",
+    "authors": ["Ross Girshick", "Jeff Donahue", "Trevor Darrell", "Jitendra Malik"],
+    "venue": "In CVPR,",
+    "year": 2014
+  }, {
+    "title": "Simultaneous detection and segmentation",
+    "authors": ["Bharath Hariharan", "Pablo Arbeláez", "Ross Girshick", "Jitendra Malik"],
+    "venue": "In ECCV,",
+    "year": 2014
+  }, {
+    "title": "Shape-aware instance segmentation",
+    "authors": ["Zeeshan Hayder", "Xuming He", "Mathieu Salzmann"],
+    "venue": "arXiv preprint arXiv:1612.03129,",
+    "year": 2016
+  }, {
+    "title": "Instancecut: from edges to instances with multicut",
+    "authors": ["Alexander Kirillov", "Evgeny Levinkov", "Bjoern Andres", "Bogdan Savchynskyy", "Carsten Rother"],
+    "venue": "arXiv preprint arXiv:1611.08272,",
+    "year": 2016
+  }, {
+    "title": "Ubernet: Training auniversal’convolutional neural network for low-, mid-, and high-level vision using diverse datasets and limited memory",
+    "authors": ["Iasonas Kokkinos"],
+    "venue": "arXiv preprint arXiv:1609.02132,",
+    "year": 2016
+  }, {
+    "title": "Imagenet classification with deep convolutional neural networks",
+    "authors": ["Alex Krizhevsky", "Ilya Sutskever", "Geoffrey E Hinton"],
+    "venue": "In NIPS,",
+    "year": 2012
+  }, {
+    "title": "Deeper depth prediction with fully convolutional residual networks",
+    "authors": ["Iro Laina", "Christian Rupprecht", "Vasileios Belagiannis", "Federico Tombari", "Nassir Navab"],
+    "venue": "In 3DV,",
+    "year": 2016
+  }, {
+    "title": "Fully convolutional networks for semantic segmentation",
+    "authors": ["Jonathan Long", "Evan Shelhamer", "Trevor Darrell"],
+    "venue": "In CVPR,",
+    "year": 2015
+  }, {
+    "title": "A robust hybrid of lasso and ridge regression",
+    "authors": ["Art B Owen"],
+    "venue": "Contemporary Mathematics,",
+    "year": 2007
+  }, {
+    "title": "Enet: A deep neural network architecture for real-time semantic segmentation",
+    "authors": ["Adam Paszke", "Abhishek Chaurasia", "Sangpil Kim", "Eugenio Culurciello"],
+    "venue": "arXiv preprint arXiv:1606.02147,",
+    "year": 2016
+  }, {
+    "title": "Very deep convolutional networks for large-scale image recognition",
+    "authors": ["Karen Simonyan", "Andrew Zisserman"],
+    "venue": "arXiv preprint arXiv:1409.1556,",
+    "year": 2014
+  }, {
+    "title": "Multinet: Real-time joint semantic reasoning for autonomous driving",
+    "authors": ["Marvin Teichmann", "Michael Weber", "Marius Zoellner", "Roberto Cipolla", "Raquel Urtasun"],
+    "venue": "arXiv preprint arXiv:1612.07695,",
+    "year": 2016
+  }, {
+    "title": "Pixel-level encoding and depth layering for instance-level semantic labeling",
+    "authors": ["Jonas Uhrig", "Marius Cordts", "Uwe Franke", "T. Brox"],
+    "venue": "GCPR,",
+    "year": 2016
+  }, {
+    "title": "Distance metric learning for large margin nearest neighbor classification",
+    "authors": ["Kilian Q Weinberger", "Lawrence K Saul"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2009
+  }],
+  "id": "SP:a158ef12de2a46473b49b09b1e536ca5ac00c354",
+  "authors": [{
+    "name": "Davy Neven",
+    "affiliations": []
+  }, {
+    "name": "Bert De Brabandere",
+    "affiliations": []
+  }, {
+    "name": "Stamatios Georgoulis",
+    "affiliations": []
+  }, {
+    "name": "Marc Proesmans",
+    "affiliations": []
+  }, {
+    "name": "Luc Van Gool",
+    "affiliations": []
+  }],
+  "abstractText": "Most approaches for instance-aware semantic labeling traditionally focus on accuracy. Other aspects like runtime and memory footprint are arguably as important for realtime applications such as autonomous driving. Motivated by this observation and inspired by recent works that tackle multiple tasks with a single integrated architecture [13], [20], [22], in this paper we present a real-time efficient implementation based on ENet [18] that solves three autonomous driving related tasks at once: semantic scene segmentation, instance segmentation and monocular depth estimation. Our approach builds upon a branched ENet architecture with a shared encoder but different decoder branches for each of the three tasks. The presented method can run at 21 fps at a resolution of 1024x512 on the Cityscapes dataset without sacrificing accuracy compared to running each task separately.",
+  "title": "Fast Scene Understanding for Autonomous Driving"
+}

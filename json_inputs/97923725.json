@@ -1,0 +1,414 @@
+{
+  "sections": [{
+    "heading": "1 Introduction",
+    "text": "Language modeling is among the important problems that require modeling long-term dependency, with successful applications such as unsupervised pretraining (Dai and Le, 2015; Peters et al., 2018; Radford et al., 2018; Devlin et al., 2018). However, it has been a challenge to equip neural networks with the capability to model long-term dependency in sequential data. Recurrent neural networks (RNNs), in particular Long Short∗Equal contribution. Order determined by swapping the one in Yang et al. (2017). 1https://github.com/kimiyoung/ transformer-xl\nTerm Memory (LSTM) networks (Hochreiter and Schmidhuber, 1997), have been a standard solution to language modeling and obtained strong results on multiple benchmarks. Despite the wide adaption, RNNs are difficult to optimize due to gradient vanishing and explosion (Hochreiter et al., 2001), and the introduction of gating in LSTMs and the gradient clipping technique (Graves, 2013) might not be sufficient to fully address this issue. Empirically, previous work has found that LSTM language models use 200 context words on average (Khandelwal et al., 2018), indicating room for further improvement.\nOn the other hand, the direct connections between long-distance word pairs baked in attention mechanisms might ease optimization and enable the learning of long-term dependency (Bahdanau et al., 2014; Vaswani et al., 2017). Recently, Al-Rfou et al. (2018) designed a set of auxiliary losses to train deep Transformer networks for character-level language modeling, which outperform LSTMs by a large margin. Despite the success, the LM training in Al-Rfou et al. (2018) is performed on separated fixed-length segments of a few hundred characters, without any information flow across segments. As a consequence of the fixed context length, the model cannot capture any longer-term dependency beyond the predefined context length. In addition, the fixed-length segments are created by selecting a consecutive chunk of symbols without respecting the sentence or any other semantic boundary. Hence, the model lacks necessary contextual information needed to well predict the first few symbols, leading to inefficient optimization and inferior performance. We refer to this problem as context fragmentation.\nTo address the aforementioned limitations of fixed-length contexts, we propose a new architecture called Transformer-XL (meaning extra long). We introduce the notion of recurrence into our\nar X\niv :1\n90 1.\n02 86\n0v 3\n[ cs\n.L G\n] 2\nJ un\n2 01\n9\ndeep self-attention network. In particular, instead of computing the hidden states from scratch for each new segment, we reuse the hidden states obtained in previous segments. The reused hidden states serve as memory for the current segment, which builds up a recurrent connection between the segments. As a result, modeling very longterm dependency becomes possible because information can be propagated through the recurrent connections. Meanwhile, passing information from the previous segment can also resolve the problem of context fragmentation. More importantly, we show the necessity of using relative positional encodings rather than absolute ones, in order to enable state reuse without causing temporal confusion. Hence, as an additional technical contribution, we introduce a simple but more effective relative positional encoding formulation that generalizes to attention lengths longer than the one observed during training.\nTransformer-XL obtained strong results on five datasets, varying from word-level to characterlevel language modeling. Transformer-XL is also able to generate relatively coherent long text articles with thousands of tokens (see Appendix E), trained on only 100M tokens.\nOur main technical contributions include introducing the notion of recurrence in a purely selfattentive model and deriving a novel positional encoding scheme. These two techniques form a complete set of solutions, as any one of them alone does not address the issue of fixed-length contexts. Transformer-XL is the first self-attention model that achieves substantially better results than RNNs on both character-level and word-level language modeling."
+  }, {
+    "heading": "2 Related Work",
+    "text": "In the last few years, the field of language modeling has witnessed many significant advances, including but not limited to devising novel architectures to better encode the context (Bengio et al., 2003; Mikolov et al., 2010; Merity et al., 2016; Al-Rfou et al., 2018), improving regularization and optimization algorithms (Gal and Ghahramani, 2016) , speeding up the Softmax computation (Grave et al., 2016a) , and enriching the output distribution family (Yang et al., 2017).\nTo capture the long-range context in language modeling, a line of work directly feeds a representation of the wider context into the network\nas an additional input. Existing works range from ones where context representations are manually defined (Mikolov and Zweig, 2012; Ji et al., 2015; Wang and Cho, 2015) to others that rely on document-level topics learned from data (Dieng et al., 2016; Wang et al., 2017).\nMore broadly, in generic sequence modeling, how to capture long-term dependency has been a long-standing research problem. From this perspective, since the ubiquitous adaption of LSTM, many efforts have been spent on relieving the vanishing gradient problem, including better initialization (Le et al., 2015), additional loss signal (Trinh et al., 2018), augmented memory structure (Ke et al., 2018) and others that modify the internal architecture of RNNs to ease the optimization (Wu et al., 2016; Li et al., 2018). Different from them, our work is based on the Transformer architecture and shows that language modeling as a real-world task benefits from the ability to learn longer-term dependency."
+  }, {
+    "heading": "3 Model",
+    "text": "Given a corpus of tokens x = (x1, . . . , xT ), the task of language modeling is to estimate the joint probability P (x), which is often auto-regressively factorized as P (x) = ∏ t P (xt | x<t). With the factorization, the problem reduces to estimating each conditional factor. In this work, we stick to the standard neural approach to modeling the conditional probability. Specifically, a trainable neural network is used to encode the context x<t into a fixed size hidden state, which is multiplied with the word embeddings to obtain the logits. The logits are then fed into the Softmax function, yielding a categorical probability distribution over the next token."
+  }, {
+    "heading": "3.1 Vanilla Transformer Language Models",
+    "text": "In order to apply Transformer or self-attention to language modeling, the central problem is how to train a Transformer to effectively encode an arbitrarily long context into a fixed size representation. Given infinite memory and computation, a simple solution would be to process the entire context sequence using an unconditional Transformer decoder, similar to a feed-forward neural network. However, this is usually infeasible with the limited resource in practice.\nOne feasible but crude approximation is to split the entire corpus into shorter segments of man-\nageable sizes, and only train the model within each segment, ignoring all contextual information from previous segments. This is the idea adopted by Al-Rfou et al. (2018). We call it the vanilla model and visualize it in Fig. 1a. Under this training paradigm, information never flows across segments in either the forward or backward pass. There are two critical limitations of using a fixedlength context. First, the largest possible dependency length is upper bounded by the segment length, which is a few hundred on character-level language modeling (Al-Rfou et al., 2018). Therefore, although the self-attention mechanism is less affected by the vanishing gradient problem compared to RNNs, the vanilla model is not able to fully exploit this optimization advantage. Second, though it is possible to use padding to respect the sentence or other semantic boundaries, in practice it has been standard practice to simply chunk long text into fixed-length segments due to improved efficiency (Peters et al., 2018; Devlin et al., 2018; Al-Rfou et al., 2018). However, simply chunking a sequence into fixed-length segments will lead to the context fragmentation problem as discussed in Section 1.\nDuring evaluation, at each step, the vanilla model also consumes a segment of the same length as in training, but only makes one prediction at the last position. Then, at the next step, the segment is shifted to the right by only one position, and the new segment has to be processed all from scratch. As shown in Fig. 1b, this procedure ensures that each prediction utilizes the longest possible context exposed during training, and also relieves context fragmentation issue encountered in training. However, this evaluation procedure is extremely expensive. We will show that our proposed architecture is able to substantially improve the evaluation speed."
+  }, {
+    "heading": "3.2 Segment-Level Recurrence with State Reuse",
+    "text": "To address the limitations of using a fixed-length context, we propose to introduce a recurrence mechanism to the Transformer architecture. During training, the hidden state sequence computed for the previous segment is fixed and cached to be reused as an extended context when the model processes the next new segment, as shown in Fig. 2a. Although the gradient still remains within a segment, this additional input allows the network to exploit information in the history, leading to an ability of modeling longer-term dependency and avoiding context fragmentation. Formally, let the two consecutive segments of length L be sτ = [xτ,1, · · · , xτ,L] and sτ+1 = [xτ+1,1, · · · , xτ+1,L] respectively. Denoting the n-th layer hidden state sequence produced for the τ -th segment sτ by hnτ ∈ RL×d, where d is the hidden dimension. Then, the n-th layer hidden state for segment sτ+1 is produced (schematically) as follows, h̃n−1τ+1 = [ SG(hn−1τ ) ◦ hn−1τ+1 ] ,\nqnτ+1,k n τ+1,v n τ+1 = h n−1 τ+1W > q , h̃ n−1 τ+1W > k , h̃ n−1 τ+1W > v , hnτ+1 = Transformer-Layer (q n τ+1,k n τ+1,v n τ+1) .\nwhere the function SG(·) stands for stop-gradient, the notation [hu ◦ hv] indicates the concatenation of two hidden sequences along the length dimension, and W· denotes model parameters. Compared to the standard Transformer, the critical difference lies in that the key knτ+1 and value v n τ+1 are conditioned on the extended context h̃n−1τ+1 and hence hn−1τ cached from the previous segment. We emphasize this particular design by the green paths in Fig. 2a.\nWith this recurrence mechanism applied to every two consecutive segments of a corpus, it essentially creates a segment-level recurrence in the hidden states. As a result, the effective context being utilized can go way beyond just two segments. However, notice that the recurrent dependency between hnτ+1 and h n−1 τ shifts one layer downwards\nper-segment, which differs from the same-layer recurrence in conventional RNN-LMs. Consequently, the largest possible dependency length grows linearly w.r.t. the number of layers as well as the segment length, i.e., O(N × L), as visualized by the shaded area in Fig. 2b. This is analogous to truncated BPTT (Mikolov et al., 2010), a technique developed for training RNNLMs. However, different from truncated BPTT, our method caches a sequence of hidden states instead of the last one, and should be applied together with the relative positional encoding technique described in Section 3.3.\nBesides achieving extra long context and resolving fragmentation, another benefit that comes with the recurrence scheme is significantly faster evaluation. Specifically, during evaluation, the representations from the previous segments can be reused instead of being computed from scratch as in the case of the vanilla model. In our experiments on enwiki8, Transformer-XL is up to 1,800+ times faster than the vanilla model during evaluation (see Section 4).\nFinally, notice that the recurrence scheme does not need to be restricted to only the previous segment. In theory, we can cache as many previous segments as the GPU memory allows, and reuse all of them as the extra context when processing the current segment. Thus, we can cache a predefined length-M old hidden states spanning (possibly) multiple segments, and refer to them as the memory mnτ ∈ RM×d, due to a clear connection to the memory augmented neural networks (Graves et al., 2014; Weston et al., 2014). In our experiments, we set M equal to the segment length during training, and increase it by multiple times during evaluation."
+  }, {
+    "heading": "3.3 Relative Positional Encodings",
+    "text": "While we found the idea presented in the previous subsection very appealing, there is a crucial technical challenge we haven’t solved in or-\nder to reuse the hidden states. That is, how can we keep the positional information coherent when we reuse the states? Recall that, in the standard Transformer, the information of sequence order is provided by a set of positional encodings, denoted as U ∈ RLmax×d, where the i-th row Ui corresponds to the i-th absolute position within a segment and Lmax prescribes the maximum possible length to be modeled. Then, the actual input to the Transformer is the element-wise addition of the word embeddings and the positional encodings. If we simply adapt this positional encoding to our recurrence mechanism, the hidden state sequence would be computed schematically by\nhτ+1 = f(hτ ,Esτ+1 +U1:L)\nhτ = f(hτ−1,Esτ +U1:L),\nwhere Esτ ∈ RL×d is the word embedding sequence of sτ , and f represents a transformation function. Notice that, both Esτ and Esτ+1 are associated with the same positional encoding U1:L. As a result, the model has no information to distinguish the positional difference between xτ,j and xτ+1,j for any j = 1, . . . , L, resulting in a sheer performance loss.\nIn order to avoid this failure mode, the fundamental idea is to only encode the relative positional information in the hidden states. Conceptually, the positional encoding gives the model a temporal clue or “bias” about how information should be gathered, i.e., where to attend. For the same purpose, instead of incorporating bias statically into the initial embedding, one can inject the same information into the attention score of each layer. More importantly, it is more intuitive and generalizable to define the temporal bias in a relative manner. For instance, when a query vector qτ,i attends on the key vectors kτ,≤i, it does not need to know the absolute position of each key vector to identify the temporal order of the segment. Instead, it suffices to know the relative distance between each key vector kτ,j and itself qτ,i, i.e. i−j. Practically, one can create a set of relative posi-\ntional encodings R ∈ RLmax×d, where the i-th row Ri indicates a relative distance of i between two positions. By injecting the relative distance dynamically into the attention score, the query vector can easily distinguish the representations of xτ,j and xτ+1,j from their different distances, making the state reuse mechanism feasible. Meanwhile, we won’t lose any temporal information, as the absolute position can be recovered recursively from relative distances.\nPreviously, the idea of relative positional encodings has been explored in the context of machine translation (Shaw et al., 2018) and music generation (Huang et al., 2018). Here, we offer a different derivation, arriving at a new form of relative positional encodings, which not only has a one-to-one correspondence to its absolute counterpart but also enjoys much better generalization empirically (see Section 4). Firstly, in the standard Transformer (Vaswani et al., 2017), the attention score between query qi and key vector kj within the same segment can be decomposed as\nAabsi,j = E > xiW > q WkExj︸ ︷︷ ︸ (a) +E>xiW > q WkUj︸ ︷︷ ︸ (b)\n+U>i W > q WkExj︸ ︷︷ ︸ (c) +U>i W > q WkUj︸ ︷︷ ︸ (d) .\nFollowing the idea of only relying on relative positional information, we propose to reparameterize the four terms as follows\nAreli,j = E > xiW > q Wk,EExj︸ ︷︷ ︸ (a) +E>xiW > q Wk,RRi−j︸ ︷︷ ︸ (b)\n+ u>Wk,EExj︸ ︷︷ ︸ (c) + v>Wk,RRi−j︸ ︷︷ ︸ (d) .\n• The first change we make is to replace all appearances of the absolute positional embedding Uj for computing key vectors in term (b) and (d) with its relative counterpart Ri−j . This essentially reflects the prior that only the relative distance matters for where to attend. Note that R is a sinusoid encoding matrix (Vaswani et al., 2017) without learnable parameters.\n• Secondly, we introduce a trainable parameter u ∈ Rd to replace the query U>i W>q in term (c). In this case, since the query vector is the same for all query positions, it suggests that the attentive bias towards different words should remain the same regardless of the query position. With a similar reasoning, a trainable parameter v ∈ Rd is added to substitute U>i W>q in term (d).\n• Finally, we deliberately separate the two weight matrices Wk,E and Wk,R for producing the content-based key vectors and location-based key vectors respectively.\nUnder the new parameterization, each term has an intuitive meaning: term (a) represents contentbased addressing, term (b) captures a contentdependent positional bias, term (c) governs a global content bias, and (d) encodes a global positional bias.\nIn comparison, the formulation in Shaw et al. (2018) only has terms (a) and (b), dropping the two bias terms (c) and (d). Moreover, Shaw et al. (2018) merge the multiplication WkR into a single trainable matrix R̂, which abandons the inductive bias built into the original sinusoid positional encoding (Vaswani et al., 2017). In contrast, our relative positional embedding R adapts the sinusoid formulation. As a benefit of the inductive bias, a model trained on a memory of some certain length can automatically generalize to a memory several times longer during evaluation.\nEquipping the recurrence mechanism with our proposed relative positional embedding, we finally arrive at the Transformer-XL architecture. For completeness, we summarize the computational procedure for a N -layer Transformer-XL with a single attention head here. For n = 1, . . . , N :\nh̃n−1τ = [ SG(mn−1τ ) ◦ hn−1τ ] qnτ ,k n τ ,v n τ =h n−1 τ W n q >, h̃n−1τ W n k,E >, h̃n−1τ W n v >\nAnτ,i,j =q n τ,i >knτ,j + q n τ,i >Wnk,RRi−j\n+ u>kτ,j + v >Wnk,RRi−j\nanτ =Masked-Softmax(A n τ )v n τ\nonτ =LayerNorm(Linear(a n τ ) + h n−1 τ ) hnτ = Positionwise-Feed-Forward(o n τ )\nwith h0τ := Esτ defined as the word embedding sequence. In addition, it is worth mentioning that a naive way to compute A requires computing Wnk,RRi−j for all pairs (i, j), whose cost is quadratic w.r.t. the sequence length. However, noticing that the value of i − j only ranges from zero to the sequence length, we show a simple computation procedure in Appendix B, which reduces the cost to be linear w.r.t. the sequence length."
+  }, {
+    "heading": "4 Experiments",
+    "text": ""
+  }, {
+    "heading": "4.1 Main Results",
+    "text": "We apply Transformer-XL to a variety of datasets on both word-level and character-level language\nmodeling to have a comparison with state-of-theart systems, including WikiText-103 (Merity et al., 2016), enwik8 (LLC, 2009), text8 (LLC, 2009), One Billion Word (Chelba et al., 2013), and Penn Treebank (Mikolov and Zweig, 2012).\nWikiText-103 is the largest available word-level language modeling benchmark with long-term dependency. It contains 103M training tokens from 28K articles, with an average length of 3.6K tokens per article, which allows testing the ability of long-term dependency modeling. We set the attention length to 384 during training and 1600 during evaluation. We adopted adaptive softmax and input representations (Baevski and Auli, 2018; Grave et al., 2016a). As shown in Table 1, Transformer-XL reduces the previous state-of-theart (SoTA) perplexity from 20.5 to 18.3, which demonstrates the superiority of the TransformerXL architecture.\nThe dataset enwik8 contains 100M bytes of unprocessed Wikipedia text. We compare our architecture with the previous results in Table 2. Under the model size constraint, the 12-layer Transformer-XL achieves a new SoTA result, outperforming the 12-layer vanilla Transformer from Al-Rfou et al. (2018) by 0.05, while both Trans-\nformer variants have a large margin over conventional RNN-based models. Notably, our 12-layer architecture achieves the same result as the 64- layer network from Al-Rfou et al. (2018), using only 17% of the parameter budget. In order to see whether better performances can be obtained by increasing the model size, we train 18-layer and 24-layer Transformer-XLs with increased model sizes. With the attention length 784 during training and 3,800 during evaluation, we obtained a new SoTA result and our method is the first to break through 1.0 on widely-studied characterlevel benchmarks. Different from Al-Rfou et al. (2018), Transformer-XL does not need any auxiliary losses, and thus all benefits are credited to a better architecture.\nSimilar to but different from enwik8, text8 contains 100M processed Wikipedia characters created by lowering case the text and removing any character other than the 26 letters a through z, and space. Due to the similarity, we simply adapt the best model and the same hyper-parameters on enwik8 to text8 without further tuning. The comparison with previous methods is summarized in Table 3. Again, Transformer-XL achieves the new SoTA result with a clear margin.\nOne Billion Word does not preserve any longterm dependency because sentences have been shuffled. Consequently, this dataset mainly tests the ability of modeling only short-term dependency. The comparison between Transformer-XL and the other methods is shown in Table 4. Although Transformer-XL is mainly designed to better capture longer-term dependency, it dramatically improves the single-model SoTA from 23.7 to 21.8. Specifically, Transformer-XL significantly outperforms a contemporary method using vanilla Transformers (Baevski and Auli, 2018), suggesting the advantage of Transformer-XL is generalizable to modeling short sequences.\nWe also report the results on word-level Penn Treebank in Table 5. Similar to AWD-LSTM (Merity et al., 2017), we apply variational dropout and weight average to Transformer-XL. With proper regularization, Transformer-XL achieves a new SoTA result among models without two-step finetuning. Penn Treebank has only 1M training tokens, which implies that Transformer-XL also generalizes well even on small datasets."
+  }, {
+    "heading": "4.2 Ablation Study",
+    "text": "We conduct two sets of ablation studies to examine the effects of two proposed techniques used in Transformer-XL: the recurrence mechanism and the new positional encoding scheme.\nThe first study is performed on WikiText-103, which requires modeling long-term dependency. The results are reported in Table 6. Among the compared encoding schemes, Shaw et al. (2018) is relative, while Vaswani et al. (2017) and Al-Rfou et al. (2018) are absolute. “Full” and “half” losses refer to applying a cross entropy loss to all or the recent half positions in the segment. We found\nthat absolute encodings only work well with half losses because half losses exclude positions with very short attention lengths during training for better generalization. Table 6 shows that both the recurrence mechanism and our encoding scheme are necessary to achieve the best performance, as well as generalizing to longer attention sequences during evaluation time. Although the backpropagation length during training is only 128, with the two techniques the attention length can be increased to 640 at test time. In the standard setting with 151M parameters, the perplexity decreases as the attention length increases.\nSince the recurrence mechanism costs additional memory, we also compare Transformer-XL with baselines under the same GPU memory constraints. As shown in Table 10 in Appendix A, despite using a shorter backpropagation length, Transformer-XL remains superior to the baselines.\nThe second study targets at isolating the effects of resolving the context fragmentation problem from the benefit of capturing longer context length. In order to achieve this goal, we deliberately choose a dataset that does not require longterm dependency, so that any improvement from establishing the recurrence can be attributed to solving the context fragmentation. Specifically, we perform this controlled experiment on the One Billion Word dataset, which can only benefit from removing the context fragmentation. We train a 20-layer Transformer-XL with ∼0.3B parameters for 400K steps. As shown in Table 7, using segment-level recurrence substantially improves performance even when long-term dependency is not needed, which is consistent with our previous discussion that the recurrence mechanism resolves the context fragmentation problem. Moreover, our relative positional encodings is also superior to Shaw et al. (2018) on short sequences."
+  }, {
+    "heading": "4.3 Relative Effective Context Length",
+    "text": "Khandelwal et al. (2018) proposed a method to evaluate the Effective Context Length (ECL) of a sequence model. ECL is the longest length to which increasing the context span would lead to a gain more than a threshold. However, ECL ignores the fact that it is harder to get improvement when a model already achieves a lower perplexity using only a shorter context, and thus it is not suitable for fair comparison among multiple models. We instead propose a new metric\ncalled Relative Effective Context Length (RECL). RECL is defined on a model group instead of a single model, and the gain of a long context is measure by the relative improvement over the best short context model. As such, the model group shares the same baseline to enable fair comparison. RECL also has a parameter r, which means constraining the comparison on top-r hard examples. See Appedix C for more details about RECL. As shown in Table 8, Transformer-XL manages to model dependency of 900 words long on av-\nAttn Len How much Al-Rfou et al. (2018) is slower\nerage with r = 0.1. The RECL of TransformerXL is 80% and 450% longer than recurrent networks and Transformer respectively. Both the recurrence mechanism and our positional encodings contribute to a longer RECL. This further substantiates our argument that Transformer-XL is able to model longer-term dependency."
+  }, {
+    "heading": "4.4 Generated Text",
+    "text": "Trained only on WikiText-103 which is mediumsized, Transformer-XL is already able to generate relatively coherent articles with thousands of tokens without manual cherry picking, despite minor flaws. Please refer to Appendix E for samples."
+  }, {
+    "heading": "4.5 Evaluation Speed",
+    "text": "Finally, we compare the evaluation speed of our model with the vanilla Transformer model (AlRfou et al., 2018). As shown in Table 9, due to the state reuse scheme, Transformer-XL achieves an up to 1,874 times speedup during evaluation."
+  }, {
+    "heading": "5 Conclusions",
+    "text": "Transformer-XL obtains strong perplexity results, models longer-term dependency than RNNs and Transformer, achieves substantial speedup during evaluation, and is able to generate coherent text articles. We envision interesting applications of Transformer-XL in the fields of text generation, unsupervised feature learning, image and speech modeling."
+  }, {
+    "heading": "Acknowledgments",
+    "text": "ZD and YY were supported in part by National Science Foundation (NSF) under the grant IIS1546329 and by the DOE-Office of Science under the grant ASCR #KJ040201. ZY and RS were supported in part by the Office of Naval Research grant N000141812861, the NSF grant IIS1763562, the Nvidia fellowship, and the Siebel scholarship."
+  }, {
+    "heading": "A Ablation Study with Memory Constraints",
+    "text": "Table 10 compares Transformer-XL with baseline under the same memory budget. Transformer-XL still outperforms the baseline even with a shorter backprop length."
+  }, {
+    "heading": "B Efficient Computation of the Attention with Relative Positional Embedding",
+    "text": "As we discussed in section 3.3, the naive way of computing the Wk,RRi−j for all pairs (i, j) is subject to a quadratic cost. Here, we present a simple method with only a linear cost. Firstly, notice that the relative distance i− j can only be integer from 0 to M + L− 1, where M and L are the memory length and segment length respectively. Hence, the rows of the matrix\nQ :=  R>M+L−1 R>M+L−2\n... R>1 R>0\nWk,R> =  [Wk,RRM+L−1] > [Wk,RRM+L−2] >\n... [Wk,RR1] > [Wk,RR0] >  ∈ R(M+L)×d consist of all possible vector outputs of Wk,RRi−j for any (i, j). Note that we have defined Q in a reversed order, i.e., Qk = Wk,RRM+L−1−k, to make further discussion easier.\nNext, we collect the term (b) for all possible i, j into the following L× (M + L) matrix,\nB =  q>0 Wk,RRM · · · q>0 Wk,RR0 0 · · · 0 q>1 Wk,RRM+1 · · · q>1 Wk,RR1 q>1 Wk,RR0 · · · 0 ... ... ... ... . . . ...\nq>L−1Wk,RRM+L−1 · · · q>L−1Wk,RRM+L−1 q>L−1Wk,RRL−1 · · · q>L−1Wk,RR0\n\n=  q>0 QL−1 · · · q>0 QM+L−1 0 · · · 0 q>1 QL−2 · · · q>1 QM+L−2 q>1 QM+L−1 · · · 0 ... ... . . . ... . . . ...\nq>L−1Q0 · · · q>L−1QM q>L−1QM+1 · · · q>L−1QM+L−1  Then, we further define\nB̃ = qQ> =  q>0 Q0 · · · q>0 QM q>0 QM+1 · · · q>0 QM+L−1 q>1 Q0 · · · q>1 QM q>1 QM+1 · · · q>1 QM+L−1 ... ... . . . ... . . . ...\nq>L−1Q0 · · · q>L−1QM q>L−1QM+1 · · · q>L−1QM+L−1  . Now, it is easy to see an immediate relationship between B and B̃, where the i-th row of B is simply a left-shifted version of i-th row of B̃. Hence, the computation of B only requires a matrix multiplication qQ> to compute B̃ and then a set of left-shifts.\nSimilarly, we can collect all term (d) for all possible i, j into another L× (M + L) matrix D,\nD =  v>QL−1 · · · v>QM+L−1 0 · · · 0 v>QL−2 · · · v>QM+L−2 v>QM+L−1 · · · 0 ... ... . . . ... . . . ...\nv>Q0 · · · v>QM v>QM+1 · · · v>QM+L−1\n .\nThen, we can follow the same procedure to define d̃ = [Qv]> = [ v>Q0 · · · v>QM v>QM+1 · · · v>QM+L−1 ] .\nAgain, each row of D is simply a left-shift version of d̃. Hence, the main computation cost comes from the matrix-vector multiplication d̃ = [Qv]>, which is not expensive any more."
+  }, {
+    "heading": "C Details About RECL",
+    "text": "In this section, we describe the details of the metric RECL. LetM = {m1,m2, · · · ,mN} be a model group consisting of N models. Let li(c, t) denote the loss of model mi on the t-th token in the corpus with a context length c. Concretely, the loss can be written as\nli(c, t) = − logPmi(xt|xt−1, · · · , xt−c)\nwhere Pmi is the probability distribution given by modelmi, and xt is the t-th token in the corpus. Given a short context length c and a long context length c′ such that c′ ≥ c, we can further define a baseline for each position t,\nb(c, t) = N\nmin i=1 li(c, t)\nThe relative loss of mi w.r.t. the model groupM is written as\nfi(c, c ′) =\n1 |T | ∑ t∈T min ( b(c, t), li(c ′, t) )\nThe above equation uses the minimum loss of all models on the short length c as a baseline, and only losses smaller than the baseline will be effectively counted towards the relative loss. This enables fair\ncomparison between multiple models because all models with a long context length c′ need to improve over the same baseline. Sometimes we only care about those positions where the baseline performs poorly (which means short-term dependency with context length c is not sufficient), so given a ratio parameter r, we define the set T is the above equation as\nT = top-r positions t with largest b(c, t)\nThe relative gain is subsequently defined as the relative perplexity reduction:\ngi(c, c ′) = exp fi(c, c)− exp fi(c, c′) exp fi(c, c)\nGiven a step size ∆, we then use an algorithm to find the RECL by thresholding the relative gain:\n1. Set initial short context length c, and long context length c′ = c+ ∆\n2. Compute gi(c, c′). If gi(c, c′) < 0.01, return RECL = c. If gi(c, c′) ≥ 0.01, set c = c′, c′ = c+ ∆ and go to step 1.\nIn Figure 3, we visualize the unnormalized relative perplexity gains (exp fi(c, c)− exp fi(c, c′)) with various pairs of (c, c′) when r = 0.1. It is clear that Transformer-XL has a longer RECL compared to RNNs and other baselines because the relative gains are substantially larger.\nFor reference, we plot the perplexities with varying context lengths in Figure 4. The y-axis denotes the “normal” perplexity (not calibrated by baselines)."
+  }, {
+    "heading": "D Attention Visualization",
+    "text": "In this section, we provide some visualization of the attention learned by the SoTA model on the WikiText-103 validation set. Recall that, this model has 16 10-head transformer layers and relies on a memory of length 640.\nThe first visualization aims at revealing the overall trend of where the model is attending. Specifically, for each attention head of each layer, we average the attention distributions of all tokens in the validation set. This is shown in Fig. 5. As we can see, the overall trend is to focus more on the nearby tokens than the faraway ones. However, it is also very clear that some attention heads have a wider attention distribution over the entire memory span, notably the head 8 from layer 1, head 78 from layer 8, and the head 158 from layer 16.\nSince we are focused on learning long-range dependency, we are especially interested in these heads with a wider attention span. Thus, in the second set of visualization, we pick the three notable heads mentioned above, and visualize their attention behavior for a randomly chosen position, as shown in Fig. 6. Here, we see three different patterns of wider attention:\n• For the head 8 in the 1st layer, we see an almost uniform attention over the entire memory span. This is quite intuitive, as lower-level layers needs to screen the entire memory span to decide where to focus for higher-level layers\n• For the head 78 in the 8th layer (a middle-level layer), we see a very sparse attention pattern scattered in all ranges of the memory. Again, this well fits our intuition that as information accumulates, the network may focus on some particular position with special interests.\n• For the head 158 in the 16th layer (i.e. the last layer), each target location (corresponding to each row) has its own distinct sparse focus, differing from head 78 where target locations largely share the same attentive location in memory. Meanwhile, the pattern is also different from the case of head 8, where a few locations are clearly attended more than others.\nFinally, as we have discussed in section 3.3, the attention score can be decomposed into four intuitive terms. Here, we want to further investigate how these four terms contribute to the overall attention trend in Fig. 5. Since the term (c) represents the global content bias, i.e., the prior importance of each word regardless of the context, we will leave it out and focus on the terms (a), (b) and (d). So, for each term, we take the Softmax w.r.t. the memory span and average the resulted distribution of all tokens in the validation set. The results are visualized in Fig. 7:\n• Since term (a) is fully content-based addressing, when averaging over all target words, the result is essentially uniform over the entire context, except for a few very close words, which are likely to be semantically similar to the target word.\n• The overall trend of term (b) highly resembles that of the entire attention distribution in Fig. 5. It suggests that the global trend of focusing on the nearby context is largely contributed by this contentdependent positional bias.\n• The overall trend of term (d) is also focusing more on nearby words. However, compared to the trend of term (b), it is clearly flatter and biases towards a longer context."
+  }, {
+    "heading": "E Generated Text",
+    "text": "In this section, we present some generated text from our best model trained the Wikitext-103 dataset. We seed the our Transformer-XL with a context of at most 512 consecutive tokens randomly sampled from the test set of Wikitext-103. Then, we run Transformer-XL to generate a pre-defined number of tokens (500 or 1,000 in our case). For each generation step, we first find the top-40 probabilities of the next-step distribution and sample from top-40 tokens based on the re-normalized distribution. To help reading, we detokenize the context, the generated text and the reference text. Three generated examples are shown in Tables 11, 12, and 13. Note that we do not perform any cherry picking and present the first three examples we generate in the paper. In the text, “= text =”, “= = text = =” and “= = = text = = =” denote the Wikipedia page tile, section title and subsection title, respectively, due to the original data preprocessing procedure of Wikitext-103 (Merity et al., 2016).\nAs we can see, though only trained on 100M tokens, Transformer-XL is a strong model at generating long text articles, particularly in the following aspects: • Transformer-XL is able to structurally maintain the sectional arrangement of Wikipedia. • Transformer-XL manages to semantically stay on the same topic throughout the course of genera-\ntion. • Long-range references are common in the generated text. • Transformer-XL often generates novel content that is not present in the training data.\nFor more detailed explanation of the interesting observations in each example, please refer to the corresponding caption.\nDespite the overall excellence of the generation quality, the model can only perceive the seed context and hallucinate what to generate based on the limited knowledge (100M tokens only) it is trained on. As a result, the generated text sometimes looks clearly relevant but not close enough or to the point compared to what human writer would do. That said, we believe this issue is mostly a problem of limited training data size and could be alleviated by using a larger training set.\nContext: Kershaw started the 2010 season by posting a 3.07 ERA in April, but did so by walking 22 batters in 29 innings. On May 4, he had his worst start of his career against the Milwaukee Brewers at Dodger Stadium, throwing just 57 pitches in 11 / 3 innings, while retiring only four of the 13 batters he faced — including the pitcher. He was booed loudly upon being pulled from the game. Kershaw said after the game, \" I didn’t give our team any kind of chance. It’s just not a good feeling to let your teammates down, let everybody down. It stings, it hurts. I ’ve got to figure things out. \" Kershaw rebounded his next start by pitching an 8 inning two-hitter and out-dueling the then undefeated Ubaldo Jiménez. He credited his control of the slider being the major turning point for him. Later in the season, he was suspended for five games after hitting Aaron Rowand of the Giants with a pitch in a game on July 20. The incident occurred after both teams were given a warning following Giants ace Tim Lincecum hitting Matt Kemp earlier in the game. He threw his first career complete game shutout on September 14, 2010 also against San Francisco and finished the season with a record of 13 – 10 and a 2.91 ERA in 32 starts, pitching 2041 / 3 innings and recording 212 strikeouts. = = = = 2011 season: 1st Cy Young Award = = = = After finishing the 2010 season strong, the Dodgers named Kershaw as the Opening Day Starter for the 2011 season. On May 29, he pitched the second completegame shutout of his career, striking out 10 while winning a two-hitter against the Florida Marlins, 8 – 0; he also had two singles and an RBI, scoring twice in the game. He produced his third career shutout on June 20, a two-hit, 11-strikeout effort against the Detroit Tigers. Kershaw became the first Dodgers starter to strike out the side in the 9th inning since Sandy Koufax’s perfect game. In his next start, on June 26, Kershaw pitched another complete game (against the Los Angeles Angels of Anaheim ). He became the first Dodger starter to have back-to-back complete game victories since Jeff Weaver in the 2005 season and the first Dodger to have double-digit strikeouts in consecutive starts since Chan-Ho Park in the 2000 season. He was awarded the National League Player of the Week award for the week of June 20 – 26 as a result of those two starts. Midway through June, Kershaw had amassed 32 career victories"
+  }, {
+    "heading": "XL Generation: Reference:",
+    "text": "Original Wikipedia page: https://en.wikipedia.org/wiki/Clayton_Kershaw\nThere are many interesting observations from this example:\n• Firstly, Kershaw never went to Royals in real life. Despite that, Transformer-XL stays on the fully imagined topic and keeps hallucinating the experience of Kershaw in Royals across the generated text.\n• Secondly, notice that XL correctly tracks the chronological order from 2011 to 2012 and to the finally 2013 season in the section titles.\n• In addition, notice that Transformer-XL accurately uses the the phrase “another back injury” in the 2013 season paragraph, since it has talked about one earlier injure in the 2012 season. This shows again Transformer-XL’s ability of capturing long-term dependency.\nContext: = = Distribution = = Species range across the Neotropics from Mexico in the north to Bolivia, Paraguay, and southern Brazil in the south. According to <unk> and coauthors, three species are found in Mexico, four in Central America, and 62 in South America. Three species are present in the Caribbean — two in Trinidad and Tobago, along the southern edge of the region, and one in Haiti. = = Habitat and ecology = = <unk> includes both large trees and small acaulescent palms which occupy a number of different ecological niches. Dense stands of some of the larger species are conspicuous elements on the landscape, while smaller species are found in both in the forest understorey and in savannas. Disturbance has been implicated in the formation of vegetation dominated by large <unk> species. In seasonally dry Amazonian forests the density of large adult A. <unk> palms was correlated with canopy openness; the species also dominates savannas formed by repeated forest fires in Trinidad and Tobago. <unk> speciosa forms pure stands in many parts of Brazil where natural forest vegetation has been cleared. Similarly, stands of A. <unk> in Bahia, Brazil (which are cultivated for <unk> fibre) are managed using fire — the seedlings survive cutting and burning, and are able to dominate burned forest patches. The fruit are dispersed by animals; fruit which are not dispersed frequently suffer seed predation by <unk> beetles. Certain species of <unk> have been mentioned as examples of \" anachronistic \" species which are adapted for dispersal by now-extinct Pleistocene megafauna. On <unk> Island, <unk>, in the Brazilian Amazon, <unk> <unk> fruit were consumed by tapirs, collared peccaries, deer and primates. Rodents, including agoutis, fed upon the fruit and, as the fruit availability declined, they fed on the seeds. Other dispersers of <unk> fruit include Crested <unk> which consume the fruit and disperse the seeds of A. <unk> in the Brazilian Pantanal. = = Uses = = <unk> species have a long history of human utilisation. <unk> <unk> <unk> seeds have been found in archaeological sites in Colombia dating back to 9000 BP. A variety of species remain important sources of edible oil, thatch, edible seeds and fibre. The leaves of <unk> <unk> and A. <unk> are used extensively for thatching. Several species are oil palms, with A. speciosa among the most important economically. Products extracted from A. speciosa were reported to support over 300,000 households in the Brazilian state of Maranhão in 2005, and in 1985 it was estimated to support over 450,000 households throughout the Brazil. <unk> fibres, extracted from the leaf bases of A. <unk>, are commercially important, and generated about US $"
+  }, {
+    "heading": "XL Generation: Reference:",
+    "text": "Original Wikipedia page: https://en.wikipedia.org/wiki/The_Tale_of_Mrs._Tittlemouse.\nThis example exhibit some additional interesting properties of Transformer-XL:\n• After finishing the last paragraph of the seed context, both the reference and generated text start a new topic (i.e., Wikipedia page), as marked by the single “= title =” line. This suggests the model has the ability of identifying the end of a topic / page, and randomly starting with a new topic.\n• Even more interestingly, a newly-started page is on a book called “The Tale of Mrs. Tittlemouse”. Transformer-XL manages to copy the same book title and some related information from the training set, but hallucinates novel content of the book. This demonstrates a degree of generalization instead of memorization. Please refer to the original book content at the Wikipedia page.\nContext: = Battle of Dürenstein = The Battle of Dürenstein (also known as the Battle of <unk>, Battle of <unk> and Battle of <unk>; German: <unk> bei <unk> ), on 11 November 1805 was an engagement in the Napoleonic Wars during the War of the Third Coalition. Dürenstein (modern <unk>) is located in the <unk> Valley, on the River Danube, 73 kilometers (45 mi) upstream from Vienna, Austria. The river makes a crescent-shaped curve between <unk> and nearby Krems an der Donau and the battle was fought in the flood plain between the river and the mountains. At Dürenstein a combined force of Russian and Austrian troops trapped a French division commanded by Théodore Maxime Gazan. The French division was part of the newly created VIII Corps, the so-called Corps Mortier, under command of Édouard Mortier. In pursuing the Austrian retreat from Bavaria, Mortier had over-extended his three divisions along the north bank of the Danube. Mikhail <unk> Kutuzov, commander of the Coalition force, enticed Mortier to send Gazan’s division into a trap and French troops were caught in a valley between two Russian columns. They were rescued by the timely arrival of a second division, under command of Pierre Dupont de l ’Étang. The battle extended well into the night. Both sides claimed victory. The French lost more than a third of their participants, and Gazan’s division experienced over 40 percent losses. The Austrians and Russians also had heavy <unk> to 16 <unk> perhaps the most significant was the death in action of Johann Heinrich von Schmitt, one of Austria’s most capable chiefs of staff. The battle was fought three weeks after the Austrian capitulation at Ulm and three weeks before the Russo-Austrian defeat at the Battle of Austerlitz. After Austerlitz Austria withdrew from the war. The French demanded a high indemnity and Francis II abdicated as Holy Roman Emperor, releasing the German states from their allegiance to the Holy Roman Empire. = = Background = = In a series of conflicts from 1803-15 known as the Napoleonic Wars, various European powers formed five coalitions against the First French Empire. Like the wars sparked by the French Revolution (1789 ), these further revolutionized the formation, organization and training of European armies and led to an unprecedented militarization, mainly due to mass conscription. Under the leadership of Napoleon, French power rose quickly as the Grande Armée conquered most of Europe, and collapsed rapidly"
+  }, {
+    "heading": "XL Generation: Reference:",
+    "text": "after the French conquest of Italy. This victory marked the beginning of the Second Coalition. Napoleon’s rapid advance caused Austria – Russia, Britain and Russia to make peace negotiations. The Russian army under Prince Mikhail Mikhailovich Mikhailovich Chaffee, commander of the Imperial Russian Army in Switzerland, was able to drive off the Austrians in the Battle of Stockach (1805) and to take Pressburg (modern Ö3 Austria) from the Austrians. At an early stage the Austro-Hungarian fleet had been damaged in a storm off Cape Matapan; this allowed the Allies to launch a full-scale invasion of Italy in February 1805. The Battle of Austerlitz was the decisive French victory against Napoleon and the largest naval battle in history, involving more modern-day European navies. The French military situation worsened as Napoleon faced several threats related to his newly formed Army of Europe, particularly Russia itself, which was now on the verge of collapse. The Russian general and friend of Napoleon, Alexander, had been dissatisfied with the conduct of the Austrians; he was still in conflict with Emperor Napoleon, the French Republic’s king, who had declared war on Austria during the summer of 1804. With the war over, Napoleon decided to launch a second invasion of Italy in October 1805. = = Prelude = = In July 1805, the French 1st Army entered southern Italy. The army, under the command of Marshal Marmont, were reinforced by a few battalions of infantry under Claude General Auguste de Marmont at the town of Philippsburg and another battalion at Belluno. On 17 September 1805, the army marched from Belluno towards Krems. By 29 September, they had reached Belluno and conducted its advance against a small Austrian force. By 31 September, the whole force had been reinforced by a brigade from the Army of Tyrol under the command of Pierre Augereau. The Austrians were now under the command of Marshal Jean Victor Marie Moreau, a member of the Directory. Moreau had taken command of the Austrian invasion force in the spring of 1805. His command included the VI Corps commanded by Jean Baptiste Drouet de Ney and the VI Corps commanded by Generals Jean Victor Marie Moreau and Joseph Souham. Ney’s corps consisted of the III. Corps and VI. Corps, which consisted of the III Corps and VI. Corps, located in the Austrian Netherlands, was commanded by Friedrich Joseph, Count Baillet de Latour. Moreau’s army consisted of six divisions and several associated brigades. = = Aftermath = = = = = First Coalition forces = = = On 9 October 1805 the French Army of the Danube was attacked by an Austrian army under Archduke Charles at the Battle of Austerlitz. Although Charles and Charles had not had much time to regroup, on 10 October, he launched his attack on the Polish forces under Friedrich Joseph, Count of Lauenburg. After three days, Charles’ army captured Lauenburg. The French forces pursued the Austrians to the Silesian border, where they encountered strong Austrian resistance. These conflicts forced the Austrians to retreat into Tyrol and Austria agreed to a truce. The Austrian army, commanded by Wenzel Anton Karl, Count of Merveldt, was reduced to around 10,000 men. It was initially planned that Archduke Charles would launch a counter-attack against the French army on the same day, as Napoleon had hoped, but this was not carried out. On 25 October, Merveldt left Styria for Tyrol. On the same day, Austria launched its new offensive against the French at Ulm. Charles withdrew his army from the region for a third time at the Battle of Elchingen, under the overall command of the Austrian generals, Ferdinand and Friedrich Wilhelm of Jülich-Cleves-Berg. To prevent Archduke Charles from escaping from the battlefield, the commander of the Habsburg army, Archduke Charles, planned to occupy the fortress Linz; instead, he decided to force Franz von Hipper to surrender the city. However, as Charles moved to the south, Moreau arrived on the scene with additional soldiers – including the entire Imperial Guard – and defeated the Austrians at the Battle of Hohenlinden on 28 October. The loss of Linz resulted in Austria’s complete defeat at Hohenlinden. In the meantime, the French Army of Observation and Preparedness was reorganized into the Army of the Danube under Feldzeugmeister (Colonel-General) Friedrich Freiherr von Hotze. The army was composed of the I, IV, VI, VI, VII, VIII and IX Corps. With reinforcements from Italy and France, it formed new battalions, companies, and squadrons in the Austrian army. On 17 November 1804, at the Battle of Jena-Auerstadt the Army of Silesia and the Army of Silesia joined forces, but by the time that the after the disastrous invasion of Russia in 1812. Napoleon’s empire ultimately suffered complete military defeat in the 1813 – 14 campaigns, resulting in the restoration of the Bourbon monarchy in France. Although Napoleon made a spectacular return in 1815, known as the Hundred Days, his defeat at the Battle of Waterloo, the pursuit of his army and himself, his abdication and banishment to the Island of Saint Helena concluded the Napoleonic Wars. = = Danube campaign = = From 1803-06 the Third Coalition fought the First French Empire and its client states (see table at right ). Although several naval battles determined control of the seas, the outcome of the war was decided on the continent, predominantly in two major land operations in the Danube valley: the Ulm campaign in the upper Danube and the Vienna campaign, in the middle Danube valley. Political conflicts in Vienna delayed Austria’s entry into the Third Coalition until 1805. After hostilities of the War of the Second Coalition ended in 1801, Archduke <unk> emperor’s <unk> advantage of the subsequent years of peace to develop a military restructuring plan. He carefully put this plan into effect beginning in 1803 – 04, but implementation was incomplete in 1805 when Karl Mack, Lieutenant Field Marshal and Quartermaster-General of the Army, implemented his own restructuring. Mack bypassed Charles ’ methodical approach. Occurring in the field, Mack’s plan also undermined the overall command and organizational structure. Regardless, Mack sent an enthusiastic report to Vienna on the military’s readiness. Furthermore, after misreading Napoleon’s maneuvers in Württemberg, Mack also reported to Vienna on the weakness of French dispositions. His reports convinced the war party advising the emperor, Francis II, to enter the conflict against France, despite Charles ’ own advice to the contrary. Responding to the report and rampant anti-French fever in Vienna, Francis dismissed Charles from his post as generalissimo and appointed his <unk> brother-in-law, Archduke Ferdinand, as commander. The inexperienced Ferdinand was a poor choice of replacement for the capable Charles, having neither maturity nor aptitude for the assignment. Although Ferdinand retained nominal command, day-to-day decisions were placed in the hands of Mack, equally ill-suited for such an important assignment. When Mack was wounded early in the campaign, he was unable to take full charge of the army. Consequently, command further devolved to Lieutenant Field Marshal Karl Philipp, Prince of Schwarzenberg, an able cavalry officer but inexperienced in the command of such a large army. = = = Road to Ulm = = = The campaign in the upper Danube valley began in October, with several clashes in Swabia. Near the Bavarian town of Wertingen, 40 kilometers (25 mi) northwest of Augsburg, on 8 October the 1st Regiment of dragoons, part of Murat’s Reserve Cavalry Corps, and grenadiers of Lannes ’ V Corps surprised an Austrian force half its size. The Austrians were arrayed in a line and unable to form their defensive squares quickly enough to protect themselves from the 4,000 dragoons and 8,000 grenadiers. Nearly 3,000 Austrians were captured and over 400 were killed or wounded. A day later, at another small town, <unk> south of the Danube <unk> French 59th Regiment of the Line stormed a bridge over the Danube and, humiliatingly, chased two large Austrian columns toward Ulm. The campaign was not entirely bad news for Vienna. At Haslach, Johann von Klenau arranged his 25,000 infantry and cavalry in a prime defensive position and, on 11 October, the overly confident General of Division Pierre Dupont de l’Étang attacked Klenau’s force with fewer than 8,000 men. The French lost 1,500 men killed and wounded. Aside from taking the Imperial Eagles and <unk> of the 15th and 17th Dragoons, Klenau’s force also captured 900 men, 11 guns and 18 ammunition wagons. Klenau’s victory was a singular success. On 14 October Mack sent two columns out of Ulm in preparation for a breakout to the north: one under Johann Sigismund Riesch headed toward Elchingen to secure the bridge there, and the other under Franz von Werneck went north with most of the heavy artillery. Recognizing the opportunity, Marshal Michel Ney hurried the rest of his VI Corps forward to re-establish contact with Dupont, who was still north of the Danube. In a two-pronged attack Ney sent one division to the south of Elchingen on the right bank of the Danube. This division began the assault at Elchingen. At the same time another division crossed the river to the east and moved west against Riesch’s position. After clearing Austrian pickets from a bridge, the French attacked and captured a strategically located abbey at\nOriginal Wikipedia page: https://en.wikipedia.org/wiki/Battle_of_D%C3%BCrenstein.\n• Although this example is significantly longer, we can see that Transformer-XL is still able to stay on the same topic and makes up non-existing stories about the Napoleon wars.\n• Notably, from the second section on, the generated text correctly follows a fine-grained chronological order on the level of month and day to narrate events in 1805, except a mistake (1804 instead of 1805) near the end of the paragraph. To ease reading which we have highlighted all the date related phrases by magenta in the generation."
+  }],
+  "year": 2019,
+  "references": [{
+    "title": "Character-level language modeling with deeper self-attention",
+    "authors": ["Rami Al-Rfou", "Dokook Choe", "Noah Constant", "Mandy Guo", "Llion Jones."],
+    "venue": "arXiv preprint arXiv:1808.04444.",
+    "year": 2018
+  }, {
+    "title": "Adaptive input representations for neural language modeling",
+    "authors": ["Alexei Baevski", "Michael Auli."],
+    "venue": "arXiv preprint arXiv:1809.10853.",
+    "year": 2018
+  }, {
+    "title": "Neural machine translation by jointly learning to align and translate",
+    "authors": ["Dzmitry Bahdanau", "Kyunghyun Cho", "Yoshua Bengio."],
+    "venue": "arXiv preprint arXiv:1409.0473.",
+    "year": 2014
+  }, {
+    "title": "An empirical evaluation of generic convolutional and recurrent networks for sequence modeling",
+    "authors": ["Shaojie Bai", "J Zico Kolter", "Vladlen Koltun."],
+    "venue": "arXiv preprint arXiv:1803.01271.",
+    "year": 2018
+  }, {
+    "title": "A neural probabilistic language model",
+    "authors": ["Yoshua Bengio", "Réjean Ducharme", "Pascal Vincent", "Christian Jauvin."],
+    "venue": "Journal of machine learning research, 3(Feb):1137–1155.",
+    "year": 2003
+  }, {
+    "title": "One billion word benchmark for measuring progress in statistical language modeling",
+    "authors": ["Ciprian Chelba", "Tomas Mikolov", "Mike Schuster", "Qi Ge", "Thorsten Brants", "Phillipp Koehn", "Tony Robinson."],
+    "venue": "arXiv preprint arXiv:1312.3005.",
+    "year": 2013
+  }, {
+    "title": "Hierarchical multiscale recurrent neural networks",
+    "authors": ["Junyoung Chung", "Sungjin Ahn", "Yoshua Bengio."],
+    "venue": "arXiv preprint arXiv:1609.01704.",
+    "year": 2016
+  }, {
+    "title": "Recurrent batch normalization",
+    "authors": ["Tim Cooijmans", "Nicolas Ballas", "César Laurent", "Çağlar Gülçehre", "Aaron Courville."],
+    "venue": "arXiv preprint arXiv:1603.09025.",
+    "year": 2016
+  }, {
+    "title": "Semi-supervised sequence learning",
+    "authors": ["Andrew M Dai", "Quoc V Le."],
+    "venue": "Advances in neural information processing systems, pages 3079–3087.",
+    "year": 2015
+  }, {
+    "title": "Language modeling with gated convolutional networks",
+    "authors": ["Yann N Dauphin", "Angela Fan", "Michael Auli", "David Grangier."],
+    "venue": "arXiv preprint arXiv:1612.08083.",
+    "year": 2016
+  }, {
+    "title": "Bert: Pre-training of deep bidirectional transformers for language understanding",
+    "authors": ["Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova."],
+    "venue": "arXiv preprint arXiv:1810.04805.",
+    "year": 2018
+  }, {
+    "title": "Topicrnn: A recurrent neural network with long-range semantic dependency",
+    "authors": ["Adji B Dieng", "Chong Wang", "Jianfeng Gao", "John Paisley."],
+    "venue": "arXiv preprint arXiv:1611.01702.",
+    "year": 2016
+  }, {
+    "title": "A theoretically grounded application of dropout in recurrent neural networks",
+    "authors": ["Yarin Gal", "Zoubin Ghahramani."],
+    "venue": "Advances in neural information processing systems, pages 1019–1027.",
+    "year": 2016
+  }, {
+    "title": "Efficient softmax approximation for gpus",
+    "authors": ["Edouard Grave", "Armand Joulin", "Moustapha Cissé", "David Grangier", "Hervé Jégou."],
+    "venue": "arXiv preprint arXiv:1609.04309.",
+    "year": 2016
+  }, {
+    "title": "Improving neural language models with a continuous cache",
+    "authors": ["Edouard Grave", "Armand Joulin", "Nicolas Usunier."],
+    "venue": "arXiv preprint arXiv:1612.04426.",
+    "year": 2016
+  }, {
+    "title": "Generating sequences with recurrent neural networks",
+    "authors": ["Alex Graves."],
+    "venue": "arXiv preprint arXiv:1308.0850.",
+    "year": 2013
+  }, {
+    "title": "Neural turing machines",
+    "authors": ["Alex Graves", "Greg Wayne", "Ivo Danihelka."],
+    "venue": "arXiv preprint arXiv:1410.5401.",
+    "year": 2014
+  }, {
+    "title": "Hypernetworks",
+    "authors": ["David Ha", "Andrew Dai", "Quoc V Le."],
+    "venue": "arXiv preprint arXiv:1609.09106.",
+    "year": 2016
+  }, {
+    "title": "Gradient flow in recurrent nets: the difficulty of learning long-term dependencies",
+    "authors": ["Sepp Hochreiter", "Yoshua Bengio", "Paolo Frasconi", "Jürgen Schmidhuber"],
+    "year": 2001
+  }, {
+    "title": "Long short-term memory",
+    "authors": ["Sepp Hochreiter", "Jürgen Schmidhuber."],
+    "venue": "Neural computation, 9(8):1735–1780.",
+    "year": 1997
+  }, {
+    "title": "An improved relative self-attention mechanism for transformer with application to music",
+    "authors": ["Cheng-Zhi Anna Huang", "Ashish Vaswani", "Jakob Uszkoreit", "Noam Shazeer", "Curtis Hawthorne", "Andrew M Dai", "Matthew D Hoffman", "Douglas Eck"],
+    "year": 2018
+  }, {
+    "title": "Tying word vectors and word classifiers: A loss framework for language modeling",
+    "authors": ["Hakan Inan", "Khashayar Khosravi", "Richard Socher."],
+    "venue": "arXiv preprint arXiv:1611.01462.",
+    "year": 2016
+  }, {
+    "title": "Document context language models",
+    "authors": ["Yangfeng Ji", "Trevor Cohn", "Lingpeng Kong", "Chris Dyer", "Jacob Eisenstein."],
+    "venue": "arXiv preprint arXiv:1511.03962.",
+    "year": 2015
+  }, {
+    "title": "Exploring the limits of language modeling",
+    "authors": ["Rafal Jozefowicz", "Oriol Vinyals", "Mike Schuster", "Noam Shazeer", "Yonghui Wu."],
+    "venue": "arXiv preprint arXiv:1602.02410.",
+    "year": 2016
+  }, {
+    "title": "Neural machine translation in linear time",
+    "authors": ["Nal Kalchbrenner", "Lasse Espeholt", "Karen Simonyan", "Aaron van den Oord", "Alex Graves", "Koray Kavukcuoglu."],
+    "venue": "arXiv preprint arXiv:1610.10099.",
+    "year": 2016
+  }, {
+    "title": "Sigsoftmax: Reanalysis of the softmax bottleneck",
+    "authors": ["Sekitoshi Kanai", "Yasuhiro Fujiwara", "Yuki Yamanaka", "Shuichi Adachi."],
+    "venue": "arXiv preprint arXiv:1805.10829.",
+    "year": 2018
+  }, {
+    "title": "Sparse attentive backtracking: Temporal credit assignment through reminding",
+    "authors": ["Nan Rosemary Ke", "Anirudh Goyal ALIAS PARTH GOYAL", "Olexa Bilaniuk", "Jonathan Binas", "Michael C Mozer", "Chris Pal", "Yoshua Bengio."],
+    "venue": "Advances",
+    "year": 2018
+  }, {
+    "title": "Sharp nearby, fuzzy far away: How neural language models use context",
+    "authors": ["Urvashi Khandelwal", "He He", "Peng Qi", "Dan Jurafsky."],
+    "venue": "arXiv preprint arXiv:1805.04623.",
+    "year": 2018
+  }, {
+    "title": "cmix v13",
+    "authors": ["Bryon Knol."],
+    "venue": "http://www. byronknoll.com/cmix.html.",
+    "year": 2017
+  }, {
+    "title": "A clockwork rnn",
+    "authors": ["Jan Koutnik", "Klaus Greff", "Faustino Gomez", "Juergen Schmidhuber."],
+    "venue": "arXiv preprint arXiv:1402.3511.",
+    "year": 2014
+  }, {
+    "title": "Multiplicative lstm for sequence modelling",
+    "authors": ["Ben Krause", "Liang Lu", "Iain Murray", "Steve Renals."],
+    "venue": "arXiv preprint arXiv:1609.07959.",
+    "year": 2016
+  }, {
+    "title": "Factorization tricks for lstm networks",
+    "authors": ["Oleksii Kuchaiev", "Boris Ginsburg."],
+    "venue": "arXiv preprint arXiv:1703.10722.",
+    "year": 2017
+  }, {
+    "title": "A simple way to initialize recurrent networks of rectified linear units",
+    "authors": ["Quoc V Le", "Navdeep Jaitly", "Geoffrey E Hinton."],
+    "venue": "arXiv preprint arXiv:1504.00941.",
+    "year": 2015
+  }, {
+    "title": "Independently recurrent neural network (indrnn): Building a longer and deeper rnn",
+    "authors": ["Shuai Li", "Wanqing Li", "Chris Cook", "Ce Zhu", "Yanbo Gao."],
+    "venue": "Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition, pages 5457–5466.",
+    "year": 2018
+  }, {
+    "title": "Darts: Differentiable architecture search",
+    "authors": ["Hanxiao Liu", "Karen Simonyan", "Yiming Yang."],
+    "venue": "arXiv preprint arXiv:1806.09055.",
+    "year": 2018
+  }, {
+    "title": "Pushing the bounds of dropout",
+    "authors": ["Gábor Melis", "Charles Blundell", "Tomáš Kočiskỳ", "Karl Moritz Hermann", "Chris Dyer", "Phil Blunsom."],
+    "venue": "arXiv preprint arXiv:1805.09208.",
+    "year": 2018
+  }, {
+    "title": "Regularizing and optimizing lstm language models",
+    "authors": ["Stephen Merity", "Nitish Shirish Keskar", "Richard Socher."],
+    "venue": "arXiv preprint arXiv:1708.02182.",
+    "year": 2017
+  }, {
+    "title": "An analysis of neural language modeling at multiple scales",
+    "authors": ["Stephen Merity", "Nitish Shirish Keskar", "Richard Socher."],
+    "venue": "arXiv preprint arXiv:1803.08240.",
+    "year": 2018
+  }, {
+    "title": "Pointer sentinel mixture models",
+    "authors": ["Stephen Merity", "Caiming Xiong", "James Bradbury", "Richard Socher."],
+    "venue": "arXiv preprint arXiv:1609.07843.",
+    "year": 2016
+  }, {
+    "title": "Learning longer memory in recurrent neural networks. arXiv preprint arXiv:1412.7753",
+    "authors": ["Tomas Mikolov", "Armand Joulin", "Sumit Chopra", "Michael Mathieu", "Marc’Aurelio Ranzato"],
+    "year": 2014
+  }, {
+    "title": "Recurrent neural network based language model",
+    "authors": ["Tomáš Mikolov", "Martin Karafiát", "Lukáš Burget", "Jan Černockỳ", "Sanjeev Khudanpur."],
+    "venue": "Eleventh Annual Conference of the International Speech Communication Association.",
+    "year": 2010
+  }, {
+    "title": "Context dependent recurrent neural network language model",
+    "authors": ["Tomas Mikolov", "Geoffrey Zweig."],
+    "venue": "SLT, 12(234-239):8.",
+    "year": 2012
+  }, {
+    "title": "Hierarchical probabilistic neural network language model",
+    "authors": ["Frederic Morin", "Yoshua Bengio."],
+    "venue": "Aistats, volume 5, pages 246–252. Citeseer.",
+    "year": 2005
+  }, {
+    "title": "Fast-slow recurrent neural networks",
+    "authors": ["Asier Mujika", "Florian Meier", "Angelika Steger."],
+    "venue": "Advances in Neural Information Processing Systems, pages 5915–5924.",
+    "year": 2017
+  }, {
+    "title": "Understanding the exploding gradient problem",
+    "authors": ["Razvan Pascanu", "Tomas Mikolov", "Yoshua Bengio."],
+    "venue": "CoRR, abs/1211.5063.",
+    "year": 2012
+  }, {
+    "title": "Deep contextualized word representations",
+    "authors": ["Matthew E Peters", "Mark Neumann", "Mohit Iyyer", "Matt Gardner", "Christopher Clark", "Kenton Lee", "Luke Zettlemoyer."],
+    "venue": "arXiv preprint arXiv:1802.05365.",
+    "year": 2018
+  }, {
+    "title": "Efficient neural architecture search via parameter sharing",
+    "authors": ["Hieu Pham", "Melody Y Guan", "Barret Zoph", "Quoc V Le", "Jeff Dean."],
+    "venue": "arXiv preprint arXiv:1802.03268.",
+    "year": 2018
+  }, {
+    "title": "Using the output embedding to improve language models",
+    "authors": ["Ofir Press", "Lior Wolf."],
+    "venue": "arXiv preprint arXiv:1608.05859.",
+    "year": 2016
+  }, {
+    "title": "Improving language understanding by generative pre-training",
+    "authors": ["Alec Radford", "Karthik Narasimhan", "Tim Salimans", "Ilya Sutskever."],
+    "venue": "URL https://s3us-west-2. amazonaws. com/openai-assets/researchcovers/languageunsupervised/language under-",
+    "year": 2018
+  }, {
+    "title": "Fast parametric learning with activation memorization",
+    "authors": ["Jack W Rae", "Chris Dyer", "Peter Dayan", "Timothy P Lillicrap."],
+    "venue": "arXiv preprint arXiv:1803.10049.",
+    "year": 2018
+  }, {
+    "title": "Self-attention with relative position representations",
+    "authors": ["Peter Shaw", "Jakob Uszkoreit", "Ashish Vaswani."],
+    "venue": "arXiv preprint arXiv:1803.02155.",
+    "year": 2018
+  }, {
+    "title": "Mesh-tensorflow: Deep learning for supercomputers",
+    "authors": ["Noam Shazeer", "Youlong Cheng", "Niki Parmar", "Dustin Tran", "Ashish Vaswani", "Penporn Koanantakool", "Peter Hawkins", "HyoukJoong Lee", "Mingsheng Hong", "Cliff Young"],
+    "year": 2018
+  }, {
+    "title": "Outrageously large neural networks: The sparsely-gated mixture-of-experts layer",
+    "authors": ["Noam Shazeer", "Azalia Mirhoseini", "Krzysztof Maziarz", "Andy Davis", "Quoc Le", "Geoffrey Hinton", "Jeff Dean."],
+    "venue": "arXiv preprint arXiv:1701.06538.",
+    "year": 2017
+  }, {
+    "title": "Skip-gram language modeling using sparse non-negative matrix probability estimation",
+    "authors": ["Noam Shazeer", "Joris Pelemans", "Ciprian Chelba."],
+    "venue": "arXiv preprint arXiv:1412.1454.",
+    "year": 2014
+  }, {
+    "title": "Learning longer-term dependencies in rnns with auxiliary losses",
+    "authors": ["Trieu H Trinh", "Andrew M Dai", "Thang Luong", "Quoc V Le."],
+    "venue": "arXiv preprint arXiv:1803.00144.",
+    "year": 2018
+  }, {
+    "title": "Attention is all you need",
+    "authors": ["Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N Gomez", "Łukasz Kaiser", "Illia Polosukhin."],
+    "venue": "Advances in Neural Information Processing Systems, pages 5998–6008.",
+    "year": 2017
+  }, {
+    "title": "Largercontext language modelling",
+    "authors": ["Tian Wang", "Kyunghyun Cho."],
+    "venue": "arXiv preprint arXiv:1511.03729.",
+    "year": 2015
+  }, {
+    "title": "Topic compositional neural language model",
+    "authors": ["Wenlin Wang", "Zhe Gan", "Wenqi Wang", "Dinghan Shen", "Jiaji Huang", "Wei Ping", "Sanjeev Satheesh", "Lawrence Carin."],
+    "venue": "arXiv preprint arXiv:1712.09783.",
+    "year": 2017
+  }, {
+    "title": "Memory networks",
+    "authors": ["Jason Weston", "Sumit Chopra", "Antoine Bordes."],
+    "venue": "arXiv preprint arXiv:1410.3916.",
+    "year": 2014
+  }, {
+    "title": "On multiplicative integration with recurrent neural networks",
+    "authors": ["Yuhuai Wu", "Saizheng Zhang", "Ying Zhang", "Yoshua Bengio", "Ruslan R Salakhutdinov."],
+    "venue": "Advances in neural information processing systems, pages 2856–2864.",
+    "year": 2016
+  }, {
+    "title": "Breaking the softmax bottleneck: A high-rank rnn language model",
+    "authors": ["Zhilin Yang", "Zihang Dai", "Ruslan Salakhutdinov", "William W Cohen."],
+    "venue": "arXiv preprint arXiv:1711.03953.",
+    "year": 2017
+  }, {
+    "title": "Recurrent neural network regularization",
+    "authors": ["Wojciech Zaremba", "Ilya Sutskever", "Oriol Vinyals."],
+    "venue": "arXiv preprint arXiv:1409.2329.",
+    "year": 2014
+  }, {
+    "title": "Recurrent highway networks",
+    "authors": ["Julian Georg Zilly", "Rupesh Kumar Srivastava", "Jan Koutník", "Jürgen Schmidhuber."],
+    "venue": "arXiv preprint arXiv:1607.03474.",
+    "year": 2016
+  }, {
+    "title": "Neural architecture search with reinforcement learning",
+    "authors": ["Barret Zoph", "Quoc V Le."],
+    "venue": "arXiv preprint arXiv:1611.01578.",
+    "year": 2016
+  }, {
+    "title": "season. Kershaw finished the 2011 season by leading the NL with 21 wins, 248 strikeouts and a 2.28 ERA, winning the NL pitching Triple Crown, the first Triple Crown winner since Jake",
+    "authors": ["Ho Park"],
+    "venue": "Peavy of the 2007 San Diego Padres and the first Dodger since Sandy Koufax won it in the 1966 season. Justin Verlander of the Detroit Tigers won the American League Triple Crown",
+    "year": 2001
+  }],
+  "id": "SP:44c5dec4d1295d34f052d3243d8e08f14a3c0990",
+  "authors": [{
+    "name": "Zihang Dai",
+    "affiliations": []
+  }, {
+    "name": "Zhilin Yang",
+    "affiliations": []
+  }, {
+    "name": "Yiming Yang",
+    "affiliations": []
+  }, {
+    "name": "Jaime Carbonell",
+    "affiliations": []
+  }, {
+    "name": "Quoc V. Le",
+    "affiliations": []
+  }, {
+    "name": "Ruslan Salakhutdinov",
+    "affiliations": []
+  }],
+  "abstractText": "Transformers have a potential of learning longer-term dependency, but are limited by a fixed-length context in the setting of language modeling. We propose a novel neural architecture Transformer-XL that enables learning dependency beyond a fixed length without disrupting temporal coherence. It consists of a segment-level recurrence mechanism and a novel positional encoding scheme. Our method not only enables capturing longer-term dependency, but also resolves the context fragmentation problem. As a result, TransformerXL learns dependency that is 80% longer than RNNs and 450% longer than vanilla Transformers, achieves better performance on both short and long sequences, and is up to 1,800+ times faster than vanilla Transformers during evaluation. Notably, we improve the state-ofthe-art results of bpc/perplexity to 0.99 on enwiki8, 1.08 on text8, 18.3 on WikiText-103, 21.8 on One Billion Word, and 54.5 on Penn Treebank (without finetuning). When trained only on WikiText-103, Transformer-XL manages to generate reasonably coherent, novel text articles with thousands of tokens. Our code, pretrained models, and hyperparameters are available in both Tensorflow and PyTorch1.",
+  "title": "Transformer-XL: Attentive Language Models Beyond a Fixed-Length Context"
+}

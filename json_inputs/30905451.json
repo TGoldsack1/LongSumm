@@ -1,0 +1,290 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Optimization is a bottleneck for almost all tasks in machine learning, as well as in many other fields, including engineering, design, operations research, and statistics. Advances in optimization therefore have broad impact. Historically, optimization has been performed using hand-designed algorithms. Recent results in machine\n1Google Brain 2Work done during an internship at Google Brain. 3Stanford University 4Deepmind. Correspondence to: Olga Wichrowska <olganw@google.com>.\nProceedings of the 34 th International Conference on Machine Learning, Sydney, Australia, PMLR 70, 2017. Copyright 2017 by the author(s).\nlearning show that, given sufficient data, well-trained neural networks often outperform hand-tuned approaches on supervised tasks. This raises the tantalizing possibility that neural networks may be able to outperform hand-designed optimizers.\nDespite the promise in this approach, previous work on learned RNN optimizers for gradient descent has failed to produce neural network optimizers that generalize to new problems, or that continue to make progress on the problems for which they were meta-trained when run for large numbers of steps (see Figure 2). Current neural network optimizers are additionally too costly in both memory and computation to scale to larger problems.\nWe address both of these issues. Specifically, we improve upon existing learned optimizers by:\n1. Developing a meta-training set that consists of an ensemble of small tasks with diverse loss landscapes\n2. Introducing a hierarchical RNN architecture with lower memory and compute overhead, and which is capable of capturing inter-parameter dependencies.\n3. Incorporating features motivated by successful handdesigned optimizers into the RNN, so that it can build on existing techniques. These include dynamically adapted input and output scaling, momentum at multiple time scales, and a cross between Nesterov momentum and RNN attention mechanisms.\n4. Improving the meta-optimization pipeline, for instance by introducing a meta-objective that better encourages exact convergence of the optimizer, and by drawing the number of optimization steps during training from a heavy tailed distribution."
+  }, {
+    "heading": "2. Related work",
+    "text": "Learning to learn has a long history in psychology (Ward, 1937; Harlow, 1949; Kehoe, 1988; Lake et al., 2016). Inspired by it, machine learning researchers have proposed meta-learning techniques for optimizing the process of learning itself. Schmidhuber (1987), for example, considers networks that are able to modify their own weights.\nar X\niv :1\n70 3.\n04 81\n3v 4\n[ cs\n.L G\n] 7\nS ep\n2 01\n7\nThis leads to end-to-end differentiable systems which allow, in principle, for extremely general update strategies to be learned. There are many works related to this idea, including (Sutton, 1992; Naik & Mammone, 1992; Thrun & Pratt, 1998; Hochreiter et al., 2001; Santoro et al., 2016).\nA series of papers from Bengio et al. (1990; 1992; 1995) presents methods for learning parameterized local neural network update rules that avoid back-propagation. Runarsson & Jonsson (2000) extend this to more complex update models. The result of meta learning in these cases is an algorithm, i.e. a local update rule.\nAndrychowicz et al. (2016) learn to learn by gradient descent by gradient descent. Rather than trying to distill a global objective into a local rule, their work focuses on learning how to integrate gradient observations over time in order to achieve fast learning of the model. The component-wise structure of the algorithm allows a single learned algorithm to be applied to new problems of different dimensionality. While Andrychowicz et al. (2016) consider the issue of transfer to different datasets and model structures, they focus on transferring to problems of the same class. In fact, they report negative results when transferring optimizers, meta-trained to optimize neural networks with logistic functions, to networks with ReLU functions.\nLi & Malik (2017) proposed an approach similar to Andrychowicz et al. (2016), around the same time, but they rely on policy search to compute the meta-parameters of the optimizer. That is, they learn to learn by gradient descent by reinforcement learning.\nZoph & Le (2017) also meta-train a controller RNN, but this time to produce a string in a custom domain specific language (DSL) for describing neural network architectures. An architecture matching the produced configuration (the “child” network) is instantiated and trained in the ordinary way. In this case the meta-learning happens only at the network architecture level.\nRavi & Larochelle (2017) modify the optimizer of Andrychowicz et al. (2016) for 1 and 5-shot learning tasks. They use test error to optimize the meta learner. These tasks have the nice property that the recurrent neural networks only need to be unrolled for a small number of steps.\nWang et al. (2016) show that it is possible to learn to solve reinforcement learning tasks by reinforcement learning. They demonstrate their approach on several examples from the bandits and cognitive science literature. A related approach was proposed by Duan et al. (2016).\nFinally, Chen et al. (2016) also learn reinforcement learning, but by supervised meta-training of the meta-learner. They apply their methods to black-box function optimiza-\ntion tasks, such as Gaussian process bandits, simple lowdimensional controllers, and hyper-parameter tuning."
+  }, {
+    "heading": "3. Architecture",
+    "text": "At a high level, a hierarchical RNN is constructed to act as a learned optimizer, with its architecture matched to the parameters in the target problem. The hierarchical RNN’s parameters (called meta-parameters) are shared across all target problems, so despite having an architecture that adapts to the target problem, it can be applied to new problems. At each optimization step, the learned optimizer receives the gradients for every parameter along with some additional quantities derived from the gradients, and outputs an update to the parameters. Figure 1 gives an overview."
+  }, {
+    "heading": "3.1. Hierarchical architecture",
+    "text": "In order to effectively scale to large problems, the optimizer RNN must stay quite small while maintaining enough flexibility to capture inter-parameter dependencies that shape the geometry of the loss surface. Optimizers that account for this second order information are often particularly effective (e.g. quasi-Newton approaches). We propose a novel hierarchical architecture to enable both low per-\nparameter computational cost, and aggregation of gradient information and coordination of update steps across parameters (Figure 1). At the lowest level of the hierarchy, we have a small Parameter RNN that receives direct perparameter (scalar) gradient inputs. One level up, we have an intermediate Tensor RNN that incorporates information from a subset of the Parameter RNNs (where the subsets are problem specific). For example, consider a feedforward fully-connected neural network. There would be a Tensor RNN for each layer of the network, where each layer contains an (n×m) weight matrix and therefore nm Parameter RNNs.\nAt the highest level of the hierarchy is a Global RNN which receives output from every Tensor RNN. This allows the Parameter RNN to have very few hidden units with larger Tensor and Global RNNs keeping track of problem-level information. The Tensor and Global RNNs can also serve as communication channels between Parameter and Tensor RNNs respectively. The Tensor RNN outputs are fed as biases to the Parameter RNN, and the new parameter state is averaged and fed as input to the Tensor RNN. Similarly, the Global RNN state is fed as a bias to each Tensor RNN, and the output of the Tensor RNNs is averaged and fed as input to the Global RNN (Figure 1).\nThe architecture used in the experimental results has a Parameter RNN hidden state size of 10, and a Tensor and Global RNN state size of 20 (the architecture used by Andrychowicz et al. (2016) had a two layer RNN for each parameter, with 20 units per layer). These sizes showed the best generalization to ConvNets and other complex test problems. Experimentally, we found that we could make the Parameter RNN as small as 5, and the Tensor RNN as small as 10 and still see good performance on most problems. We also found that the performance decreased slightly even on simple test problems if we removed the Global RNN entirely. We used a GRU architecture (Cho et al., 2014) for all three of the RNN levels."
+  }, {
+    "heading": "3.2. Features inspired by optimization literature",
+    "text": "The best performing neural networks often have knowledge about task structure baked into their design. Examples of this include convolutional models for image processing (Krizhevsky et al., 2012; He et al., 2016), causal models (RNNs) for modeling causal time series data, and the merging of neural value functions with Monte Carlo tree search in AlphaGo (Silver et al., 2016).\nWe similarly incorporate knowledge of effective strategies for optimization into our network architecture. We emphasize that these are not arbitrary design choices. The features below are motivated by results in optimization and recurrent network literature. They are also individually important to the ability of the learned optimizer to generalize\nto new problems, as is illustrated by the ablation study in Section 5.5 and Figure 6.\nLet L (θ) be the loss of the target problem, where θ = {θ1, ..., θNT } is the set of all parameter tensors θt (e.g. all weight matrices and bias vectors in a neural network). At each training iteration n, each parameter tensor t is updated as θn+1t = θ n t + ∆θ n t , where the update step ∆θ n t is set by the learned optimizer (Equation 5 below)."
+  }, {
+    "heading": "3.2.1. ATTENTION AND NESTEROV MOMENTUM",
+    "text": "Nesterov momentum (Nesterov, 1983a) is a powerful optimization approach, where parameter updates are based not on the gradient evaluated at the current iterate θn, but rather at a location φn which is extrapolated ahead of the current iterate. Similarly, attention mechanisms have proven extremely powerful in recurrent translation models (Bahdanau et al., 2015), decoupling the iteration n of RNN dynamics from the observed portion of the input sequence. Motivated by these successes, we incorporate an attention mechanism that allows the optimizer to explore new regions of the loss surface by computing gradients away (or ahead) from the current parameter position. At each training step n the attended location is set as φn+1t = θ n t +∆φ n t , where the offset ∆φnt is further described by Equation 6 below. Note that the attended location is an offset from the previous parameter location θn rather than the previous attended location φn.\nThe gradient gn of the loss L (θ) with respect to the attended parameter values φn will provide the only input to the learned optimizer, though it will be further transformed before being passed to the hierarchical RNN. For every parameter tensor t, gnt =\n∂L ∂φnt ."
+  }, {
+    "heading": "3.2.2. MOMENTUM ON MULTIPLE TIMESCALES",
+    "text": "Momentum with an exponential moving average is typically motivated in terms of averaging away minibatch noise or high frequency oscillations, and is often a very effective feature (Nesterov, 1983b; Tseng, 1998). We provide the learned optimizer with exponential moving averages ḡts of the gradients on several timescales, where s indexes the timescale of the average. The update equation for the moving average is\nḡn+1ts = ḡ n tsσ ( βngt )2−s + gnt ( 1− σ ( βngt )2−s) , (1)\nwhere the σ indicates the sigmoid function, and where the momentum logit βngt for the shortest s = 0 timescale is output by the RNN, and the remaining timescales each increase by a factor of two from that baseline.\nBy comparing the moving averages at multiple timescales, the learned optimizer has access to information about how rapidly the gradient is changing with training time (a mea-\nsure of loss surface curvature), and about the degree of noise in the gradient."
+  }, {
+    "heading": "3.2.3. DYNAMIC INPUT SCALING",
+    "text": "We would like our optimizer to be invariant to parameter scale. Additionally, RNNs are most easily trained when their inputs are well conditioned, and have a similar scale as their latent state. In order to aid each of these goals, we rescale the average gradients in a fashion similar to what is done in RMSProp (Tieleman & Hinton, 2012), ADAM (Kingma & Ba, 2015), and SMORMS3 (Funk, 2015),\nλn+1ts = λ n tsσ (β n λt) 2−s + (ḡnts)\n2 ( 1− σ (βnλt)2 −s) (2)\nmnts = ḡnts√ λnts , (3)\nwhere λnts is a running average of the square average gradient, mnts is the scaled averaged gradient, and the momentum logit βnλt for the shortest s = 0 timescale will be output by the RNN, similar to how the timescales for momentum are computed in the previous section.\nIt may be useful for the learned optimizer to have access to how gradient magnitudes are changing with training time. We therefore provide as further input a measure of relative gradient magnitudes at each averaging scale s. Specifically, we provide the relative log gradient magnitudes,\nγnts = log λ n ts − Es [log λnts] . (4)"
+  }, {
+    "heading": "3.2.4. DECOMPOSITION OF OUTPUT INTO DIRECTION AND STEP LENGTH",
+    "text": "Another aspect of RMSProp and ADAM is that the learning rate corresponds directly to the characteristic step length. This is true because the gradient is scaled by a running estimate of its standard deviation, and after scaling has a characteristic magnitude of 1. The length of update steps therefore scales linearly with the learning rate, but is invariant to any scaling of the gradients.\nWe enforce a similar decomposition of the parameter updates into update directions dnθ and d n φ for parameters and attended parameters, with corresponding step lengths exp (ηnθ ) and exp ( ηnφ ) ,\n∆θnt = exp (η n θt) dnθt ||dnθt|| /Nt , (5)\n∆φnt = exp ( ηnφ ) dnφt∣∣∣∣∣∣dnφt∣∣∣∣∣∣ /Nt , (6)\nwhereNt is the number of elements in the parameter tensor θt. The directions dnθt and d n φt are read directly out of the RNN (though see B.1 for subtleties).\nRelative learning rate We want the performance of the optimizer to be invariant to parameter scale. This requires that the optimizer judge the correct step length from the history of gradients, rather than memorizing the range of step lengths that were useful in its meta-training ensemble. The RNN therefore controls step length by outputing a multiplicative (additive after taking a logarithm) change, rather than by outputing the step length directly,\nηn+1θ = ∆η n θ + η̄ n+1 θ , (7) η̄n+1θ = γη̄ n θ + (1− γ) ηn+1θ , (8)\nwhere for stability reasons, the log step length ηnθ is specified relative to an exponential running average η̄nθ with meta-learned momentum γ. The attended parameter log step length ηnθ is related to η n θ by a meta-learned constant offset c,\nηnφ = η n θ + c. (9)\nTo further force the optimizer to dynamically adapt the learning rate rather than memorizing a learning rate trajectory, the learning rate is initialized from a log uniform distribution from 10−6 to 10−2. We emphasize that the RNN has no direct access to the learning rate, so it must adjust it based purely on its observations of the statistics of the gradients.\nIn order to aid in coordination across parameters, we do provide the RNN as an input the relative log learning rate of each parameter, compared to the remaining parameters, ηnrel = η n θ − Eti [ηnθti]."
+  }, {
+    "heading": "3.3. Optimizer inputs and outputs",
+    "text": "As described in the preceding sections, the full set of Parameter RNN inputs for each tensor t are xnt = {mnt , γnt , ηnrel}, corresponding to the scaled averaged gradients, the relative log gradient magnitudes, and the relative log learning rate.\nThe full set of Parameter RNN outputs for each tensor t are ynt = { dnθt,d n φt,∆η n θt, β n gt, β n λt } , corresponding to the parameter and attention update directions, the change in step length, and the momentum logits. Each of the outputs in ynt is read out via a learned affine transformation of the Parameter RNN hidden state. The readout biases are clamped to 0 for dnθ and d n φ. The RNN update equations are then:\nhn+1Param = ParamRNN(x n,hnParam,h n Tensor,h n Global) (10) hn+1Tensor = TensorRNN(x n,hn+1Param,h n Tensor,h n Global) (11) hn+1Global = GlobalRNN(x n,hn+1Param,h n+1 Tensor,h n Global) (12)\nyn = WhnParam + b, (13)\nwhere hn is the hidden state for each level of the RNN, as described in Section 3.1, and W and b are learned weights\nof the affine transformation from the lowest level hidden state to output."
+  }, {
+    "heading": "3.4. Compute and memory cost",
+    "text": "The computational cost of the learned optimizer is O ( NPB +NPK 2 P +NTK 2 T +K 2 G ) , where B is the minibatch size, NP is the total number of parameters, NT is the number of parameter tensors, and KP , KT , and KG are the latent sizes for Parameter, Tensor, and Global RNNs respectively. Typically, we are in the regime where NPK 2 P NTK2T > K2G, in which case the computa-\ntional cost simplifies to O ( NPB +NPK 2 P ) . Note that as the minibatch size B is increased, the computational cost of the learned optimizer approaches that of vanilla SGD, as the cost of computing the gradient dominates the cost of computing the parameter update.\nThe memory cost of the learned optimizer is O (NP +NPKP +NTKT +KG), which similarly to computational cost typically reduces toO (NP +NPKP ). So long as the latent size KP of the Parameter RNN can be kept small, the memory overhead will also remain small.\nWe show experimental results for computation time in Section 5.6."
+  }, {
+    "heading": "4. Meta-training",
+    "text": "The RNN optimizer is meta-trained by a standard optimizer on an ensemble of target optimization tasks. We call this process meta-training, and the parameters of the RNN optimizer the meta-parameters."
+  }, {
+    "heading": "4.1. Meta-training set",
+    "text": "Previous learned optimizers have failed to generalize beyond the problem on which they were meta-trained. In order to address this, we meta-train the optimizer on an ensemble of small problems, which have been chosen to capture many commonly encountered properties of loss landscapes and stochastic gradients. By meta-training on small toy problems, we also avoid memory issues we would encounter by meta-training on very large, real-world problems.\nExcept where otherwise indicated, all target problems were designed to have a global minimum of zero (in some cases a constant offset was added to make the minimum zero). The code defining each of these problems is included in the open source release. See A."
+  }, {
+    "heading": "4.1.1. EXEMPLAR PROBLEMS FROM LITERATURE",
+    "text": "We included a set of 2-dimensional problems which have appeared in optimization literature (Surjanovic &\nBingham, 2013) as toy examples of various loss landscape pathologies. These consisted of Rosenbrock, Ackley, Beale, Booth, Styblinski-Tang, Matyas, Branin, Michalewicz, and log-sum-exp functions."
+  }, {
+    "heading": "4.1.2. WELL BEHAVED PROBLEMS",
+    "text": "We included a number of well-behaved convex loss functions, consisting of quadratic bowls of varying dimension with randomly generated coupling matrices, and logistic regression on randomly generated, generally linearly separable data. For the logistic regression problem, when the data is not fully linearly separable, the global minimum is greater than 0."
+  }, {
+    "heading": "4.1.3. NOISY GRADIENTS AND MINIBATCH PROBLEMS",
+    "text": "For problems with randomly generated data, such as logistic regression, we fed in minibatches of various sizes, from 10 to 200. We also used a minibatch quadratic task, where the minibatch loss consisted of the square inner product of the parameters with random input vectors.\nFor full-batch problems, we sometimes added normally distributed noise with standard deviations from 0.1 to 2.0 in order to simulate noisy minibatch loss."
+  }, {
+    "heading": "4.1.4. SLOW CONVERGENCE PROBLEMS",
+    "text": "We included several tasks where optimization could proceed only very slowly, despite the small problem size. This included a many-dimensional oscillating valley whose global minimum lies at infinity, and a problem with a loss consisting of a very strong coupling terms between parameters in a sequence. We additionally included a task where the loss only depends on the minimum and maximum valued parameter, so that gradients are extremely sparse and the loss has discontinuous gradients."
+  }, {
+    "heading": "4.1.5. TRANSFORMED PROBLEMS",
+    "text": "We also included a set of problems which transform the previously defined target problems in ways which map to common situations in optimization.\nTo simulate problems with sparse gradients, one transformation sets a large fraction of the gradient entries to 0 at each training step. To simulate problems with different scaling across parameters, we added a transformation which performs a linear change of variables so as to change the relative scale of parameters. To simulate problems with different steepness-profiles over the course of learning, we added a transformation which applied monotonic transformations (such as raising to a power) to the final loss. Finally, to simulate complex tasks with diverse parts, we added a multi-task transformation, which summed the loss and concatenated the parameters from a diverse set of prob-\nlems."
+  }, {
+    "heading": "4.2. Meta-objective",
+    "text": "For the meta-training loss, used to train the metaparameters of the optimizer, we used the average log loss across all training problems,\nL (ψ) = 1\nN N∑ n=1 ( log (`(θn (ψ)) + )− log ( `(θ0) + )) ,\n(14)\nwhere the second term is a constant, and where ψ is the full set of meta-parameters for the learned optimizer, consisting of ψ = {ψP-RNN, ψT-RNN, ψG-RNN, γ, c}, where ψ•-RNN indicates the GRU weights and biases for the Parameter, Tensor, or Global RNN, γ is the learning rate momentum and c is the attended step offset (Section 3.2.4).\nMinimizing the average log function value, rather than the average function value, better encourages exact convergence to minima and precise dynamic adjustment of learning rate based on gradient history (Figure 6). The average logarithm also more closely resembles minimizing the final function value, while still providing a meta-learning signal at every training step, since very small values of `(θn) make an outsized contribution to the average after taking the logarithm."
+  }, {
+    "heading": "4.3. Partial unrolling",
+    "text": "Meta-learning gradients were computed via backpropagation through partial unrolling of optimization of the target problem, similarly to Andrychowicz et al. (2016). Note that Andrychowicz et al. (2016) dropped second derivative terms from their backpropagation, due to limitations of Torch. We compute the full gradient in TensorFlow, including second derivatives."
+  }, {
+    "heading": "4.4. Heavy-tailed distribution over training steps",
+    "text": "In order to encourage the learned optimizer to generalize to long training runs, both the number of partial unrollings, and the number of optimization steps within each partial unroll, was drawn from a heavy tailed exponential distribution. The resulting distribution is shown in Appendix C.1"
+  }, {
+    "heading": "4.5. Meta-optimization",
+    "text": "The optimizers were meta-trained for at least 40M metaiterations (each meta-iteration consists of loading a random problem from the meta-training set, running the learned optimizer on that target problem, computing the metagradient, and then updating the meta-parameters). The meta-objective was minimized with asynchronous RMSProp across 1000 workers, with a learning rate of 10−6."
+  }, {
+    "heading": "5. Experiments",
+    "text": ""
+  }, {
+    "heading": "5.1. Failures of existing learned optimizers",
+    "text": "Previous learned optimizer architectures like Andrychowicz et al. (2016) perform well on the problems on which they are meta-trained. However, they do not generalize well to new architectures or scale well to longer timescales. Figure 2 shows the performance of an optimizer metatrained on a 2-layer perceptron with sigmoid activations on\n0 1K 2K 3K 4K\n10-1\n100\nT ra\nin in\ng L\no ss\nLearned\n8e-2 2e-2 2e-3\n2e-3 7e-4 5e-2\n1e-2 1e-3 2e-3\n1e-3 2e-3 7e-4\nConvNet Relu ConvNet Sigmoid\nMLP Relu MLP Sigmoid\nLearned ADAM\nRMSProp SGD + Momentum\n(a) Learned optimizer matches performance of ADAM, RMSProp, and SGD with momentum on four problems never seen in the meta-training set. For the non-learned optimizer, the optimal learning rate for each problem was chosen from a sweep over learning rates from 10−9 to 0.1. Actual learning rates used are shown in the inset legend.\n0 4M 8M 12M 16M Training Examples\n4\n6\n8\n10\n12\nTr ai\nni ng\nL os\ns\nInception V3\n0 1M 2M 3M 4M Training Examples\n4\n6\n8\n10\n12 Resnet V2\nLearned RMSProp ADAM SGD + Momentum\n(b) Training loss on ImageNet data in early training as a function of number of training examples seen (accounting for varying minibatch sizes). While other optimizer performance is highly dependent on hyperparameters, learned optimizer performance is similar to the best tuned optimizers (though in late training, the learned optimizer loss increases again). In both cases the learned optimizer was used for distributed, synchronized learning with an effective minibatch size of 800. The Inception V3 plot was generated from a newer version of the codebase, with small improvements described in Appendix D. On Inception V3, other optimizers used a learning rate of 0.045 and an effective minibatch size of 1600 (the optimal hyperparameters for the RMSProp optimizer from the original paper). On Resnet, other optimizers used a learning rate of 0.1 and an effective minibatch size of 256 (the optimal hyperparameters for the SGD + momentum optimizer from the original paper).\nFigure 4. The learned optimizer generalizes to new problem types unlike any in the meta-training set, and with many more parameters.\nthe same problem type with ReLU activations and a new problem type (a 2-layer convolutional network). In both cases, the same dataset (MNIST) and minibatch size (64) was used. In contrast, our optimizer, which has not been meta-trained on this dataset or any neural network problems, shows performance comparable with ADAM and RMSProp, even for numbers of iterations not seen during meta-training (Section 4.4)."
+  }, {
+    "heading": "5.2. Performance on training set problems",
+    "text": "The learned optimizer matches or outperforms ADAM and RMSProp on problem types from the meta-training set (Figure 3). The exact setup for each problem type can be seen in the python code in the supplementary materials."
+  }, {
+    "heading": "5.3. Generalization to new problem types",
+    "text": "The meta-training problem set did not include any convolutional or fully-connected layers. Despite this, we see comparable performance to ADAM, RMSProp, and SGD with momentum on simple convolutional multi-layer networks and multi-layer fully connected networks both in terms of final loss and number of iterations to convergence (Figure 4a and Figure 2).\nWe also tested the learned optimizer on Inception V3 (Szegedy et al., 2016) and on ResNet V2 (He et al., 2016). Figure 4b shows the learned optimizer is able to stably train these networks for the first 10K to 20K steps, with performance similar to traditional optimizers tuned for the spe-\ncific problem. Unfortunately, we find that later in training the learned optimizer stops making effective progress, and the loss approaches a constant (approximately 6.5 for Inception V3). Addressing this issue would be a goal of future work."
+  }, {
+    "heading": "5.4. Performance is robust to choice of learning rate",
+    "text": "One time-consuming aspect of training neural networks with current optimizers is choosing the right learning rate for the problem. While the learned optimizer is also sensitive to initial learning rate, it is much more robust. Figure 5 shows the learned optimizer’s training loss curve on a quadratic problem with different initial learning rates com-\npared to those same learning rates on other optimizers."
+  }, {
+    "heading": "5.5. Ablation experiments",
+    "text": "The design choices described in Section 3 matter for the performance of the optimizer. We ran experiments in which we removed different features and re-meta-trained the optimizer from scratch. We kept the features which, on average, made performance better on a variety of test problems. Specifically, we kept all of the features described in 3.2 such as attention (3.2.1), momentum on multiple timescales (gradient scl) (3.2.2), dynamic input scaling (variable scl decay) (3.2.3), and a relative learning rate (relative lr) (3.2.4). We found it was important to take the logarithm of the meta-objective (log obj) as described in 4.2. In addition, we found it helpful to let the RNN learn its own initial weights (trainable weight init) and an accumulation decay for multiple gradient timescales (inp decay). Though all features had an effect, some features were more crucial than others in terms of consistently improved performance. Figure 6 shows one test problem (a 2-layer convolutional network) on which all final features of the learned optimizer matter."
+  }, {
+    "heading": "5.6. Wall clock comparison",
+    "text": "In experiments, for small minibatches, we significantly underperform ADAM and RMSProp in terms of wall clock time. However, consistent with the prediction in 3.4, since our overhead is constant in terms of minibatch we see that the overhead can be made small by increasing the minibatch size."
+  }, {
+    "heading": "6. Conclusion",
+    "text": "We have shown that RNN-based optimizers meta-trained on small problems can scale and generalize to early train-\ning on large problems like ResNet and Inception on the ImageNet dataset. To achieve these results, we introduced a novel hierarchical architecture that reduces memory overhead and allows communication across parameters, and augmented it with additional features shown to be useful in previous optimization and recurrent neural network literature. We also developed an ensemble of small optimization problems that capture common and diverse properties of loss landscapes. Although the wall clock time for optimizing new problems lags behind simpler optimizers, we see the difference decrease with increasing batch size. Having shown the ability of RNN-based optimizers to generalize to new problems, we look forward to future work on optimizing the optimizers."
+  }, {
+    "heading": "A. Code",
+    "text": "The code for the meta-training procedure and meta-train problem set is available at https://git.io/v5oq5."
+  }, {
+    "heading": "B. Additional details of RNN architecture",
+    "text": "B.1. Shortcut connection\nSince we expect mnts to be the primary driver of update step direction, and in order to further reduce the information which must be stored in the Parameter RNN hidden state, we included a meta-trainable linear projection from the average rescaled gradients mnts and the update directions ∆θnt and ∆φ n t ."
+  }, {
+    "heading": "C. Additional details of meta-training process",
+    "text": "C.1. Heavy-tailed distribution over training steps\nFigure App.1. A histogram of the total number of training iterations run on target problems during meta-training. The total number of unrolls is drawn from an exponential distribution with scale 50 plus a constant offset of 1. The number of training iterations within each unroll is drawn from an exponential distribution with scale 200 and a constant offset of 50."
+  }, {
+    "heading": "D. Architecture updates",
+    "text": "The Inception V3 experiment in Figure 4b used a slightly newer version of the learned optimizer codebase. The changes were:\nD.1. Parameter noise during training\nDue to the use of small meta-training problems in Section 4.1, during meta-training the learned optimizer is often able to optimize the problem almost exactly early in the unrolled optimization, after which the meta-loss s becomes relatively uninformative. In order to better simulate tasks which take many steps to optimize, small Gaussian noise is added to the parameters during each optimization step.\nThis effectively moves the loss landscape underneath the optimizer, providing a more informative learning signal after many unrolls, and forcing the learned optimizer to be robust to a new type of noise. Specifically, the parameter update becomes\nθn+1t = θ n t + ∆θ n t + αñ t (15) ñ ∼ N (0, I) (16)\nwhere the noise scale α is drawn from a log uniform distribution between 10−10 and 10−2 for each problem.\nD.2. Momentum from previous timescale\nIn Equation 3 we scale the average gradients ḡnts by a running estimate √ λnts of the root-mean-square magnitude of ḡnts. This is a mismatch with Adam, where the average gradient is scaled by a running estimate of the root-meansquare magnitude of the non-averaged gradients. In order to be consistent with this, and in order to encourage better use of the dynamic range of mnts (as defined in the text body, it spends much of its time with values near 1 or −1), we modify Equation 3 to normalize the average gradient ḡnts by √ λnts from the immediately faster timescale,\nmnts = ḡnts√ λnt(s−1) , (17)\nand where we define the average gradient at the fastest time scale to be the raw gradient, ḡnt(−1) = g n t\nD.3. No normalization of step length\nIn order to simplify interactions between parameters, we no longer force a normalization of the parameter and attention update directions dnθt and d n φt. We do still decompose the update into the product of a learning rate and a step. Since the attended update direction is now able to take on a different magnitude, the separate attention log learning rate ηnφ is no longer required, and is eliminated. Equations 5 and 6 thus become\n∆θnt = exp (η n θt)d n θt, (18) ∆φnt = exp (η n θt)d n φt. (19)\nD.4. More stable meta-training hyper-parameters\nThe distribution over meta-loss gradients is observed to be assymmetrical and heavy tailed. This combination is known to cause biased parameter updates in RMSProp and Adam, since both optimizers underweight the contribution from extremely rare extremely large gradients. In order to reduce this tendency, we updated the mean-quare-gradient momentum term γ to be 0.999, rather than 0.9 in the metaoptimizer RMSProp (Section 4.5)."
+  }],
+  "year": 2017,
+  "references": [{
+    "title": "Learning to learn by gradient descent by gradient descent",
+    "authors": ["Andrychowicz", "Marcin", "Denil", "Misha", "Gomez", "Sergio", "Hoffman", "Matthew W", "Pfau", "David", "Schaul", "Tom", "Shillingford", "Brendan", "de Freitas", "Nando"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2016
+  }, {
+    "title": "Neural machine translation by jointly learning to align and translate",
+    "authors": ["Bahdanau", "Dzmitry", "Cho", "Kyunghyun", "Bengio", "Yoshua"],
+    "venue": "iclr,",
+    "year": 2015
+  }, {
+    "title": "On the search for new learning rules for ANNs",
+    "authors": ["S. Bengio", "Y. Bengio", "J. Cloutier"],
+    "venue": "Neural Processing Letters,",
+    "year": 1995
+  }, {
+    "title": "Learning a synaptic learning",
+    "authors": ["Bengio", "Yoshua", "Samy", "Cloutier", "Jocelyn"],
+    "venue": "rule. Université de Montréal, Département d’informatique et de recherche opérationnelle,",
+    "year": 1990
+  }, {
+    "title": "On the optimization of a synaptic learning rule",
+    "authors": ["Bengio", "Yoshua", "Samy", "Cloutier", "Jocelyn", "Gecsei", "Jan"],
+    "venue": "In in Conference on Optimality in Biological and Artificial Networks,",
+    "year": 1992
+  }, {
+    "title": "Learning to learn for global optimization of black box functions",
+    "authors": ["Chen", "Yutian", "Hoffman", "Matthew W", "Colmenarejo", "Sergio Gomez", "Denil", "Misha", "Lillicrap", "Timothy P", "de Freitas", "Nando"],
+    "venue": "arXiv Report",
+    "year": 2016
+  }, {
+    "title": "On the properties of neural machine translation: Encoder-decoder approaches",
+    "authors": ["Cho", "Kyunghyun", "Van Merriënboer", "Bart", "Bahdanau", "Dzmitry", "Bengio", "Yoshua"],
+    "venue": "arXiv preprint arXiv:1409.1259,",
+    "year": 2014
+  }, {
+    "title": "Rl2: Fast reinforcement learning via slow reinforcement learning",
+    "authors": ["Duan", "Yan", "Schulman", "John", "Chen", "Xi", "Bartlett", "Peter", "Sutskever", "Ilya", "Abbeel", "Pieter"],
+    "venue": "Technical report, UC Berkeley and OpenAI,",
+    "year": 2016
+  }, {
+    "title": "RMSprop loses to SMORMS3 - beware the epsilon",
+    "authors": ["Funk", "Simon"],
+    "venue": "URL sifter.org/$\\sim$simon/",
+    "year": 2015
+  }, {
+    "title": "The formation of learning sets",
+    "authors": ["Harlow", "Harry F"],
+    "venue": "Psychological review,",
+    "year": 1949
+  }, {
+    "title": "Identity mappings in deep residual networks",
+    "authors": ["He", "Kaiming", "Zhang", "Xiangyu", "Ren", "Shaoqing", "Sun", "Jian"],
+    "venue": "In European Conference on Computer Vision,",
+    "year": 2016
+  }, {
+    "title": "Learning to learn using gradient descent",
+    "authors": ["Hochreiter", "Sepp", "Younger", "A Steven", "Conwell", "Peter R"],
+    "venue": "In International Conference on Artificial Neural Networks,",
+    "year": 2001
+  }, {
+    "title": "A layered network model of associative learning: learning to learn and configuration",
+    "authors": ["Kehoe", "E James"],
+    "venue": "Psychological review,",
+    "year": 1988
+  }, {
+    "title": "Adam: A method for stochastic optimization",
+    "authors": ["Kingma", "Diederik", "Ba", "Jimmy"],
+    "venue": "iclr,",
+    "year": 2015
+  }, {
+    "title": "Imagenet classification with deep convolutional neural networks. In Advances in neural information processing",
+    "authors": ["Krizhevsky", "Alex", "Sutskever", "Ilya", "Hinton", "Geoffrey E"],
+    "year": 2012
+  }, {
+    "title": "Building machines that learn and think like people",
+    "authors": ["Lake", "Brenden M", "Ullman", "Tomer D", "Tenenbaum", "Joshua B", "Gershman", "Samuel J"],
+    "venue": "arXiv Report",
+    "year": 2016
+  }, {
+    "title": "Learning to optimize",
+    "authors": ["Li", "SKe", "Malik", "Jitendra"],
+    "venue": "In International Conference on Learning Representations,",
+    "year": 2017
+  }, {
+    "title": "Meta-neural networks that learn by learning",
+    "authors": ["Naik", "Devang K", "Mammone", "RJ"],
+    "venue": "In International Joint Conference on Neural Networks,",
+    "year": 1992
+  }, {
+    "title": "A method of solving a convex programming problem with convergence rate o (1/k2)",
+    "authors": ["Nesterov", "Yurii"],
+    "venue": "In Soviet Mathematics Doklady,",
+    "year": 1983
+  }, {
+    "title": "A method of solving a convex programming problem with convergence rate o (1/k2)",
+    "authors": ["Nesterov", "Yurii"],
+    "venue": "In Soviet Mathematics Doklady,",
+    "year": 1983
+  }, {
+    "title": "Optimization as a model for few-shot learning",
+    "authors": ["Ravi", "Sachin", "Larochelle", "Hugo"],
+    "venue": "In International Conference on Learning Representations,",
+    "year": 2017
+  }, {
+    "title": "Evolution and design of distributed learning rules",
+    "authors": ["Runarsson", "Thomas Philip", "Jonsson", "Magnus Thor"],
+    "venue": "In IEEE Symposium on Combinations of Evolutionary Computation and Neural Networks,",
+    "year": 2000
+  }, {
+    "title": "Meta-learning with memory-augmented neural networks",
+    "authors": ["Santoro", "ADAM", "Bartunov", "Sergey", "Botvinick", "Matthew", "Wierstra", "Daan", "Lillicrap", "Timothy"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2016
+  }, {
+    "title": "Evolutionary Principles in SelfReferential Learning. On Learning how to Learn: The Meta-Meta-Meta...-Hook",
+    "authors": ["Schmidhuber", "Jurgen"],
+    "venue": "PhD thesis, Institut f. Informatik, Tech. Univ. Munich,",
+    "year": 1987
+  }, {
+    "title": "Optimization test functions and datasets",
+    "authors": ["Surjanovic", "Sonja", "Bingham", "Derek"],
+    "year": 2013
+  }, {
+    "title": "Rethinking the inception architecture for computer vision",
+    "authors": ["Szegedy", "Christian", "Vanhoucke", "Vincent", "Ioffe", "Sergey", "Shlens", "Jon", "Wojna", "Zbigniew"],
+    "venue": "In Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition,",
+    "year": 2016
+  }, {
+    "title": "Learning to learn",
+    "authors": ["Thrun", "Sebastian", "Pratt", "Lorien"],
+    "venue": "Springer Science and Business Media,",
+    "year": 1998
+  }, {
+    "title": "Lecture 6.5rmsprop: Divide the gradient by a running average of its recent magnitude",
+    "authors": ["Tieleman", "Tijmen", "Hinton", "Geoffrey"],
+    "venue": "COURSERA: Neural Networks for Machine Learning,",
+    "year": 2012
+  }, {
+    "title": "An incremental gradient (-projection) method with momentum term and adaptive stepsize rule",
+    "authors": ["Tseng", "Paul"],
+    "venue": "Journal on Optimization,",
+    "year": 1998
+  }, {
+    "title": "Learning to reinforcement learn",
+    "authors": ["Wang", "Jane X", "Kurth-Nelson", "Zeb", "Tirumala", "Dhruva", "Soyer", "Hubert", "Leibo", "Joel Z", "Munos", "Rémi", "Blundell", "Charles", "Kumaran", "Dharshan", "Botvinick", "Matt"],
+    "venue": "arXiv Report",
+    "year": 2016
+  }, {
+    "title": "Reminiscence and rote learning",
+    "authors": ["Ward", "Lewis B"],
+    "venue": "Psychological Monographs,",
+    "year": 1937
+  }, {
+    "title": "Neural architecture search with reinforcement learning",
+    "authors": ["Zoph", "Barret", "Le", "Quoc V"],
+    "venue": "In International Conference on Learning Representations,",
+    "year": 2017
+  }],
+  "id": "SP:b8ff7e02ffa1577d125acd3e998e8ce76a9059dc",
+  "authors": [{
+    "name": "Olga Wichrowska",
+    "affiliations": []
+  }, {
+    "name": "Niru Maheswaranathan",
+    "affiliations": []
+  }, {
+    "name": "Matthew W. Hoffman",
+    "affiliations": []
+  }, {
+    "name": "Sergio Gómez Colmenarejo",
+    "affiliations": []
+  }, {
+    "name": "Misha Denil",
+    "affiliations": []
+  }, {
+    "name": "Nando de Freitas",
+    "affiliations": []
+  }, {
+    "name": "Jascha Sohl-Dickstein",
+    "affiliations": []
+  }],
+  "abstractText": "Learning to learn has emerged as an important direction for achieving artificial intelligence. Two of the primary barriers to its adoption are an inability to scale to larger problems and a limited ability to generalize to new tasks. We introduce a learned gradient descent optimizer that generalizes well to new tasks, and which has significantly reduced memory and computation overhead. We achieve this by introducing a novel hierarchical RNN architecture, with minimal perparameter overhead, augmented with additional architectural features that mirror the known structure of optimization tasks. We also develop a meta-training ensemble of small, diverse optimization tasks capturing common properties of loss landscapes. The optimizer learns to outperform RMSProp/ADAM on problems in this corpus. More importantly, it performs comparably or better when applied to small convolutional neural networks, despite seeing no neural networks in its meta-training set. Finally, it generalizes to train Inception V3 and ResNet V2 architectures on the ImageNet dataset for thousands of steps, optimization problems that are of a vastly different scale than those it was trained on. We release an open source implementation of the meta-training algorithm.",
+  "title": "Learned Optimizers that Scale and Generalize"
+}

@@ -1,0 +1,245 @@
+{
+  "sections": [{
+    "text": "One of the most widely used strategies for visual object detection is based on exhaustive spatial hypothesis search. While methods like sliding windows have been successful and effective for many years, they are still brute-force, independent of the image content and the visual category being searched. In this paper we present principled sequential models that accumulate evidence collected at a small set of image locations in order to detect visual objects effectively. By formulating sequential search as reinforcement learning of the search policy (including the stopping condition), our fully trainable model can explicitly balance for each class, specifically, the conflicting goals of exploration – sampling more image regions for better accuracy –, and exploitation – stopping the search efficiently when sufficiently confident about the target’s location. The methodology is general and applicable to any detector response function. We report encouraging results in the PASCAL VOC 2012 object detection test set showing that the proposed methodology achieves almost two orders of magnitude speed-up over sliding window methods."
+  }, {
+    "heading": "1. Introduction",
+    "text": "Classically, detection has been formulated as the problem of maximizing a confidence function over a set of hypothesized target locations, where the confidence can be learned in a fully supervised[12] or weakly supervised[34] setup. In the sliding window formulation, the hypothesis set consists of a large set of rectangular windows, and the maximization problem is solved by exhaustive search. Since this process is generally too expensive in practice, many methods have been proposed to accelerate it, from methodologies that leverage properties of the confidence function, to proposal methods or cascade techniques. All these methods retain the exhaustive search property over the hypothesis space, aiming either to reduce the number of hypotheses to start with, or search these efficiently.\nIn contrast, biological systems have a pattern of search that can be characterized as ‘saccade and fixate’[17], where a small set of scene locations are investigated sequentially, in order to accumulate sufficient evidence on the target location. Set aside efficiency (only a few regions of an image are explored) and biological plausibility, it appears still interesting to formally derive mathematical models that could optimally balance efficiency and accuracy, by integrating evidence, sequentially, in a principled way. The challenge is to be able to operate with delayed rewards, which rule out supervision at each step. At the same time, avoid the need to completely pre-specify the environment, which for visual scenes would be impossible – given the complexity of images and visual object categories, the models should be effectively trained.\nBy formulating sequential search as reinforcement learning of the category and the image-dependent search policy including the stopping conditions, in this work we develop fully trainable methods that can explicitly balance the conflicting goals of exploration – sampling more image regions for better accuracy –, and exploitation – stopping the search efficiently when sufficiently confident in the target’s location. The methodology is general, applicable to any detector response function, and can learn search strategies and stopping conditions that are image and visual category specific. Two orders of magnitude speed-ups over sliding window methods are achieved in the challenging PASCAL VOC 2012 object detection benchmark."
+  }, {
+    "heading": "2. Related Work",
+    "text": "One class of efficient detectors focuses on the use of branch-and-bound heuristics[23] to prioritize exploration of the search space towards promising image regions. Unlike the present work, such techniques are only applicable to confidence function classes for which strong bounds are available. Additionally, in the absence of the target in the image, methods in this class degenerate to exhaustive search. Motivated by these limitations, other authors have proposed to use cascades of classifiers[39, 11, 15, 30], to\nprogressively narrow the search space, where weak but fast classifiers are applied early to eliminate image regions unlikely to contain the target, while investing computational resources to run more complex classifiers on promising regions. Such methods drastically reduce the computation cost, but classifiers early in the cascade still have to be applied exhaustively over all image regions. Instead of focusing on region exploration strategies, other methods have sought to optimize the evaluation of the confidence function. This includes sharing computation among neighboring image regions[40, 35] or among the different classifiers for multi-class detection problems[20].\nRecent trends in object detection focus on a rapid content-based reduction of the set of candidates – in earlier methods, windows, cropped at different positions, and of different aspect ratios, in an image – to a smaller set (still thousands of hypotheses in most methods) which exhibits the statistical regularities of the objects found in the real world. Typical methodologies include parametric figureground segmentation with Gestalt, ‘object-like’ filtering[5], superpixels[38, 32] or edge-based cues[21]. In this work we will rely on the parametric segmentation method of Carreira et al.[5] to generate a set of free-form figure-ground proposals that capture most objects of interest, although our method can use any other state of the art proposal generation method[38, 32, 21].\nIn contrast to methods based on branch and bound and cascades of classifiers, sequential search methods like [13] attempt to sparsely sample the image through a local search guided by the contextual relations among regions, previously shown to improve detection accuracy[6, 7, 16, 31]. [13] propose search policies that map contextual windows to the ground truth target location based on random forests, whereas [37, 9] learn a mapping from images to bounding box masks using a cascaded deep learning model.\nPalleta et al.[25] and Butko and Movellan[3] developed remarkable early sequential models based on POMDPs for recognition and face detection. However, those models are not fully trainable and require a complete and accurate specification of the environment, which makes them challenging to apply in complex multi-class visual detection setups. More recently, reinforcement learning[36] has been applied to visual analysis problems like image classification[24, 19, 29], face detection[14], tracking and recognizing objects in video[2], learning a sequential policy for RGB-D semantic segmentation[1], or scanpath prediction[27].\nIn independent work performed in parallel with ours[28], [4] also focus on object detection using reinforcement Qlearning. We differ, among others, in using policy search based on an analytic gradient computation with continuous as opposed to discrete reward (both in a supervised and weakly-supervised image labeling setup[26]), by operating on regions instead of deforming bounding boxes, in using\ndifferent actions (infinite set via function approximation vs. 9 in [4]), a different state representation (a set of 10 boxes in [4] vs. our manipulation of disjoint sets), and in the training procedure based on reinforcement learning with delayed rewards as opposed to an additional apprenticeship signal in [4]. This results in a different model behavior in both training and testing, as [4] requires the control of actions via short steps in order to prevent the apprenticeship learning process to immediately locate the target from any position. In testing [4] use 10 steps to locate the target, whereas our model takes 3.1 steps on average.\nRelevant to our work is also the one of Karayev et al.[18] who differently however, focus on object detection in an anytime recognition framework where a multi-class detector can be stopped, asynchronously, during its execution. [18] sequentially schedule multi-class models, optimizing the order of applying sliding window object detectors (exhaustively evaluated at all image locations, in a cascade), stopping short of running detectors for some classes. In contrast, we spatially optimize each specific sequential class detector (stopping short of searching all image locations) and run the detectors for all classes in the standard way. Methodologically, there are significant differences: [18] use Q-learning and regress expected value of (state, action), we do policy search with analytic gradient to directly optimize expected reward. We have infinite action spaces (any image location), [18] operate over finite actions (1+#detectorclasses in [18], or 1+#feature-types in [19, 8]); [18] can stop anytime, whereas we learn a stopping condition for each class. From a system viewpoint, the methods are complementary, as one can benefit both from an efficient ordering of class detectors[18] and from efficient individual class detectors, as we propose, but we will not investigate this here."
+  }, {
+    "heading": "3. Problem Formulation",
+    "text": "Given an input image, we formulate action detection as the problem of maximizing a confidence function fc : R→ R over the set of image regions R:\nr∗ = argmax r∈R fc(r) (1)\nThe set of image regions R can be defined either at the coarse level of bounding boxes or at the finer level of freeform image regions obtained with a state of the art proposal generation method[5, 38, 32].\nGood choices for the confidence function fc that achieve state-of-the-art performance, are associated with a high computational price tag. Therefore, solving the optimization problem (1) can still be expensive even for the comparatively smaller (versus e.g. bounding boxes) set of region proposals R obtained by a segmentation algorithm. To address this issue, in §3.1 we present a model to learn efficient search strategies, rigorously formulated in a reinforcement\nlearning setup. Our model operates in an integrate, fixate and evaluate regime, and only explores a few locations before deciding on the presence of a target."
+  }, {
+    "heading": "3.1. Sequential Detection Model",
+    "text": "In this section, we present the key components of our optimal sequential model for image exploration.1 Our model is given a set of image regions R indexed by the set B = {1, . . . , |R|} (with | · | the set cardinality), the confidence function as introduced in (1), fc(r) = θ ⊤ c q(r) with parameters θc, and a feature extractor q : R→ R m of dimensionality m. The objective of the model is to locate the target with a minimal number of evaluations of these two computationally expensive functions\nAt each time step t during a detection sequence (except the last step), our model generates a fixate action Aft , based on its internal state St. Each fixation action specifies a location in the image that the model decides to explore, and results in a set of observations Ot, which is a set of image regions in the proximity of this location. The observed regions are the only regions that are inspected by the algorithm. In particular, they are the only regions on which the confidence function fc and feature extractor q need to be evaluated. The observations Ot are then used to update the\n1Please see our accompanying report[26] for detailed derivations.\nstate St, summarizing all past observations and actions. When enough information has been collected about the image, the model issues a special done action, indicating that it has decided on the location of the detection target. The done action is associated with a detection target bounding box bt and a detection confidence value ct. The model has a set of trainable parameters θ = (θc,θd,θe,θp,Σp, σc) controlling, respectively, the detector response confidence, the stopping criteria, the informativeness of an image region with respect to the target location, the image location of the most probable next fixation and its variance, and the variance of the confidence ct associated to the model output.\nEach fixate action Aft can potentially reduce the uncertainty in localizing the detection target, but is associated with a computational cost due to the need to integrate the set of observations Ot into the state. The goal of our model is to balance the conflicting needs of information gathering (fixate actions) with the need to correctly locate the target (done actions)."
+  }, {
+    "heading": "3.2. Model Structure",
+    "text": "We now proceed to describe in detail the actions, states, observations and the decision process of our model. The model components are shown in fig. 1, and several examples of search patterns are illustrated in fig. 2.\nStates: The state of our model is represented as a tuple with three elements: the observed region history Ht, the selected evidence region history Et and the fixation history Ft. This tuple St = (Ht, Et, Ft) summarizes the history of observations and actions since the beginning of the search sequence.\nThe observed region history Ht: At each time step t, the model keeps track of a history Ht ⊆ B of image regions observed so far. The confidence function fc is evaluated on these regions alone and used to decide when to terminate the search. The history Ht is also used by the model to decide on promising locations to fixate during the next step, as these might provide context to guide the search.\nThe selected evidence region history Et: The model decides on the next location to fixate based on an evidence region et ∈ Ht from the observation history. This evidence region is deemed by the model to provide the necessary context that is indicative of the target’s location. However, to encourage diversity during search, each region should be used as evidence at most once. For this reason, the model keeps track of the set Et ⊆ Ht of regions selected so far, and evidence regions are always selected from the set Ht \\ Et.\nThe fixation history Ft: The set of observed regions at\neach time step t depends on the history Ft of past fixation locations, c.f . (2). We therefore include this history into the state St.\nActions: Actions in our model are represented as tuples. There are two kinds of actions, distinguished by their first element, which can be one of two discrete symbols: fixate or done.\nFixate actions are represented as a three element tuple Aft = (fixate, et, zt), where et ∈ B represents the index of the evidence region and zt ∈ R 2 is the image coordinate of the next fixation. Done actions are represented as Adt = (done, bt, ct) where bt ∈ B is the index of the region representing the detection output and ct ∈ R represents the detection confidence. To summarize, the action space of our model consists of the union of all fixate and done tuples, i.e. A = Af ∪ Ad.\nObservations: Following a fixate action, the set Ot of image regions in the neighbourhood of the fixation location zt become observed.\nTo define this neighbourhood, we use a circular area of radius TR around the fixation center zt. We say that a pixel is fixated at time t if it falls within the area associated with zt. In order for a region r to become observed at time t, a\nsufficiently large fraction h(r) of its pixels must have been fixated during the current or previous steps:\nh(r) = |{x ∈ r| (∃) z ∈ Ft, ‖z− x‖2 ≤ TR}|\n|r| (2)\nOt = {i ∈ B | h(ri) ≥ TF } (3)\nwhere Ft = {z1, .., zt} is the history of locations fixated by the model up to time step t, and TF is a threshold that controls the minimum fraction of fixated pixels in an observed segment."
+  }, {
+    "heading": "3.3. Stochastic Policy",
+    "text": "The model decides on the next action to take based on the current state. Its stochastic decision policy πθ(St,At) proceeds in three phases, each having its own set of learned parameters. The model evaluates whether to terminate search (termination decision). If positive, a done action is performed, else a fixate action follows. We will review each of these, next.\nTermination decision: The model may decide to terminate search at any given time step, based on the current state St, and produce a detection result. Rather than using an ad-hoc\ntermination policy, e.g. a preset number of fixations (search locations), our model uses a learnt decision function that balances detection confidence against computational load:\n• Detection confidence: If the model has already observed a region which is deemed to contain the de-\ntection target with high confidence, it may decide to terminate the search early. To capture this aspect, we compute the maximum confidence over the regions observed so far, i.e. asmax (\n{fc (ri)}i∈Ht ) , where\nasmax(X) = ∑ x∈X xeαx\n∑ x∈X eαx for any set X and smooth-\nness meta-parameter α.\n• Computational load: The running cost of our detector has two components: first, the number of confidence\nfunction evaluations performed so far, which is proportional to the ratio |Ht| / |R| of regions observed at the current time step t; second, the number of search policy evaluations. Since the policy is evaluated once per time step, this cost is proportional to the number of time steps t.\nIn order to allow the model to balance these termination criteria, we define a four-element feature vector for the current state:\nv (St) =\n[\nasmax ( {fc (ri)}i∈Ht )\nt |Ht|\n|R| 1\n]⊤\n(4)\nThe search termination probability (done action) is given\nby a logistic classifier with parameters θd:\npθ(dt = 1|St) = sigm [ θ⊤d v (St) ]\n(5)\nwhere dt is an binary variable indicating the decision to terminate the search at the current time step and sigm(x) = (1 + e−x) −1 is the sigmoid function.\nDone action: Upon termination (dt = 1), the model outputs a bounding box bt from the set Ht of observed regions, to represent the detection target location, together with a confidence score ct. We use a soft maximum bounding box selection criterion, with smoothness meta-parameter α:\npθ(bt = k|dt = 1,St) = eαfc(rk) ∑\ni∈Ht eαfc(ri)\n(6)\nThe corresponding confidence ct is normally distributed around the confidence for the selected bounding box:\npθ(ct|dt = 1, bt = k,St) = N(ct|fc(rk), σc) (7)\nwhere σc ∈ R is a model parameter that controls the variance of the confidence predictions.\nFinally, the probability of a done action is given by:\nπθ (At = (done, bt, ct) |St) = pθ (dt = 1|St) ·\n· pθ(bt|dt = 1,St)pθ(ct|dt = 1, bt,St) (8)\nFixate action: If the search is not terminated (dt = 0), the model selects a new evidence region et ∈ (Ht \\ Et) from the set of observed regions, that it deems informative for the target location.\nWe define an evidence function fe : B → R, fe (i) =\nexp [ θ⊤e q(ri) ] that evaluates the informativeness of image region i with respect to the target location, where θe are learned model parameters. We pick the region et from a multinomial distribution defined by the evidence function over the set Ht \\ Et of image regions not selected during previous steps:\npθ(et|St) = fe(et) ∑\ni∈Ht\\Et fe(i)\n(9)\nOnce selected, the evidence region et is used to define a Gaussian probability distribution for the next fixation location zt ∈ R 2. For convenience, let us denote by\nµ(et) = x1(et) + x2(et)\n2 (10)\nthe center of the bounding box tightly enclosing the evidence region ret , defined by its top-left and bottom-right corners x1(et) and x2(et), respectively. Similarly, let\n∆(et) = diag\n(\nx1(et)− x2(et)\n2\n)\n(11)\nbe the diagonal matrix encoding half the width and height of this bounding box. Then, the probability for the next fixation location zt is:\npθ(zt|St, et) = N ( ·|fp(et),∆(et) ⊤Σp∆(et) )\n(12)\nwhere Σp is a learned covariance matrix that controls the spread of fixations, and the Gaussian center fp(et) is based on a linear combination of the evidence region features q(ret) with learned parameters θp:\nfp(et) = ∆(et)θ ⊤ p q(et) + µ(et) (13)\nWe make the position function invariant to the scale of the image region ri by normalizing with respect to its bounding box size, defined by the top-left and bottom-right corners c.f . first term in (13), and relative to the bounding box center (second term in (13)). Summarizing, the probability of a fixate action is given by:\nπθ (At = (fixate, et, zt) |St) =\n= pθ (dt = 0|St) pθ (et|St) pθ (zt|St, et) (14)\nAlgorithm 1 Policy sampling algorithm\n1: procedure SAMPLE (St = (Ht, Et, Ft)) 2: dt ∼ p(dt|St) using (4), (5) 3: if dt = 1 then 4: bt ∼ p(bt|St, dt) using (6). 5: ct ∼ p(ct|St, dt, bt) using (7) 6: return At = (done, bt, ct) 7: else 8: et ∼ p(et|St, dt) using (9) 9: zt ∼ p(zt|St, dt, et) using (12)\n10: return At = (fixate, et, zt) 11: end if 12: end procedure\nAlgorithm 2 State transition algorithm\n1: procedure OBSERVE (St = (Ht, Et, Ft) , At = (fixate, et, zt)) 2: Ot ← {i ∈ B | h(ri) ≥ TF } 3: Ht+1 ← Ht ∪Ot 4: Et+1 ← Et ∪ {et} 5: Ft+1 ← Ft ∪ {zt} 6: return St+1 = (Ht+1, Et+1, Ft+1) 7: end procedure\nThe model policy is completely specified by equations (8), (14), which define a probability distribution over all possible actions At. Notice that out policy is highly (deeply) non-linear in the features and the parameters. The stochastic policy is given by a Gaussian distribution on top of highly non-linear predictions (in contrast notice that methodologies like [14, 4] are deterministic)."
+  }, {
+    "heading": "3.4. Inference and Learning",
+    "text": "Inference is carried out by repeated sampling of the policy πθ (At|St), until a done action is achieved (Algorithm 1). At each step the state St is updated according to the action At (Algorithm 2). When the search is finished, the region bt and the confidence ct are generated and returned as the detector output.\nFor learning we are given a set of images, represented as sets of regions Bj , together with confidence function fc aimed to be maximal at target locations. For notational simplicity, without loss of generality, we will consider the equations for one image, containing n (possibly 0) detection targets, and the corresponding ground truth regions {gi} n i=1.\nWe wish to find the model parameters θ = (θc,θd,θe,θp,Σp, σc) maximizing the target detection accuracy based on the detected target location bt and confidence ct at the last step (when dt = 1). At the same time, we aim to minimize the number of region evaluations. To capture the trade-off, and to avoid explicitly instructing the\nmodel how to achieve it, we formulate the training objective as a delayed reward, as typical in a reinforcement learning setup. Our reward function is sensitive to the detection location and the confidence at the final state, and incurs a penalty for each region evaluation:\nrt (St,At; {gi} n i=1) =\n=\n\n \n \n−β · |Ot \\Ht| if dt = 0 sigm (ct) · [maxi=1,n iou (gi, rbt)] if dt = 1 ∧ n > 0 −sigm (ct) if dt = 1 ∧ n = 0\n(15)\nwhere iou(·, ·) is the intersection over union function on regions and β is a penalty paid by the model for each confidence function evaluation.We found it straightforward to estimate the exploitation-exploration trade-off parameters, for each class detector, based on cross-validation. Typical values are e.g. β = 10−3 and α = 30. The first branch associates a negative reward to each fixate action, proportional to the computational cost of evaluating the newly observed region set Ot \\ Ht. The last two branches correspond to the done action, with different rewards for images in which the target is present and absent. In the former case (branch 2), the model receives a reward that is proportional to its confidence and the ground truth overlap. In the latter case (branch 3), the location is ignored, and the model receives a higher reward if its confidence is smaller. Concluding, the reward function defined in (15) balances detection accuracy and computational complexity.\nDuring training, we maximize the expected reward func-\ntion on the training set, defined as:\nF (θ) = Epθ(s)\n\n\n|s| ∑\nt=1\nrt\n\n− λ\n2 θ⊤θ (16)\nwhere s = ((S0,A0), . . . , (Sk,Ak), . . .) represents a variable length sequence of states2, sampled by running the model (Algorithm 1 and 2), starting from an initial state S0 = (H0, E0, F0) and λ is an L2 regularizer. We set the initial H0 to the set of segments observed by fixating the image center, and both E0 and F0 to ∅.\nFor one image, the gradient of the expected reward can\nbe approximated as[41, 36]:\n∇θF (θ) = 1\nM\nM ∑\ni=1\n|si| ∑\nt=1\n∇θlogπθ(A i t|S i t)\n\n \n|si| ∑\nt=1\nrit\n\n  + λθ\n(17)\nwhere si = ((Si0,A i 0), . . . , (S i k,A i k), . . .) and r i t, represent sequences of states, actions and corresponding re-\n2As the model decides when to terminate search, individually, for each\nsearch path.\nwards, sampled by model simulation (total of M sampled sequences).\nTraining our sequential model involves computing the expected reward and its gradient, c.f . (17),(16). For each image, this involves simulating the model until the search is terminated, by generating sequences in the state-action space. At each time step t, an action At is sampled from the policy, using Algorithm 1. More precisely, first the distribution pθ(dt|St) is sampled to decide whether the search is to be terminated (done action, i.e. dt = 1). If so, then the output region index bt and the confidence ct are sampled from pθ(bt|dt = 1,St) and pθ(ct|dt = 1,St), respectively. Otherwise (not done, i.e. dt = 0), an evidence region is selected by sampling pθ(et|dt = 0,St), and then the next fixation location is sampled from pθ(zt|dt = 0, et,St). Finally, the state of the model is updated, as described in Algorithm 2. Multiple sample sequences are generated in this way, for each image, and used to estimate the expectations.3"
+  }, {
+    "heading": "4. Experiments and Results",
+    "text": "In this section, we present experiments to validate our search method on the challenging Pascal VOC 2012 object detection Benchmark[10], over the withheld test set available via the evaluation server. In most of our experiments, the region space R consists of all segments extracted using a figure-ground region proposal method, and any state of the art method applies. Without loss of generality, we select the CPMC algorithm[5] as their segments can be mapped with reasonable accuracy to detection targets (according to our studies, the average intersection over union overlap of the best segment enclosing rectangle with the ground truth bounding box, is 0.687).\nPipelines: To quantify the performance of different standard search models, we either solve the maximization problem (1) exactly, by performing exhaustive sliding window search (SW), exhaustive search over the CPMC region proposal set (RP), or by using our sequential reinforcement learning search model (RL).\nExperimental procedure: We now present and discuss the details of our experiments.\nProposal generation: To obtain our RP hypotheses, we run the public implementation [5] over the input image. For the sliding window (SW) baseline, region hypotheses are windows obtained by iterating over various window sizes and aspect ratios, and, for each scale and aspect ratio setting, by sliding the window with a fixed stride over the image. Our sliding window enumeration strategy results in 25,000 windows per image. For region proposal, we use an optimized version of CPMC, which operates on a reduced\n3For a training set of images, we will naturally aggregate (sum over)\nsuch estimates, for each image.\nsearch space formed by free-form regions.4\nFeature extraction: For our feature extractor q, we use the deep neural network of Krizhevsky et al.[22]. For a region, we invoke the network over the contents of the bounding box, and to capture context, on the entire image where the bounding box has been masked out (filled by its mean color). For each neural network evaluation, we record the output of the last fully connected layer. We concatenate the resulting feature vector with a representation of the bounding box size and aspect ratio, and obtain a final vector of 8204 values. Deep neural networks can be refined to further increase detection accuracy[12, 33]. In this work we have focused on optimal search models and have therefore opted to illustrate our model with a simpler linear SVM model trained using a generic feature extractor[22]. Note however that our method is sufficiently general to operate in conjunction with any confidence function.\nTraining the sequential reinforcement learning detector: We find the optimal parameter vector θ that maximizes the expected reward (16) on the training set of the Pascal VOC 2012 Object detection challenge, using a BFGS optimizer. However, due to the high number of parameters, the model is prone to overfit the data. Therefore, in practice, we have chosen to initialize our confidence function parameters θc by pre-training using a linear SVM where positive instances are ground truth bounding boxes and negative instances are sampled from other image locations (from the region proposal set R).\nWe initialize θp by performing a regression from image regions to the centers of ground truth bounding boxes. We bias θc towards their initial values while the rest of the parameters i.e. (θd,θe, σc,Σp) are initialized by uniform random sampling, in the range [0, 1] and optimized using a 0 mean quadratic penalty c.f . (16). We validate the observation model parameters TR as in (2) and TF as in (3) on the Pascal VOC validation set, setting them to 64 pixels and 0.25, respectively. In practice the sensitivity associated to these parameters is not high: even if the model runs for several fixations, only a small fraction of the the total number of regions |R| is observed. Empirically, we found the model to produce fairly short and effective search patterns with a number of 3.1 image locations inspected on average. As our policy is stochastic, multiple object instances can be found. Moreover, in evaluation, all visited regions above a threshold (e.g. all attended regions) are identified (locate and restart strategies are also possible).\nComputational efficiency and accuracy: The running time and accuracy of our method is shown in table 1.\n4Notice however that the optimization only applies to the segment generation step. Therefore, as of recent trends in region proposal-based detection, we work with larger pools typically having thousands of segments, and avoid the expensive segment filtering and ranking steps.\nThe accuracy of our sequential detector is close to that of the much more expensive sliding window baseline, although it is more than 70 times faster on an Intel Xeon 2.2Ghz CPU. This speedup takes into account the overhead of the RP algorithm (6.1 seconds) and the small overhead needed to sample the policy of our sequential detector (32 ms). We explicitly chose to give speed-ups in running times (as opposed to e.g. number of inspected locations or detector evaluations) as these also cover the overheads (e.g. in our case the additional work for the segment proposal generation step or estimating the next action), for fair comparisons with sliding windows or region proposal methods.\nBesides comparisons with the SW and RP baselines, presented in table 1, it could be useful to relate to other efficient search methods like [13]. As code is not available and there are quite significant methodological, as well as region and feature representation differences, one can still consider overall speed-ups reported for similar datasets. For example, by operating over free-form regions obtained from selective search[38], [13] achieve a 9x acceleration, respectively, over sliding-windows methods in the PASCAL VOC Object Detection 2007 dataset. Both us and [13] could additionally benefit from embedding our accelerated spatial class detectors into the complementary, effective multi-class detector scheduling mechanism for anytime recognition proposed in [18]. This could further produce a 2x speed-up at roughly similar AP loss.\nQualitative analysis: We note that the length of the search sequence is greatly dependent on the image (see fig. 2). If the target is close to the image center (e.g. the bicycle in fig. 2), the method tends to terminate the search after the first fixation, as it has already confidently located the object. If the target is located near the periphery, our model tends to continue the search over a longer time horizon. This behavior illustrates the model’s capacity to adapt the search sequence length to the input image, as opposed to other fixed-lenght search methods in the literature.\nOur visualizations of the results reveal three ways in\nwhich an evidence region (shown in green in fig. 2) may guide the search: (a) The contextual region may not contain the target, but instead provide cues on its location (e.g. the ocean for the boat, or the road for the bus). In this case, the model navigates from the surrounding context to the object itself. (b) The contextual region may include the target (e.g. the tree branches in which the bird is hiding), and inform the model to fixate a subregion likely to represent it. This situation corresponds to a coarse-to-fine search for the target. (c) Finally, the target may be too big, and fixations inside its region may initially not foveate it sufficiently for an observation to be made. In such cases, object sub-parts are often chosen as evidence regions to guide the search to other subparts (e.g. the various features of the front of the railway engine), until the object is included in the observation set and therefore the confidence function is evaluated on its entire extent. In this case, the model behavior resembles a perceptual grouping process in which smaller scale parts are integrated to deduce the extent of a large object."
+  }, {
+    "heading": "5. Conclusions",
+    "text": "We have presented a reinforcement learning model for visual object detection. In contrast to methods that operate exhaustively over a hypothesis space, we have derived a fully trainable sequential model that can efficiently sample only a few image locations in order to accumulate evidence on the target location. Our model is image and category specific and can explicitly balance the trade-off between exploration (improving accuracy) and exploitation (efficiently terminating search when sufficient evidence has been gathered). Our methodology is general and applicable to any detector response function. We report encouraging results in the PASCAL VOC 2012 object detection dataset, showing that the proposed methodology achieves almost two orders of magnitude speed-up over sliding window methods.\nAcknowledgements. Work partly supported by CNCSUEFISCDI under PCE-2011-3-0438, JRP-RO-FR-2014-16."
+  }],
+  "references": [{
+    "title": "Second-Order Constrained Parametric Proposals and Sequential Search-Based Structured Prediction for Semantic Segmentation in RGB-D Images",
+    "authors": ["D. Banica", "C. Sminchisescu"],
+    "venue": "CVPR,",
+    "year": 2015
+  }, {
+    "title": "Learning attentional policies for tracking and recognition in video with deep networks",
+    "authors": ["L. Bazzani", "d. N. Freitas", "H. Larochelle", "V. Muriono"],
+    "venue": "In ICML,",
+    "year": 2011
+  }, {
+    "title": "Infomax control of eye movements",
+    "authors": ["N.J. Butko", "J.R. Movellan"],
+    "venue": "IEEE TAMD, 2(2):91–107,",
+    "year": 2010
+  }, {
+    "title": "Active object localization with deep reinforcement learning",
+    "authors": ["J. Caicedo", "S. Lazebnik"],
+    "venue": "ICCV,",
+    "year": 2015
+  }, {
+    "title": "CPMC: Automatic Object Segmentation Using Constrained Parametric Min-Cuts",
+    "authors": ["J. Carreira", "C. Sminchisescu"],
+    "venue": "PAMI,",
+    "year": 2012
+  }, {
+    "title": "Exploiting hierarchical context on a large database of object categories",
+    "authors": ["M. Choi", "J. Lim", "A. Torralba", "A. Willsky"],
+    "venue": "CVPR,",
+    "year": 2010
+  }, {
+    "title": "Discriminative models for multi-class object layout",
+    "authors": ["C. Desai", "D. Ramanan", "C. Fowlkes"],
+    "venue": "ICCV,",
+    "year": 2009
+  }, {
+    "title": "Sequentially generated instance-dependent image representations for classification",
+    "authors": ["G. Dulac-Arnold", "L. Denoyer", "N. Thome", "M. Cord", "P. Gallinari"],
+    "venue": "ICLR,",
+    "year": 2014
+  }, {
+    "title": "Scalable object detection using deep neural networks",
+    "authors": ["D. Erhan", "C. Szegedy", "A. Toshev", "D. Anguelov"],
+    "venue": "CVPR,",
+    "year": 2014
+  }, {
+    "title": "Cascade object detection with deformable part models",
+    "authors": ["P.F. Felzenszwalb", "R.B. Girschick", "D. McAllester"],
+    "venue": "CVPR,",
+    "year": 2010
+  }, {
+    "title": "Rich feature hierarchies for accurate object detection and semantic segmentation",
+    "authors": ["R. Girschick", "J. Donahue", "T. Darrell", "J. Malik"],
+    "venue": "CVPR,",
+    "year": 2014
+  }, {
+    "title": "An active search strategy for efficient object class detection",
+    "authors": ["A. Gonzalez-Garcia", "A. Vezhnevets", "V. Ferrari"],
+    "venue": "CVPR,",
+    "year": 2015
+  }, {
+    "title": "Reinforcement learning based visual attention with application to face detection",
+    "authors": ["B. Goodrich", "I. Arel"],
+    "venue": "CVPR,",
+    "year": 2012
+  }, {
+    "title": "Combining efficient object localization and image classification",
+    "authors": ["H. Harzallah", "F. Jurie", "C. Schmid"],
+    "venue": "ICCV,",
+    "year": 2009
+  }, {
+    "title": "Learning spatial context: Using stuff to find things",
+    "authors": ["G. Heitz", "D. Koller"],
+    "venue": "ECCV,",
+    "year": 2008
+  }, {
+    "title": "Neurobiology of attention",
+    "authors": ["L. Itti", "G. Rees", "J.K. Tsotsos"],
+    "venue": "Elsevier,",
+    "year": 2005
+  }, {
+    "title": "Timely object recognition",
+    "authors": ["S. Karayev", "T. Baumgartner", "M. Fritz", "T. Darrell"],
+    "venue": "NIPS,",
+    "year": 2012
+  }, {
+    "title": "Anytime recognition of objects and scenes",
+    "authors": ["S. Karayev", "M. Fritz", "T. Darrell"],
+    "venue": "CVPR,",
+    "year": 2014
+  }, {
+    "title": "Shufflets: Shared mid-level parts for fast object detection",
+    "authors": ["I. Kokkinos"],
+    "venue": "ICCV,",
+    "year": 2013
+  }, {
+    "title": "Learning to propose objects",
+    "authors": ["P. Krahenbuhl", "V. Koltun"],
+    "venue": "CVPR,",
+    "year": 2015
+  }, {
+    "title": "Imagenet classification with deep convolutional neural networks",
+    "authors": ["A. Krizhevsky", "I. Sutskever", "G. Hinton"],
+    "venue": "NIPS,",
+    "year": 2012
+  }, {
+    "title": "Beyond sliding windows: Object localization by efficient subwindow search",
+    "authors": ["C.H. Lampert", "M.B. Blaschko", "T. Hofmann"],
+    "venue": "CVPR,",
+    "year": 2008
+  }, {
+    "title": "Learning to combine foveal glimpses with a third-order boltzmann machine",
+    "authors": ["H. Larochelle", "G.E. Hinton"],
+    "venue": "NIPS,",
+    "year": 2009
+  }, {
+    "title": "Q-learning of sequential attention for visual object recognition from informative local descriptors",
+    "authors": ["G.F. Lucas Paletta", "C. Seifert"],
+    "venue": "ICML,",
+    "year": 2005
+  }, {
+    "title": "Deep reinforcement learning methods for visual object detection",
+    "authors": ["S. Mathe", "A. Pirinen", "C. Sminchisescu"],
+    "venue": "Technical report, Lund University,",
+    "year": 2016
+  }, {
+    "title": "Action from still image dataset and inverse optimal control to learn task specific visual scanpaths",
+    "authors": ["S. Mathe", "C. Sminchisescu"],
+    "venue": "NIPS,",
+    "year": 2013
+  }, {
+    "title": "Multiple instance reinforcement learning for efficient weakly-supervised detection in images",
+    "authors": ["S. Mathe", "C. Sminchisescu"],
+    "venue": "CoRR, abs/1412.0100,",
+    "year": 2014
+  }, {
+    "title": "Recurrent models of visual attention",
+    "authors": ["V. Mnih", "N. Heess", "A. Graves", "K. Kavukcuoglu"],
+    "venue": "NIPS,",
+    "year": 2014
+  }, {
+    "title": "A coarse-to-fine approach for fast deformable object detection",
+    "authors": ["M. Pedersoli", "A. Vedaldi", "J. Gonzales"],
+    "venue": "CVPR,",
+    "year": 2011
+  }, {
+    "title": "Objects in context",
+    "authors": ["A. Rabinovich", "A. Vedaldi", "C. Calleguillos", "E. Wiewiora", "S. Belongie"],
+    "venue": "ICCV,",
+    "year": 2007
+  }, {
+    "title": "Generating object segmentation proposals using global and local search",
+    "authors": ["P. Rantalankila", "J. Kannala", "E. Rahtu"],
+    "venue": "CVPR,",
+    "year": 2014
+  }, {
+    "title": "Faster R-CNN: Towards Real-Time Object Detection with Region Proposal Networks",
+    "authors": ["R. Shaoqing", "H. Kaiming", "R. Girshick", "J. Sun"],
+    "venue": "NIPS,",
+    "year": 2015
+  }, {
+    "title": "Action is in the eye of the beholder: Eye-gaze driven model for spatiotemporal action localization",
+    "authors": ["N. Shapovalova", "M. Raptis", "L. Sigal", "G. Mori"],
+    "venue": "NIPS,",
+    "year": 2013
+  }, {
+    "title": "Learning hierarchical models of scenes, objects, and parts",
+    "authors": ["E. Sudderth", "A. Torralba", "W. Freeman", "A. Willsky"],
+    "venue": "ICCV,",
+    "year": 2005
+  }, {
+    "title": "Reinforcement Learning",
+    "authors": ["R.S. Sutton", "A.G. Barto"],
+    "venue": "MIT Press,",
+    "year": 1998
+  }, {
+    "title": "Deep neural networks for object detection",
+    "authors": ["C. Szegedy", "A. Toshev", "D. Erhan"],
+    "venue": "NIPS,",
+    "year": 2013
+  }, {
+    "title": "Selective search for object recognition",
+    "authors": ["J.R. Uijlings", "K.E. van de Sande", "T. Gevers", "A.W. Smeulders"],
+    "year": 2013
+  }, {
+    "title": "Multiple kernels for object detection",
+    "authors": ["A. Vedaldi", "V. Gulshan", "M. Varma", "A. Zisserman"],
+    "venue": "ICCV,",
+    "year": 2009
+  }, {
+    "title": "Efficient histogram-based sliding window",
+    "authors": ["Y. Wei", "L. Tao"],
+    "venue": "CVPR,",
+    "year": 2010
+  }, {
+    "title": "Simple statistical gradient-following algorithms for connectionist reinforcement learning",
+    "authors": ["R. Williams"],
+    "venue": "Machine Learning,",
+    "year": 1992
+  }],
+  "id": "SP:33baa52f583fb049f473a53d8e0ca5ac8e7abbf2",
+  "authors": [{
+    "name": "Stefan Mathe",
+    "affiliations": []
+  }, {
+    "name": "Aleksis Pirinen",
+    "affiliations": []
+  }, {
+    "name": "Cristian Sminchisescu",
+    "affiliations": []
+  }],
+  "abstractText": "One of the most widely used strategies for visual object detection is based on exhaustive spatial hypothesis search. While methods like sliding windows have been successful and effective for many years, they are still brute-force, independent of the image content and the visual category being searched. In this paper we present principled sequential models that accumulate evidence collected at a small set of image locations in order to detect visual objects effectively. By formulating sequential search as reinforcement learning of the search policy (including the stopping condition), our fully trainable model can explicitly balance for each class, specifically, the conflicting goals of exploration – sampling more image regions for better accuracy –, and exploitation – stopping the search efficiently when sufficiently confident about the target’s location. The methodology is general and applicable to any detector response function. We report encouraging results in the PASCAL VOC 2012 object detection test set showing that the proposed methodology achieves almost two orders of magnitude speed-up over sliding window methods.",
+  "title": "Reinforcement Learning for Visual Object Detection"
+}

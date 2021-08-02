@@ -1,0 +1,187 @@
+{
+  "sections": [{
+    "heading": "1 Introduction",
+    "text": "A prevalent family [8, 6, 18] of deep networks for object detection can be divided into two subnetworks by the Region-of-Interest (RoI) pooling layer [6]: (i) a shared, “fully convolutional” subnetwork independent of RoIs, and (ii) an RoI-wise subnetwork that does not share computation. This decomposition [8] was historically resulted from the pioneering classification architectures, such as AlexNet [10] and VGG Nets [23], that consist of two subnetworks by design — a convolutional subnetwork ending with a spatial pooling layer, followed by several fully-connected (fc) layers. Thus the (last) spatial pooling layer in image classification networks is naturally turned into the RoI pooling layer in object detection networks [8, 6, 18].\nBut recent state-of-the-art image classification networks such as Residual Nets (ResNets) [9] and GoogLeNets [24, 26] are by design fully convolutional2. By analogy, it appears natural to use all convolutional layers to construct the shared, convolutional subnetwork in the object detection architecture, leaving the RoI-wise subnetwork no hidden layer. However, as empirically investigated in this work, this naïve solution turns out to have considerably inferior detection accuracy that does not match the network’s superior classification accuracy. To remedy this issue, in the ResNet paper [9] the RoI pooling layer of the Faster R-CNN detector [18] is unnaturally inserted between two sets of convolutional layers — this creates a deeper RoI-wise subnetwork that improves accuracy, at the cost of lower speed due to the unshared per-RoI computation.\nWe argue that the aforementioned unnatural design is caused by a dilemma of increasing translation invariance for image classification vs. respecting translation variance for object detection. On one hand, the image-level classification task favors translation invariance — shift of an object inside an image should be indiscriminative. Thus, deep (fully) convolutional architectures that are as translationinvariant as possible are preferable as evidenced by the leading results on ImageNet classification ∗This work was done when Yi Li was an intern at Microsoft Research. 2Only the last layer is fully-connected, which is removed and replaced when fine-tuning for object detection.\nar X\niv :1\n60 5.\n06 40\n9v 2\n[ cs\n.C V\n] 2\n1 Ju\nn 20\n16\n[9, 24, 26]. On the other hand, the object detection task needs localization representations that are translation-variant to an extent. For example, translation of an object inside a candidate box should produce meaningful responses for describing how good the candidate box overlaps the object. We hypothesize that deeper convolutional layers in an image classification network are less sensitive to translation. To address this dilemma, the ResNet paper’s detection pipeline [9] inserts the RoI pooling layer into convolutions — this region-specific operation breaks down translation invariance, and the post-RoI convolutional layers are no longer translation-invariant when evaluated across different regions. However, this design sacrifices training and testing efficiency since it introduces a considerable number of region-wise layers (Table 1).\nIn this paper, we develop a framework called Region-based Fully Convolutional Network (R-FCN) for object detection. Our network consists of shared, fully convolutional architectures as is the case of FCN [15]. To incorporate translation variance into FCN, we construct a set of position-sensitive score maps by using a bank of specialized convolutional layers as the FCN output. Each of these score maps encodes the position information with respect to a relative spatial position (e.g., “to the left of an object”). On top of this FCN, we append a position-sensitive RoI pooling layer that shepherds information from these score maps, with no weight (convolutional/fc) layers following. The entire architecture is learned end-to-end. All learnable layers are convolutional and shared on the entire image, yet encode spatial information required for object detection. Figure 1 illustrates the key idea and Table 1 compares the methodologies among region-based detectors.\nUsing the 101-layer Residual Net (ResNet-101) [9] as the backbone, our R-FCN yields competitive results of 83.6% mAP on the PASCAL VOC 2007 set and 82.0% the 2012 set. Meanwhile, our results are achieved at a test-time speed of 170ms per image using ResNet-101, which is 2.5× to 20× faster than the Faster R-CNN + ResNet-101 counterpart in [9]. These experiments demonstrate that our method manages to address the dilemma between invariance/variance on translation, and fully convolutional image-level classifiers such as ResNets can be effectively converted to fully convolutional object detectors. Code is made publicly available at: https://github.com/daijifeng001/r-fcn."
+  }, {
+    "heading": "2 Our approach",
+    "text": "Overview. Following R-CNN [7], we adopt the popular two-stage object detection strategy [7, 8, 6, 18, 1, 22] that consists of: (i) region proposal, and (ii) region classification. Although methods that do not rely on region proposal do exist (e.g., [17, 14]), region-based systems still possess leading\naccuracy on several benchmarks [5, 13, 20]. We extract candidate regions by the Region Proposal Network (RPN) [18], which is a fully convolutional architecture in itself. Following [18], we share the features between RPN and R-FCN. Figure 2 shows an overview of the system.\nGiven the proposal regions (RoIs), the R-FCN architecture is designed to classify the RoIs into object categories and background. In R-FCN, all learnable weight layers are convolutional and are computed on the entire image. The last convolutional layer produces a bank of k2 position-sensitive score maps for each category, and thus has a k2(C + 1)-channel output layer with C object categories (+1 for background). The bank of k2 score maps correspond to a k × k spatial grid describing relative positions. For example, with k×k = 3× 3, the 9 score maps encode the cases of {top-left, top-center, top-right, ..., bottom-right} of an object category.\nR-FCN ends with a position-sensitive RoI pooling layer. This layer aggregates the outputs of the last convolutional layer and generates scores for each RoI. Unlike [8, 6], our position-sensitive RoI layer conducts selective pooling, and each of the k × k bin aggregates responses from only one score map out of the bank of k × k score maps. With end-to-end training, this RoI layer shepherds the last convolutional layer to learn specialized position-sensitive score maps. Figure 1 illustrates this idea. Figure 3 and 4 visualize an example. The details are introduced as follows.\nBackbone architecture. The incarnation of R-FCN in this paper is based on ResNet-101 [9], though other networks [10, 23] are applicable. ResNet-101 has 100 convolutional layers followed by global average pooling and a 1000-class fc layer. We remove the average pooling layer and the fc layer and only use the convolutional layers to compute feature maps. We use the ResNet-101 released by the authors of [9], pre-trained on ImageNet [20]. The last convolutional block in ResNet-101 is 2048-d, and we attach a randomly initialized 1024-d 1×1 convolutional layer for reducing dimension (to be precise, this increases the depth in Table 1 by 1). Then we apply the k2(C+ 1)-channel convolutional layer to generate score maps, as introduced next.\nPosition-sensitive score maps & Position-sensitive RoI pooling. To explicitly encode position information into each RoI, we divide each RoI rectangle into k × k bins by a regular grid. For an RoI rectangle of a size w×h, a bin is of a size≈ wk × h k [8, 6]. In our method, the last convolutional layer is constructed to produce k2 score maps for each category. Inside the (i, j)-th bin (0 ≤ i, j ≤ k − 1), we define a position-sensitive RoI pooling operation that pools only over the (i, j)-th score map:\nrc(i, j | Θ) = ∑\n(x,y)∈bin(i,j)\nzi,j,c(x+ x0, y + y0 | Θ)/n. (1)\nHere rc(i, j) is the pooled response in the (i, j)-th bin for the c-th category, zi,j,c is one score map out of the k2(C + 1) score maps, (x0, y0) denotes the top-left corner of an RoI, n is the number of pixels in the bin, and Θ denotes all learnable parameters of the network. The (i, j)-th bin spans biwk c ≤ x < d(i + 1) w k e and bj h k c ≤ y < d(j + 1) h k e. The operation of Eqn.(1) is illustrated in\nFigure 1, where a color represents a pair of (i, j). Eqn.(1) performs average pooling (as we use throughout this paper), but max pooling can be conducted as well.\nThe k2 position-sensitive scores then vote on the RoI. In this paper we simply vote by averaging the scores, producing a (C + 1)-dimensional vector for each RoI: rc(Θ) = ∑ i,j rc(i, j | Θ). Then we\ncompute the softmax responses across categories: sc(Θ) = erc(Θ)/ ∑C c′=0 e rc′ (Θ). They are used for evaluating the cross-entropy loss during training and for ranking the RoIs during inference.\nWe further address bounding box regression [7, 6] in a similar way. Aside from the above k2(C+1)-d convolutional layer, we append a sibling 4k2-d convolutional layer for bounding box regression. The position-sensitive RoI pooling is performed on this bank of 4k2 maps, producing a 4k2-d vector for each RoI. Then it is aggregated into a 4-d vector by average voting. This 4-d vector parameterizes a bounding box as t = (tx, ty, tw, th) following the parameterization in [6]. We note that we perform class-agnostic bounding box regression for simplicity, but the class-specific counterpart (i.e., with a 4k2C-d output layer) is applicable.\nThe concept of position-sensitive score maps is partially inspired by [3] that develops FCNs for instance-level semantic segmentation. We further introduce the position-sensitive RoI pooling layer that shepherds learning of the score maps for object detection. There is no learnable layer after the RoI layer, enabling nearly cost-free region-wise computation and speeding up both training and inference.\nTraining. With pre-computed region proposals, it is easy to end-to-end train the R-FCN architecture. Following [6], our loss function defined on each RoI is the summation of the cross-entropy loss and the box regression loss: L(s, tx,y,w,h) = Lcls(sc∗) + λ[c∗ > 0]Lreg(t, t∗). Here c∗ is the RoI’s ground-truth label (c∗ = 0 means background). Lcls(sc∗) = − log(sc∗) is the cross-entropy loss for classification, Lreg is the bounding box regression loss as defined in [6], and t∗ represents the ground truth box. [c∗ > 0] is an indicator which equals to 1 if the argument is true and 0 otherwise. We set the balance weight λ = 1 as in [6]. We define positive examples as the RoIs that have intersection-over-union (IoU) overlap with a ground-truth box of at least 0.5, and negative otherwise.\nIt is easy for our method to adopt online hard example mining (OHEM) [22] during training. Our negligible per-RoI computation enables nearly cost-free example mining. Assuming N proposals per image, in the forward pass, we evaluate the loss of all N proposals. Then we sort all RoIs (positive and negative) by loss and select B RoIs that have the highest loss. Backpropagation [11] is performed based on the selected examples. Because our per-RoI computation is negligible, the forward time is nearly not affected by N , in contrast to OHEM Fast R-CNN in [22] that may double training time. We provide comprehensive timing statistics in Table 3 in the next section.\nWe use a weight decay of 0.0005 and a momentum of 0.9. By default we use single-scale training: images are resized such that the scale (shorter side of image) is 600 pixels [6, 18]. Each GPU holds 1 image and selects B = 128 RoIs for backprop. We train the model with 8 GPUs (so the effective mini-batch size is 8×). We fine-tune R-FCN using a learning rate of 0.001 for 20k mini-batches and 0.0001 for 10k mini-batches on VOC. To have R-FCN share features with RPN (Figure 2), we adopt the 4-step alternating training3 in [18], alternating between training RPN and training R-FCN.\nInference. As illustrated in Figure 2, the feature maps shared between RPN and R-FCN are computed (on an image with a single scale of 600). Then the RPN part proposes RoIs, on which the R-FCN part evaluates category-wise scores and regresses bounding boxes. During inference we evaluate 300 RoIs as in [18] for fair comparisons. The results are post-processed by non-maximum suppression (NMS) using a threshold of 0.3 IoU [7], as standard practice.\nÀ trous and stride. Our fully convolutional architecture enjoys the benefits of the network modifications that are widely used by FCNs for semantic segmentation [15, 2]. Particularly, we reduce ResNet-101’s effective stride from 32 pixels to 16 pixels, increasing the score map resolution. All layers before and on the conv4 stage [9] (stride=16) are unchanged; the stride=2 operations in the first conv5 block is modified to have stride=1, and all convolutional filters on the conv5 stage are modified by the “hole algorithm” [15, 2] (“Algorithme à trous” [16]) to compensate for the reduced stride. For fair comparisons, the RPN is computed on top of the conv4 stage (that are shared with\n3Although joint training [18] is applicable, it is not straightforward to perform example mining jointly.\nR-FCN), as is the case in [9] with Faster R-CNN, so the RPN is not affected by the à trous trick. The following table shows the ablation results of R-FCN (k × k = 7× 7, no hard example mining). The à trous trick improves mAP by 2.6 points.\nR-FCN with ResNet-101 on: conv4, stride=16 conv5, stride=32 conv5, à trous, stride=16 mAP (%) on VOC 07 test 72.5 74.0 76.6\nVisualization. In Figure 3 and 4 we visualize the position-sensitive score maps learned by R-FCN when k × k = 3 × 3. These specialized maps are expected to be strongly activated at a specific relative position of an object. For example, the “top-center-sensitive” score map exhibits high scores roughly near the top-center position of an object. If a candidate box precisely overlaps with a true object (Figure 3), most of the k2 bins in the RoI are strongly activated, and their voting leads to a high score. On the contrary, if a candidate box does not correctly overlaps with a true object (Figure 4), some of the k2 bins in the RoI are not activated, and the voting score is low."
+  }, {
+    "heading": "3 Related Work",
+    "text": "R-CNN [7] has demonstrated the effectiveness of using region proposals [27, 28] with deep networks. R-CNN evaluates convolutional networks on cropped and warped regions, and computation is not shared among regions (Table 1). SPPnet [8], Fast R-CNN [6], and Faster R-CNN [18] are “semiconvolutional”, in which a convolutional subnetwork performs shared computation on the entire image and another subnetwork evaluates individual regions.\nThere have been object detectors that can be thought of as “fully convolutional” models. OverFeat [21] detects objects by sliding multi-scale windows on the shared convolutional feature maps; similarly, in\nFast R-CNN [6] and [12], sliding windows that replace region proposals are investigated. In these cases, one can recast a sliding window of a single scale as a single convolutional layer. The RPN component in Faster R-CNN [18] is a fully convolutional detector that predicts bounding boxes with respect to reference boxes (anchors) of multiple sizes. The original RPN is class-agnostic in [18], but its class-specific counterpart is applicable (see also [14]) as we evaluate in the following.\nAnother family of object detectors resort to fully-connected (fc) layers for generating holistic object detection results on an entire image, such as [25, 4, 17]."
+  }, {
+    "heading": "4 Experiments",
+    "text": ""
+  }, {
+    "heading": "4.1 Experiments on PASCAL VOC",
+    "text": "We perform experiments on PASCAL VOC [5] that has 20 object categories. We train the models on the union set of VOC 2007 trainval and VOC 2012 trainval (“07+12”) following [6], and evaluate on VOC 2007 test set. Object detection accuracy is measured by mean Average Precision (mAP).\nComparisons with Other Fully Convolutional Strategies\nThough fully convolutional detectors are available, experiments show that it is nontrivial for them to achieve good accuracy. We investigate the following fully convolutional strategies (or “almost” fully convolutional strategies that have only one classifier fc layer per RoI), using ResNet-101:\nNaïve Faster R-CNN. As discussed in the introduction, one may use all convolutional layers in ResNet-101 to compute the shared feature maps, and adopt RoI pooling after the last convolutional layer (after conv5). An inexpensive 21-class fc layer is evaluated on each RoI (so this variant is “almost” fully convolutional). The à trous trick is used for fair comparisons.\nClass-specific RPN. This RPN is trained following [18], except that the 2-class (object or not) convolutional classifier layer is replaced with a 21-class convolutional classifier layer. For fair comparisons, for this class-specific RPN we use ResNet-101’s conv5 layers with the à trous trick.\nR-FCN without position-sensitivity. By setting k = 1 we remove the position-sensitivity of the R-FCN. This is equivalent to global pooling within each RoI.\nAnalysis. Table 2 shows the results. We note that the standard (not naïve) Faster R-CNN in the ResNet paper [9] achieves 76.4% mAP with ResNet-101 (see also Table 3), which inserts the RoI pooling layer between conv4 and conv5 [9]. As a comparison, the naïve Faster R-CNN (that applies RoI pooling after conv5) has a drastically lower mAP of 68.9% (Table 2). This comparison empirically justifies the importance of respecting spatial information by inserting RoI pooling between layers for the Faster R-CNN system. Similar observations are reported in [19].\nThe class-specific RPN has an mAP of 67.6% (Table 2), about 9 points lower than the standard Faster R-CNN’s 76.4%. This comparison is in line with the observations in [6, 12] — in fact, the class-specific RPN is similar to a special form of Fast R-CNN [6] that uses dense sliding windows as proposals, which shows inferior results as reported in [6, 12].\nOn the other hand, our R-FCN system has significantly better accuracy (Table 2). Its mAP (76.6%) is on par with the standard Faster R-CNN’s (76.4%, Table 3). These results indicate that our positionsensitive strategy manages to encode useful spatial information for locating objects, without using any learnable layer after RoI pooling.\nThe importance of position-sensitivity is further demonstrated by setting k = 1, for which R-FCN is unable to converge. In this degraded case, no spatial information can be explicitly captured within an RoI. Moreover, we report that naïve Faster R-CNN is able to converge if its RoI pooling output resolution is 1× 1, but the mAP further drops by a large margin to 61.7% (Table 2).\nComparisons with Faster R-CNN Using ResNet-101\nNext we compare with standard “Faster R-CNN + ResNet-101” [9] which is the strongest competitor and the top-performer on the PASCAL VOC, MS COCO, and ImageNet benchmarks. We use k × k = 7× 7 in the following. Table 3 shows the comparisons. Faster R-CNN evaluates a 10-layer subnetwork for each region to achieve good accuracy, but R-FCN has negligible per-region cost. With 300 RoIs at test time, Faster R-CNN takes 0.42s per image, 2.5× slower than our R-FCN that takes 0.17s per image (on a K40 GPU; this number is 0.11s on a Titan X GPU). R-FCN also trains faster than Faster R-CNN. Moreover, hard example mining [22] adds no cost to R-FCN training (Table 3). It is feasible to train R-FCN when mining from 2000 RoIs, in which case Faster R-CNN is 6× slower (2.9s vs. 0.46s). But experiments show that mining from a larger set of candidates (e.g., 2000) has no benefit (Table 3). So we use 300 RoIs for both training and inference in other parts of this paper.\nTable 4 shows more comparisons. Following the multi-scale training in [8], we resize the image in each training iteration such that the scale is randomly sampled from {400,500,600,700,800} pixels. We still test a single scale of 600 pixels, so add no test-time cost. The mAP is 80.5%. In addition, we train our model on the MS COCO [13] trainval set and then fine-tune it on the PASCAL VOC set. R-FCN achieves 83.6% mAP (Table 4), close to the “Faster R-CNN +++” system in [9] that uses ResNet-101 as well. We note that our competitive result is obtained at a test speed of 0.17 seconds per image, 20× faster than Faster R-CNN +++ that takes 3.36 seconds as it further incorporates iterative box regression, context, and multi-scale testing [9]. These comparisons are also observed on the PASCAL VOC 2012 test set (Table 5)."
+  }, {
+    "heading": "On the Impact of Depth",
+    "text": "The following table shows the R-FCN results using ResNets of different depth [9]. Our detection accuracy increases when the depth is increased from 50 to 101, but gets saturated with a depth of 152.\ntraining data test data ResNet-50 ResNet-101 ResNet-152 R-FCN 07+12 07 77.0 79.5 79.6 R-FCN multi-sc train 07+12 07 78.7 80.5 80.4"
+  }, {
+    "heading": "On the Impact of Region Proposals",
+    "text": "R-FCN can be easily applied with other region proposal methods, such as Selective Search (SS) [27] and Edge Boxes (EB) [28]. The following table shows the results (using ResNet-101) with different proposals. R-FCN performs competitively using SS or EB, showing the generality of our method.\ntraining data test data RPN [18] SS [27] EB [28]\nR-FCN 07+12 07 79.5 77.2 77.8"
+  }, {
+    "heading": "4.2 Experiments on MS COCO",
+    "text": "Next we evaluate on the MS COCO dataset [13] that has 80 object categories. Our experiments involve the 80k train set, 40k val set, and 20k test-dev set. We set the learning rate as 0.001 for 90k iterations and 0.0001 for next 30k iterations, with an effective mini-batch size of 8. We extend the alternating training [18] from 4-step to 5-step (i.e., stopping after one more RPN training step), which slightly improves accuracy on this dataset when the features are shared; we also report that 2-step training is sufficient to achieve comparably good accuracy but the features are not shared.\nThe results are in Table 6. Our single-scale trained R-FCN baseline has a val result of 48.9%/27.6%. This is comparable to the Faster R-CNN baseline (48.4%/27.2%), but ours is 2.5× faster testing. It is noteworthy that our method performs better on objects of small sizes (defined by [13]). Our multi-scale trained (yet single-scale tested) R-FCN has a result of 49.1%/27.8% on the val set and 51.5%/29.2% on the test-dev set. Considering COCO’s wide range of object scales, we further evaluate a multi-scale testing variant following [9], and use testing scales of {200,400,600,800,1000}. The mAP is 53.2%/31.5%. This result is close to the 1st-place result (Faster R-CNN +++ with ResNet-101, 55.7%/34.9%) in the MS COCO 2015 competition. Nevertheless, our method is simpler and adds no bells and whistles such as context or iterative box regression that were used by [9], and is faster for both training and testing."
+  }, {
+    "heading": "5 Conclusion and Future Work",
+    "text": "We presented Region-based Fully Convolutional Networks, a simple but accurate and efficient framework for object detection. Our system naturally adopts the state-of-the-art image classification backbones, such as ResNets, that are by design fully convolutional. Our method achieves accuracy competitive with the Faster R-CNN counterpart, but is much faster during both training and inference.\nWe intentionally keep the R-FCN system presented in the paper simple. There have been a series of orthogonal extensions of FCNs that were developed for semantic segmentation (e.g., see [2]), as well as extensions of region-based methods for object detection (e.g., see [9, 1, 22]). We expect our system will easily enjoy the benefits of the progress in the field."
+  }],
+  "year": 2016,
+  "references": [{
+    "title": "Inside-outside net: Detecting objects in context with skip pooling and recurrent neural networks",
+    "authors": ["S. Bell", "C.L. Zitnick", "K. Bala", "R. Girshick"],
+    "venue": "CVPR,",
+    "year": 2016
+  }, {
+    "title": "Semantic image segmentation with deep convolutional nets and fully connected crfs",
+    "authors": ["L.-C. Chen", "G. Papandreou", "I. Kokkinos", "K. Murphy", "A.L. Yuille"],
+    "venue": "ICLR,",
+    "year": 2015
+  }, {
+    "title": "Instance-sensitive fully convolutional networks",
+    "authors": ["J. Dai", "K. He", "Y. Li", "S. Ren", "J. Sun"],
+    "venue": "arXiv:1603.08678,",
+    "year": 2016
+  }, {
+    "title": "Scalable object detection using deep neural networks",
+    "authors": ["D. Erhan", "C. Szegedy", "A. Toshev", "D. Anguelov"],
+    "venue": "CVPR,",
+    "year": 2014
+  }, {
+    "title": "The PASCAL Visual Object Classes (VOC) Challenge",
+    "authors": ["M. Everingham", "L. Van Gool", "C.K. Williams", "J. Winn", "A. Zisserman"],
+    "venue": "IJCV,",
+    "year": 2010
+  }, {
+    "title": "Fast R-CNN",
+    "authors": ["R. Girshick"],
+    "venue": "ICCV,",
+    "year": 2015
+  }, {
+    "title": "Rich feature hierarchies for accurate object detection and semantic segmentation",
+    "authors": ["R. Girshick", "J. Donahue", "T. Darrell", "J. Malik"],
+    "venue": "CVPR,",
+    "year": 2014
+  }, {
+    "title": "Spatial pyramid pooling in deep convolutional networks for visual recognition",
+    "authors": ["K. He", "X. Zhang", "S. Ren", "J. Sun"],
+    "venue": "ECCV.",
+    "year": 2014
+  }, {
+    "title": "Deep residual learning for image recognition",
+    "authors": ["K. He", "X. Zhang", "S. Ren", "J. Sun"],
+    "venue": "CVPR,",
+    "year": 2016
+  }, {
+    "title": "Imagenet classification with deep convolutional neural networks",
+    "authors": ["A. Krizhevsky", "I. Sutskever", "G. Hinton"],
+    "venue": "NIPS,",
+    "year": 2012
+  }, {
+    "title": "Backpropagation applied to handwritten zip code recognition",
+    "authors": ["Y. LeCun", "B. Boser", "J.S. Denker", "D. Henderson", "R.E. Howard", "W. Hubbard", "L.D. Jackel"],
+    "venue": "Neural computation,",
+    "year": 1989
+  }, {
+    "title": "R-CNN minus R",
+    "authors": ["K. Lenc", "A. Vedaldi"],
+    "venue": "BMVC,",
+    "year": 2015
+  }, {
+    "title": "Microsoft COCO: Common objects in context",
+    "authors": ["T.-Y. Lin", "M. Maire", "S. Belongie", "J. Hays", "P. Perona", "D. Ramanan", "P. Dollár", "C.L. Zitnick"],
+    "venue": "ECCV,",
+    "year": 2014
+  }, {
+    "title": "SSD: Single shot multibox detector",
+    "authors": ["W. Liu", "D. Anguelov", "D. Erhan", "C. Szegedy", "S. Reed"],
+    "venue": "arXiv:1512.02325v2,",
+    "year": 2015
+  }, {
+    "title": "Fully convolutional networks for semantic segmentation",
+    "authors": ["J. Long", "E. Shelhamer", "T. Darrell"],
+    "venue": "CVPR,",
+    "year": 2015
+  }, {
+    "title": "A wavelet tour of signal processing",
+    "authors": ["S. Mallat"],
+    "venue": "Academic press,",
+    "year": 1999
+  }, {
+    "title": "You only look once: Unified, real-time object detection",
+    "authors": ["J. Redmon", "S. Divvala", "R. Girshick", "A. Farhadi"],
+    "venue": "CVPR,",
+    "year": 2016
+  }, {
+    "title": "Faster R-CNN: Towards real-time object detection with region proposal networks",
+    "authors": ["S. Ren", "K. He", "R. Girshick", "J. Sun"],
+    "venue": "NIPS,",
+    "year": 2015
+  }, {
+    "title": "Object detection networks on convolutional feature maps",
+    "authors": ["S. Ren", "K. He", "R. Girshick", "X. Zhang", "J. Sun"],
+    "venue": "arXiv:1504.06066,",
+    "year": 2015
+  }, {
+    "title": "ImageNet Large Scale Visual Recognition Challenge",
+    "authors": ["O. Russakovsky", "J. Deng", "H. Su", "J. Krause", "S. Satheesh", "S. Ma", "Z. Huang", "A. Karpathy", "A. Khosla", "M. Bernstein", "A.C. Berg", "L. Fei-Fei"],
+    "venue": "IJCV,",
+    "year": 2015
+  }, {
+    "title": "Overfeat: Integrated recognition, localization and detection using convolutional networks",
+    "authors": ["P. Sermanet", "D. Eigen", "X. Zhang", "M. Mathieu", "R. Fergus", "Y. LeCun"],
+    "venue": "ICLR,",
+    "year": 2014
+  }, {
+    "title": "Training region-based object detectors with online hard example mining",
+    "authors": ["A. Shrivastava", "A. Gupta", "R. Girshick"],
+    "venue": "CVPR,",
+    "year": 2016
+  }, {
+    "title": "Very deep convolutional networks for large-scale image recognition",
+    "authors": ["K. Simonyan", "A. Zisserman"],
+    "venue": "ICLR,",
+    "year": 2015
+  }, {
+    "title": "Going deeper with convolutions",
+    "authors": ["C. Szegedy", "W. Liu", "Y. Jia", "P. Sermanet", "S. Reed", "D. Anguelov", "D. Erhan", "A. Rabinovich"],
+    "venue": "CVPR,",
+    "year": 2015
+  }, {
+    "title": "Deep neural networks for object detection",
+    "authors": ["C. Szegedy", "A. Toshev", "D. Erhan"],
+    "venue": "NIPS,",
+    "year": 2013
+  }, {
+    "title": "Rethinking the inception architecture for computer vision",
+    "authors": ["C. Szegedy", "V. Vanhoucke", "S. Ioffe", "J. Shlens", "Z. Wojna"],
+    "venue": "CVPR,",
+    "year": 2016
+  }, {
+    "title": "Selective search for object recognition",
+    "authors": ["J.R. Uijlings", "K.E. van de Sande", "T. Gevers", "A.W. Smeulders"],
+    "year": 2013
+  }, {
+    "title": "Edge boxes: Locating object proposals from edges",
+    "authors": ["C.L. Zitnick", "P. Dollár"],
+    "venue": "ECCV,",
+    "year": 2014
+  }],
+  "id": "SP:b724c3f7ff395235b62537203ddeb710f0eb27bb",
+  "authors": [{
+    "name": "Jifeng Dai",
+    "affiliations": []
+  }, {
+    "name": "Yi Li",
+    "affiliations": []
+  }, {
+    "name": "Kaiming He",
+    "affiliations": []
+  }, {
+    "name": "Jian Sun",
+    "affiliations": []
+  }],
+  "abstractText": "We present region-based, fully convolutional networks for accurate and efficient object detection. In contrast to previous region-based detectors such as Fast/Faster R-CNN [6, 18] that apply a costly per-region subnetwork hundreds of times, our region-based detector is fully convolutional with almost all computation shared on the entire image. To achieve this goal, we propose position-sensitive score maps to address a dilemma between translation-invariance in image classification and translation-variance in object detection. Our method can thus naturally adopt fully convolutional image classifier backbones, such as the latest Residual Networks (ResNets) [9], for object detection. We show competitive results on the PASCAL VOC datasets (e.g., 83.6% mAP on the 2007 set) with the 101-layer ResNet. Meanwhile, our result is achieved at a test-time speed of 170ms per image, 2.5-20× faster than the Faster R-CNN counterpart. Code is made publicly available at: https://github.com/daijifeng001/r-fcn.",
+  "title": "R-FCN: Object Detection via Region-based Fully Convolutional Networks"
+}

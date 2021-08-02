@@ -1,0 +1,159 @@
+{
+  "sections": [{
+    "heading": "1 INTRODUCTION",
+    "text": "In reinforcement learning (RL), agents acting in unknown environments face the exploration versus exploitation tradeoff. Without adequate exploration, the agent might fail to discover effective control strategies, particularly in complex domains. Both PAC-MDP algorithms, such as MBIE-EB [1], and Bayesian algorithms such as Bayesian Exploration Bonuses (BEB) [2] have managed this tradeoff by assigning exploration bonuses to novel states. In these methods, the novelty of a state-action pair is derived from the number of times an agent has visited that pair. While these approaches offer strong formal guarantees, their requirement of an enumerable representation of the agent’s environment renders them impractical for large-scale tasks. As such, exploration in large RL tasks is still most often performed using simple heuristics, such as the epsilon-greedy strategy [3], which can be inadequate in more complex settings.\nIn this paper, we evaluate several exploration strategies that can be scaled up to complex tasks with high-dimensional inputs. Our results show that Boltzman exploration and Thompson sampling significantly improve on the naı̈ve epsilon-greedy strategy. However, we show that the biggest and most consistent improvement can be achieved by assigning exploration bonuses based on a learned model of the system dynamics with learned representations. To that end, we describe a method that learns a state representation from observations, trains a dynamics model using this representation concurrently with the policy, and uses the misprediction error in this model to asses the novelty of each state. Novel states are expected to disagree more strongly with the model than those states that have been visited frequently in the past, and assigning exploration bonuses based on this disagreement can produce rapid and effective exploration.\nUsing learned model dynamics to assess a state’s novelty presents several challenges. Capturing an adequate representation of the agent’s environment for use in dynamics predictions can be accom-\nar X\niv :1\n50 7.\n00 81\n4v 3\n[ cs\n.A I]\n1 9\nN ov\n2 01\n5\nplished by training a model to predict the next state from the previous ground-truth state-action pair. However, one would not expect pixel intensity values to adequately capture the salient features of a given state-space. To provide a more suitable representation of the system’s state space, we propose a method for encoding the state space into lower dimensional domains. To achieve sufficient generality and scalability, we modeled the system’s dynamics with a deep neural network. This allows for on-the-fly learning of a model representation that can easily be trained in parallel to learning a policy.\nOur main contribution is a scalable and efficient method for assigning exploration bonuses in large RL problems with complex observations, as well as an extensive empirical evaluation of this approach and other simple alternative strategies, such as Boltzman exploration and Thompson sampling. Our approach assigns model-based exploration bonuses from learned representations and dynamics, using only the observations and actions. It can scale to large problems where Bayesian approaches to exploration become impractical, and we show that it achieves significant improvement in learning speed on the task of learning to play Atari games from raw images [24]. Our approach achieves state-of-the-art results on a number of games, and achieves particularly large improvements for games on which human players strongly outperform prior methods. Aside from achieving a high final score, our method also achieves substantially faster learning. To evaluate the speed of the learning process, we propose the AUC-100 benchmark to evaluate learning progress on the Atari domain."
+  }, {
+    "heading": "2 PRELIMINARIES",
+    "text": "We consider an infinite-horizon discounted Markov decision process (MDP), defined by the tuple (S,A,P,R, ρ0, γ), where S is a finite set of states,A a finite set of actions, P : S×A×S → R the transition probability distribution, R : S → R the reward function, ρ0 an initial state distribution, and γ ∈ (0, 1) the discount factor. We are interested in finding a policy π : S × A → [0, 1] that maximizes the expected reward over all time. This maximization can be accomplished using a variety of reinforcement learning algorithms.\nIn this work, we are concerned with online reinforcement learning wherein the algorithm receives a tuple (st, at, st+1, rt) at each step. Here, st ∈ S is the previous state, at ∈ A is the previous action, st+1 ∈ S is the new state, and rt is the reward collected as a result of this transition. The reinforcement learning algorithm must use this tuple to update its policy and maximize longterm reward and then choose the new action at+1. It is often insufficient to simply choose the best action based on previous experience, since this strategy can quickly fall into a local optimum. Instead, the learning algorithm must perform exploration. Prior work has suggested methods that address the exploration problem by acting with “optimism under uncertainty.” If one assumes that the reinforcement learning algorithm will tend to choose the best action, it can be encouraged to visit state-action pairs that it has not frequently seen by augmenting the reward function to deliver a bonus for visiting novel states. This is accomplished with the augmented reward function\nRBonus(s, a) = R(s, a) + βN (s, a), (1)\nwhere N (s, a) : S × A → [0, 1] is a novelty function designed to capture the novelty of a given state-action pair. Prior work has suggested a variety of different novelty functions e.g., [1, 2] based on state visitation frequency.\nWhile such methods offer a number of appealing guarantees, such as near-Bayesian exploration in polynomial time [2], they require a concise, often discrete representation of the agent’s stateaction space to measure state visitation frequencies. In our approach, we will employ function approximation and representation learning to devise an alternative to these requirements."
+  }, {
+    "heading": "3 MODEL LEARNING FOR EXPLORATION BONUSES",
+    "text": "We would like to encourage agent exploration by giving the agent exploration bonuses for visiting novel states. Identifying states as novel requires we supply some representation of the agent’s state space, as well as a mechanism to use this representation to assess novelty. Unsupervised learning methods offer one promising avenue for acquiring a concise representation of the state with a good\nAlgorithm 1 Reinforcement learning with model prediction exploration bonuses 1: Initialize maxe = 1, EpochLength, β, C 2: for iteration t in T do 3: Observe (st, at, st+1,R(st, at)) 4: Encode the observations to obtain σ(st) and σ(st+1) 5: Compute e(st, at) = ‖σ(st+1)−Mφ(σ(st), at)‖22 and ē(st, at) = e(st,at) maxe .\n6: ComputeRBonus(st, at) = R(s, a) + β ( ēt(st,at) t∗C ) 7: if e(st, at) > maxe then 8: maxe = e(st, at) 9: end if\n10: Store (st, at,Rbonus) in a memory bank Ω. 11: Pass Ω to the reinforcement learning algorithm to update π. 12: if t mod EpochLength == 0 then 13: Use Ω to updateM. 14: Optionally, update σ. 15: end if 16: end for 17: return optimized policy π\nsimilarity metric. This can be accomplished using dimensionality reduction, clustering, or graphbased techniques [4, 5]. In our work, we draw on recent developments in representation learning with neural networks, as discussed in the following section. However, even with a good learned state representation, maintaining a table of visitation frequencies becomes impractical for complex tasks. Instead, we learn a model of the task dynamics that can be used to assess the novelty of a new state.\nFormally, let σ(s) denote the encoding of the state s, and letMφ : σ(S)×A → σ(S) be a dynamics predictor parameterized by φ. Mφ takes an encoded version of a state s at time t and the agent’s action at time t and attempts to predict an encoded version of the agent’s state at time t + 1. The parameterization ofM is discussed further in the next section. For each state transition (st, at, st+1), we can attempt to predict σ(st+1) from (σ(st), at) using our predictive modelMφ. This prediction will have some error\ne(st, at) = ‖σ(st+1)−Mφ(σ(st), at)‖22. (2)\nLet eT , the normalized prediction error at time T , be given by eT := eTmaxt≤T {et} . We can assign a novelty function to (st, at) via\nN (st, at) = ēt(st, at)\nt ∗ C (3)\nwhere C > 0 is a decay constant. We can now realize our augmented reward function as RBonus(s, a) = R(s, a) + β ( ēt(st, at)\nt ∗ C\n) (4)\nThis approach is motivated by the idea that, as our ability to model the dynamics of a particular state-action pair improves, we have come to understand the state better and hence its novelty is lower. When we don’t understand the state-action pair well enough to make accurate predictions, we assume that more knowledge about that particular area of the model dynamics is needed and hence a higher novelty measure is assigned.\nUsing learned model dynamics to assign novelty functions allows us to address the exploration versus exploitation problem in a non-greedy way. With an appropriate representation σ(st), even when we encounter a new state-action pair (st, at), we expectMφ(σ(st), at) to be accurate so long as enough similar state-action pairs have been encountered.\nOur model-based exploration bonuses can be incorporated into any online reinforcement learning algorithm that updates the policy based on state, action, reward tuples of the form (st, at, st+1, rt),\nsuch as Q-learning or actor-critic algorithms. Our method is summarized in Algorithm 1. At each step, we receive a tuple (st, at, st+1,R(st, at)) and compute the Euclidean distance between the encoded state σ(st+1) to the prediction made by our modelMφ(σ(st), at). This is used to compute the exploration-augmented rewardRBonus using Equation (4). The tuples (st, at, st+1,RBonus) are stored in a memory bank Ω at the end of every step. Every step, the policy is updated. 1 Once per epoch, corresponding to 50000 observations in our implementation, the dynamics modelMφ is updated to improve its accuracy. If desired, the representation encoder σ can also be updated at this time. We found that retraining σ once every 5 epochs to be sufficient.\nThis approach is modular and compatible with any representation of σ and M, as well as any reinforcement learning method that updates its policy based on a continuous stream of observation, action, reward tuples. Incorporating exploration bonuses does make the reinforcement learning task nonstationary, though we did not find this to be a major issue in practice, as shown in our experimental evaluation. In the following section, we discuss the particular choice for σ andM that we use for learning policies for playing Atari games from raw images."
+  }, {
+    "heading": "4 DEEP LEARNING ARCHITECTURES",
+    "text": "Though the dynamics modelMφ and the encoder σ from the previous section can be parametrized by any appropriate method, we found that using deep neural networks for both achieved good empirical results on the Atari games benchmark. In this section, we discuss the particular networks used in our implementation."
+  }, {
+    "heading": "4.1 AUTOENCODERS",
+    "text": "The most direct way of learning a dynamics model is to directly predict the state at the next time step, which in the Atari games benchmark corresponds to the next frame’s pixel intensity values. However, directly predicting these pixel intensity values is unsatisfactory, since we do not expect pixel intensity to capture the salient features of the environment in a robust way. In our experiments, a dynamics model trained to predict raw frames exhibited extremely poor behavior, assigning exploration bonuses in near equality at most time steps, as discussed in our experimental results section.\nTo overcome these difficulties, we seek a function σ which encodes a lower dimensional representation of the state s. For the task of representing Atari frames, we found that an autoencoder could be used to successfully obtain an encoding function σ and achieve dimensionality reduction and feature extraction [6]. Our autoencoder has 8 hidden layers, followed by a Euclidean loss layer,\nwhich computes the distance between the output features and the original input image. The hidden layers are reduced in dimension until maximal compression occurs with 128 units. After this, the activations are decoded by passing through hidden layers with increasingly large size. We train the\n1In our implementation, the memory bank Ω is used to retrain the RL algorithm via experience replay once per epoch (50000 steps). Hence, 49999 of these policy updates will simply do nothing.\nnetwork on a set of 250,000 images and test on a further set of 25,000 images. We compared two separate methodologies for capturing these images.\n1. Static AE: A random agent plays for enough time to collect the required images. The auto-encoder σ is trained offline before the policy learning algorithm begins.\n2. Dynamic AE: Initialize with an epsilon-greedy strategy and collect images and actions while the agent acts under the policy learning algorithm. After 5 epochs, train the auto encoder from this data. Continue to collect data and periodically retrain the auto encoder in parallel with the policy training algorithm.\nWe found that the reconstructed input achieves a small but non-trivial residual on the test set regardless of which auto encoder training technique is utilized, suggesting that in both cases it learns underlying features of the state space while avoiding overfitting.\nTo obtain a lower dimensional representation of the agent’s state space, a snapshot of the network’s first six layers is saved. The sixth layer’s output (circled in figure one) is then utilized as an encoding for the original state space. That is, we construct an encoding σ(st) by running st through the first six hidden layers of our autoencoder and then taking the sixth layers output to be σ(st). In practice, we found that using the sixth layer’s output (rather than the bottleneck at the fifth layer) obtained the best model learning results. See the appendix for further discussion on this result."
+  }, {
+    "heading": "4.2 MODEL LEARNING ARCHITECTURE",
+    "text": "Equipped with an encoding σ, we can now consider the task of predicting model dynamics. For this task, a much simpler two layer neural networkMφ suffices.Mφ takes as input the encoded version of a state st at time t along with the agent’s action at and seeks to predict the encoded next frame σ(st+1). Loss is computed via a Euclidean loss layer regressing on the ground truth σ(st+1). We find that this model initially learns a representation close to the identity function and consequently the loss residual is similar for most state-action pairs. However, after approximately 5 epochs, it begins to learn more complex dynamics and consequently better identify novel states. We evaluate the quality of the learned model in the appendix."
+  }, {
+    "heading": "5 RELATED WORK",
+    "text": "Exploration is an intensely studied area of reinforcement learning. Many of the pioneering algorithms in this area, such as R − Max [7] and E3 [8], achieve efficient exploration that scales polynomially with the number of parameters in the agent’s state space (see also [9, 10]). However, as the size of state spaces increases, these methods quickly become intractable. A number of prior methods also examine various techniques for using models and prediction to incentivize exploration [11, 12, 13, 14]. However, such methods typically operate directly on the transition matrix of a discrete MDP, and do not provide for a straightforward extension to very large or continuous spaces, where function approximation is required. A number of prior methods have also been proposed to incorporate domain-specific factors to improve exploration. Doshi-Velez et al. [15] proposed incorporating priors into policy optimization, while Lang et al. [16] developed a method specific to relational domains. Finally, Schmidhuber et al. have developed a curiosity driven approach to exploration which uses model predictors to aid in control [17].\nSeveral exploration techniques have been proposed that can extend more readily to large state spaces. Among these, methods such as C-PACE [18] and metric-E3 [19] require a good metric on the state space that satisfies the assumptions of the algorithm. The corresponding representation learning issue has some parallels to the representation problem that we address by using an autoecoder, but it is unclear how the appropriate metric for the prior methods can be acquired automatically on tasks with raw sensory input, such as the Atari games in our experimental evaluation. Methods based on Monte-Carlo tree search can also scale gracefully to complex domains [20], and indeed previous work has applied such techniques to the task of playing Atari games from screen images [21]. However, this approach is computationally very intensive, and requires access to a generative model of the system in order to perform the tree search, which is not always available in online reinforcement learning. On the other hand, our method readily integrates into any online reinforcement learning algorithm.\nFinally, several recent papers have focused on driving the Q value higher. In [22], the authors use network dropout to perform Thompson sampling. In Boltzman exploration, a positive probability is assigned to any possible action according to its expected utility and according to a temperature parameter [23]. Both of these methods focus on controlling Q values rather than model-based exploration. A comparison to both is provided in the next section."
+  }, {
+    "heading": "6 EXPERIMENTAL RESULTS",
+    "text": "We evaluate our approach on 14 games from the Arcade Learning Environment [24]. The task consists of choosing actions in an Atari emulator based on raw images of the screen. Previous work has tackled this task using Q-learning with epsilon-greedy exploration [3], as well as Monte Carlo tree search [21] and policy gradient methods [25]. We use Deep Q Networks (DQN) [3] as the reinforcement learning algorithm within our method, and compare its performance to the same DQN method using only epsilon-greedy exploration, Boltzman exploration, and a Thompson sampling approach.\nThe results for 14 games in the Arcade Learning Environment are presented in Table 1. We chose those games that were particularly challenging for prior methods and ones where human experts outperform prior learning methods. We evaluated two versions of our approach; using either an autoencoder trained in advance by running epsilon-greedy Q-learning to collect data (denoted as “Static AE”), or using an autoencoder trained concurrently with the model and policy on the same image data (denoted as “Dynamic AE”). Table 1 also shows results from the DQN implementation reported in previous work, along with human expert performance on each game [3]. Note that our DQN implementation did not attain the same score on all of the games as prior work due to a shorter running time. Since we are primarily concerned with the rate of learning and not the final results, we do not consider this a deficiency. To directly evaluate the benefit of including exploration bonuses, we compare the performance of our approach primarily to our own DQN implementation, with the prior scores provided for reference.\nIn addition to raw-game scores, and learning curves, we also analyze our results on a new benchmark we have named Area Under Curve 100 (AUC-100). For each game, this benchmark computes the area under the game-score learning curve (using the trapezoid rule to approximate the integral). This area is then normalized by 100 times the score maximum game score achieved in [3], which represents 100 epochs of play at the best-known levels. This metric more effectively captures improvements to the game’s learning rate and does not require running the games for 1000 epochs as in [3]. For this reason, we suggest it as an alternative metric to raw game-score.\nBowling The policy without exploration tended to fixate on a set pattern of nocking down six pins per frame. When bonuses were added, the dynamics learner quickly became adept at predicting this outcome and was thus encouraged to explore other release points.\nFrostbite This game’s dynamics changed substantially via the addition of extra platforms as the player progressed. As the dynamics of these more complex systems was not well understood, the system was encouraged to visit them often (which required making further progress in the game).\nSeaquest A submarine must surface for air between bouts of fighting sharks. However, if the player resurfaces too soon they will suffer a penalty with effects on the game’s dynamics. Since these effects are poorly understood by the model learning algorithm, resurfacing receives a high exploration bonus and hence the agent eventually learns to successfully resurface at the correct time.\nQ∗bert Exploration bonuses resulted in a lower score. In Q∗bert, the background changes color after level one. The dynamics predictor is unable to quickly adapt to such a dramatic change in the environment and consequently, exploration bonuses are assigned in near equality to almost every state that is visited. This negatively impacts the final policy.\nLearning curves for each of the games are shown in Figure (3). Note that both of the exploration bonus algorithms learn significantly faster than epsilon-greedy Q-learning, and often continue learning even after the epsilon-greedy strategy converges. All games had the inputs normalized according\nto [3] and were run for 100 epochs (where one epoch is 50,000 time steps). Between each epoch, the policy was updated and then the new policy underwent 10,000 time steps of testing. The results represent the average testing score across three trials after 100 epoch each.\nThe results show that more nuanced exploration strategies generally improve on the naive epsilon greedy approach, with the Boltzman and Thompson sampling methods achieving the best results on three of the games. However, exploration bonuses achieve the fastest learning and the best results most consistently, outperforming the other three methods on 7 of the 14 games in terms of AUC-100."
+  }, {
+    "heading": "7 CONCLUSION",
+    "text": "In this paper, we evaluated several scalable and efficient exploration algorithms for reinforcement learning in tasks with complex, high-dimensional observations. Our results show that a new method based on assigning exploration bonuses most consistently achieves the largest improvement on a range of challenging Atari games, particularly those on which human players outperform prior learning methods. Our exploration method learns a model of the dynamics concurrently with the policy. This model predicts a learned representation of the state, and a function of this prediction error is added to the reward as an exploration bonus to encourage the policy to visit states with high novelty.\nOne of the limitations of our approach is that the misprediction error metric assumes that any misprediction in the state is caused by inaccuracies in the model. While this is true in determinstic environments, stochastic dynamics violate this assumption. An extension of our approach to stochastic systems requires a more nuanced treatment of the distinction between stochastic dynamics and uncertain dynamics, which we hope to explore in future work. Another intriguing direction for future work is to examine how the learned dynamics model can be incorporated into the policy learning process, beyond just providing exploration bonuses. This could in principle enable substantially faster learning than purely model-free approaches."
+  }, {
+    "heading": "8 APPENDIX",
+    "text": ""
+  }, {
+    "heading": "8.1 ON AUTO ENCODER LAYER SELECTION",
+    "text": "Recall that we trained an auto-encoder to encode the game’s state space. We then trained a predictive model on the next auto-encoded frame rather than directly training on the pixel intensity values of the next frame. To obtain the encoded space, we ran each state through an eight layer auto-encoder for training and then utilized the auto-encoder’s sixth layer as an encoded state space. We chose to use the sixth layer rather than the bottleneck fourth layer because we found that, over 20 iterations of Seaquest at 100 epochs per iteration, using this layer for encoding delivered measurably better performance than using the bottleneck layer. The results of that experiment are presented below."
+  }, {
+    "heading": "8.2 ON THE QUALITY OF THE LEARNED MODEL DYNAMICS",
+    "text": "Evaluating the quality of the learned dynamics model is somewhat difficult because the system is rewarded achieving higher error rates. A dynamics model that converges quickly is not useful for exploration bonuses. Nevertheless, when we plot the mean of the normalized residuals across all games and all trials used in our experiments, we see that the errors of the learned dynamics models continually decrease over time. The mean normalized residual after 100 epochs is approximately half of the maximal mean achieved. This suggests that each dynamics model was able to correctly learn properties of underlying dynamics for its given game."
+  }, {
+    "heading": "8.3 RAW AUC-100 SCORES",
+    "text": ""
+  }],
+  "year": 2015,
+  "references": [{
+    "title": "An Analysis of Model-Based Interval Estimation for Markov Decision Processes",
+    "authors": ["A.L. Strehl", "M.L. Littman"],
+    "venue": "Journal of Computer and System Sciences,",
+    "year": 2091
+  }, {
+    "title": "Near-Bayesian Exploration in Polynomial Time",
+    "authors": ["J.Z. Kolter", "A.Y. Ng"],
+    "venue": "Proceedings of the 26th Annual International Conference on Machine Learning,",
+    "year": 2009
+  }, {
+    "title": "Human-level Control Through Deep Reinforcement Learning",
+    "authors": ["V. Mnih", "K. Kavukcuoglu", "D. Silver", "A.A. Rusu"],
+    "year": 2015
+  }, {
+    "title": "The Elements of Statistical Learning. Springer series in statistics",
+    "authors": ["T. Hastie", "R. Tibshirani", "J. Friedman"],
+    "year": 2001
+  }, {
+    "title": "Manifold Regularization: A Geometric Framework for Learning from Labeled and Unlabeled Examples",
+    "authors": ["M. Belkin", "P. Niyogi", "V. Sindhwani"],
+    "venue": "JMLR, vol",
+    "year": 2006
+  }, {
+    "title": "Reducing the dimensionality of data with neural networks",
+    "authors": ["G.E. Hinton", "R. Salakhutdinov"],
+    "venue": "Science, 313,",
+    "year": 2006
+  }, {
+    "title": "R-max, a general polynomial time algorithm for near-optimal reinforcement learning",
+    "authors": ["R.I. Brafman", "M. Tennenholtz"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2002
+  }, {
+    "title": "Efficient reinforcement learning in factored MDPs",
+    "authors": ["M. Kearns", "D. Koller"],
+    "venue": "Proc. IJCAI,",
+    "year": 1999
+  }, {
+    "title": "Near-optimal reinforcement learning in polynomial time",
+    "authors": ["M. Kearns", "S. Singh"],
+    "venue": "Machine Learning Journal,",
+    "year": 2002
+  }, {
+    "title": "Practical reinforcement learning in continuous spaces",
+    "authors": ["W.D. Smart", "L.P. Kaelbling"],
+    "venue": "Proc. ICML,",
+    "year": 2000
+  }, {
+    "title": "Exploration in Model-based Reinforcement Learning by Empirically Estimating Learning Progress",
+    "authors": ["M. Lopes", "T. Lang", "M. Toussaint", "P.-Y. Oudeyer"],
+    "year": 2012
+  }, {
+    "title": "Managing Uncertainty within Value Function Approximation in Reinforcement Learning",
+    "authors": ["M. Geist", "O. Pietquin"],
+    "venue": "W. on Active Learning and Experimental Design,",
+    "year": 2010
+  }, {
+    "title": "Near-optimal BRL Using Optimistic Local Transitions",
+    "authors": ["M. Araya", "O. Buffet", "V. Thomas"],
+    "venue": "ser. ICML 12,",
+    "year": 2012
+  }, {
+    "title": "Nonparametric Bayesian Policy Priors for Reinforcement Learning",
+    "authors": ["F. Doshi-Velez", "D. Wingate", "N. Roy", "J. Tenenbaum"],
+    "year": 2014
+  }, {
+    "title": "Keristing, Exploration in relational domains for model-based reinforcement learning",
+    "authors": ["T. Lang", "K.M. Toussaint"],
+    "venue": "Proc. AAMAS,",
+    "year": 2014
+  }, {
+    "title": "Developmental Robotics, Optimal Artificial Curiosity, Creativity, Music, and the Fine Arts",
+    "authors": ["Juergen Schmidhuber"],
+    "venue": "Connection Science,",
+    "year": 2006
+  }, {
+    "title": "PAC Optimal Exploration in Continuous Space Markov Decision Processes",
+    "authors": ["J. Pazis", "R. Parr"],
+    "venue": "Proc. AAAI,",
+    "year": 2013
+  }, {
+    "title": "Exploration in metric state spaces",
+    "authors": ["S. Kakade", "M. Kearns", "J. Langford"],
+    "year": 2003
+  }, {
+    "title": "Efficient Bayes-Adaptive Reinforcement Learning using Sample-Based Search",
+    "authors": ["A. Guez", "D. Silver", "P. Dayan"],
+    "year": 2014
+  }, {
+    "title": "Deep Learning for Real-Time Atari Game Play Using Offline Monte-Carlo Tree Search Planning",
+    "authors": ["X. Guo", "S. Singh", "H. Lee", "R. Lewis", "X. Wang"],
+    "year": 2014
+  }, {
+    "title": "The Arcade Learning Environment: An Evaluation Platform for General Agents. JAIR",
+    "authors": ["M.G. Bellemare", "Y. Naddaf", "J. Veness", "M. Bowling"],
+    "venue": "Volume 47,",
+    "year": 2013
+  }, {
+    "title": "Trust Region Policy Optimization Arxiv preprint 1502.05477",
+    "authors": ["John Schulman", "Sergey Levine", "Philipp Moritz", "Michael I. Jordan", "Pieter Abbeel"],
+    "year": 2016
+  }],
+  "id": "SP:2470fcf0f89082de874ac9133ccb3a8667dd89a8",
+  "authors": [{
+    "name": "Bradly C. Stadie",
+    "affiliations": []
+  }, {
+    "name": "Sergey Levine",
+    "affiliations": []
+  }, {
+    "name": "Pieter Abbeel",
+    "affiliations": []
+  }],
+  "abstractText": "Achieving efficient and scalable exploration in complex domains poses a major challenge in reinforcement learning. While Bayesian and PAC-MDP approaches to the exploration problem offer strong formal guarantees, they are often impractical in higher dimensions due to their reliance on enumerating the state-action space. Hence, exploration in complex domains is often performed with simple epsilon-greedy methods. In this paper, we consider the challenging Atari games domain, which requires processing raw pixel inputs and delayed rewards. We evaluate several more sophisticated exploration strategies, including Thompson sampling and Boltzman exploration, and propose a new exploration method based on assigning exploration bonuses from a concurrently learned model of the system dynamics. By parameterizing our learned model with a neural network, we are able to develop a scalable and efficient approach to exploration bonuses that can be applied to tasks with complex, high-dimensional state spaces. In the Atari domain, our method provides the most consistent improvement across a range of games that pose a major challenge for prior methods. In addition to raw gamescores, we also develop an AUC-100 metric for the Atari Learning domain to evaluate the impact of exploration on this benchmark.",
+  "title": "INCENTIVIZING EXPLORATION IN REINFORCEMENT LEARNING WITH DEEP PREDICTIVE MODELS"
+}

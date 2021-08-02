@@ -1,0 +1,298 @@
+{
+  "sections": [{
+    "text": "Keywords: Object Detection"
+  }, {
+    "heading": "1 Introduction",
+    "text": "Object detectors based on convolutional neural networks (ConvNets) [20, 36, 15] have achieved state-of-the-art results on various challenging benchmarks [24, 8, 9]. A common component of state-of-the-art approaches is anchor boxes [32, 25], which are boxes of various sizes and aspect ratios that serve as detection candidates. Anchor boxes are extensively used in one-stage detectors [25, 10, 31, 23], which can achieve results highly competitive with two-stage detectors [32, 12, 11, 13] while being more efficient. One-stage detectors place anchor boxes densely over an image and generate final box predictions by scoring anchor boxes and refining their coordinates through regression.\nBut the use of anchor boxes has two drawbacks. First, we typically need a very large set of anchor boxes, e.g. more than 40k in DSSD [10] and more than 100k in RetinaNet [23]. This is because the detector is trained to classify whether each anchor box sufficiently overlaps with a ground truth box, and a large number of anchor boxes is needed to ensure sufficient overlap with most ground truth boxes. As a result, only a tiny fraction of anchor boxes will overlap with ground truth; this creates a huge imbalance between positive and negative anchor boxes and slows down training [23].\nSecond, the use of anchor boxes introduces many hyperparameters and design choices. These include how many boxes, what sizes, and what aspect ratios. Such choices have largely been made via ad-hoc heuristics, and can become even more complicated when combined with multiscale architectures where a single network\nmakes separate predictions at multiple resolutions, with each scale using different features and its own set of anchor boxes [25, 10, 23].\nIn this paper we introduce CornerNet, a new one-stage approach to object detection that does away with anchor boxes. We detect an object as a pair of keypoints—the top-left corner and bottom-right corner of the bounding box. We use a single convolutional network to predict a heatmap for the top-left corners of all instances of the same object category, a heatmap for all bottom-right corners, and an embedding vector for each detected corner. The embeddings serve to group a pair of corners that belong to the same object—the network is trained to predict similar embeddings for them. Our approach greatly simplifies the output of the network and eliminates the need for designing anchor boxes. Our approach is inspired by the associative embedding method proposed by Newell et al. [27], who detect and group keypoints in the context of multiperson human-pose estimation. Fig. 1 illustrates the overall pipeline of our approach.\nAnother novel component of CornerNet is corner pooling, a new type of pooling layer that helps a convolutional network better localize corners of bounding boxes. A corner of a bounding box is often outside the object—consider the case of a circle as well as the examples in Fig. 2. In such cases a corner cannot be localized based on local evidence. Instead, to determine whether there is a topleft corner at a pixel location, we need to look horizontally towards the right for the topmost boundary of the object, and look vertically towards the bottom for the leftmost boundary. This motivates our corner pooling layer: it takes in two feature maps; at each pixel location it max-pools all feature vectors to the right from the first feature map, max-pools all feature vectors directly below from the second feature map, and then adds the two pooled results together. An example is shown in Fig. 3.\nWe hypothesize two reasons why detecting corners would work better than bounding box centers or proposals. First, the center of a box can be harder to localize because it depends on all 4 sides of the object, whereas locating a corner depends on 2 sides and is thus easier, and even more so with corner pooling, which encodes some explicit prior knowledge about the definition of corners. Second, corners provide a more efficient way of densely discretizing the space of boxes: we just need O(wh) corners to represent O(w2h2) possible anchor boxes.\nWe demonstrate the effectiveness of CornerNet on MS COCO [24]. CornerNet achieves a 42.1% AP, outperforming all existing one-stage detectors. In addition, through ablation studies we show that corner pooling is critical to the superior performance of CornerNet. Code is available at https://github.com/umichvl/CornerNet."
+  }, {
+    "heading": "2 Related Works",
+    "text": "Two-stage object detectors Two-stage approach was first introduced and popularized by R-CNN [12]. Two-stage detectors generate a sparse set of regions of interest (RoIs) and classify each of them by a network. R-CNN generates RoIs using a low level vision algorithm [41, 47]. Each region is then extracted from the image and processed by a ConvNet independently, which creates lots of redundant computations. Later, SPP [14] and Fast-RCNN [11] improve R-CNN by designing a special pooling layer that pools each region from feature maps instead. However, both still rely on separate proposal algorithms and cannot be trained end-to-end. Faster-RCNN [32] does away low level proposal algorithms by introducing a region proposal network (RPN), which generates proposals from a set of pre-determined candidate boxes, usually known as anchor boxes. This not only makes the detectors more efficient but also allows the detectors to be trained end-to-end. R-FCN [6] further improves the efficiency of Faster-RCNN by replacing the fully connected sub-detection network with a fully convolutional sub-detection network. Other works focus on incorporating sub-category information [42], generating object proposals at multiple scales with more contextual information [1, 3, 35, 22], selecting better features [44], improving speed [21], cascade procedure [4] and better training procedure [37].\nOne-stage object detectors On the other hand, YOLO [30] and SSD [25] have popularized the one-stage approach, which removes the RoI pooling step and detects objects in a single network. One-stage detectors are usually more computationally efficient than two-stage detectors while maintaining competitive performance on different challenging benchmarks.\nSSD places anchor boxes densely over feature maps from multiple scales, directly classifies and refines each anchor box. YOLO predicts bounding box coordinates directly from an image, and is later improved in YOLO9000 [31] by switching to anchor boxes. DSSD [10] and RON [19] adopt networks similar to the hourglass network [28], enabling them to combine low-level and high-level features via skip connections to predict bounding boxes more accurately. However, these one-stage detectors are still outperformed by the two-stage detectors until the introduction of RetinaNet [23]. In [23], the authors suggest that the dense anchor boxes create a huge imbalance between positive and negative anchor boxes during training. This imbalance causes the training to be inefficient and hence the performance to be suboptimal. They propose a new loss, Focal Loss, to dynamically adjust the weights of each anchor box and show that their one-stage detector can outperform the two-stage detectors. RefineDet [45] proposes to filter the anchor boxes to reduce the number of negative boxes, and to coarsely adjust the anchor boxes.\nDeNet [39] is a two-stage detector which generates RoIs without using anchor boxes. It first determines how likely each location belongs to either the topleft, top-right, bottom-left or bottom-right corner of a bounding box. It then\ngenerates RoIs by enumerating all possible corner combinations, and follows the standard two-stage approach to classify each RoI. Our approach is very different from DeNet. First, DeNet does not identify if two corners are from the same objects and relies on a sub-detection network to reject poor RoIs. In contrast, our approach is a one-stage approach which detects and groups the corners using a single ConvNet. Second, DeNet selects features at manually determined locations relative to a region for classification, while our approach does not require any feature selection step. Third, we introduce corner pooling, a novel type of layer to enhance corner detection.\nOur approach is inspired by Newell et al. work [27] on Associative Embedding in the context of multi-person pose estimation. Newell et al. propose an approach that detects and groups human joints in a single network. In their approach each detected human joint has an embedding vector. The joints are grouped based on the distances between their embeddings. To the best of our knowledge, we are the first to formulate the task of object detection as a task of detecting and grouping corners simultaneously. Another novelty of ours is the corner pooling layers that help better localize the corners. We also significantly modify the hourglass architecture and add our novel variant of focal loss [23] to help better train the network."
+  }, {
+    "heading": "3 CornerNet",
+    "text": ""
+  }, {
+    "heading": "3.1 Overview",
+    "text": "In CornerNet, we detect an object as a pair of keypoints—the top-left corner and bottom-right corner of the bounding box. A convolutional network predicts two sets of heatmaps to represent the locations of corners of different object categories, one set for the top-left corners and the other for the bottom-right corners. The network also predicts an embedding vector for each detected corner [27] such that the distance between the embeddings of two corners from the same object is small. To produce tighter bounding boxes, the network also predicts offsets to slightly adjust the locations of the corners. With the predicted heatmaps, embeddings and offsets, we apply a simple post-processing algorithm to obtain the final bounding boxes.\nFig. 4 provides an overview of CornerNet. We use the hourglass network [28] as the backbone network of CornerNet. The hourglass network is followed by two prediction modules. One module is for the top-left corners, while the other one is for the bottom-right corners. Each module has its own corner pooling module to pool features from the hourglass network before predicting the heatmaps, embeddings and offsets. Unlike many other object detectors, we do not use features from different scales to detect objects of different sizes. We only apply both modules to the output of the hourglass network."
+  }, {
+    "heading": "3.2 Detecting Corners",
+    "text": "We predict two sets of heatmaps, one for top-left corners and one for bottomright corners. Each set of heatmaps has C channels, where C is the number of\ncategories, and is of size H ×W . There is no background channel. Each channel is a binary mask indicating the locations of the corners for a class.\nFor each corner, there is one ground-truth positive location, and all other locations are negative. During training, instead of equally penalizing negative locations, we reduce the penalty given to negative locations within a radius of the positive location. This is because a pair of false corner detections, if they are close to their respective ground truth locations, can still produce a box that sufficiently overlaps the ground-truth box (Fig. 5). We determine the radius by the size of an object by ensuring that a pair of points within the radius would generate a bounding box with at least t IoU with the ground-truth annotation (we set t to 0.7 in all experiments). Given the radius, the amount of penalty reduction is given by an unnormalized 2D Gaussian, e− x2+y2\n2σ2 , whose center is at the positive location and whose σ is 1/3 of the radius.\nLet pcij be the score at location (i, j) for class c in the predicted heatmaps, and let ycij be the “ground-truth” heatmap augmented with the unnormalized Gaussians. We design a variant of focal loss [23]:\nLdet = −1\nN\nC ∑\nc=1\nH ∑\ni=1\nW ∑\nj=1\n{\n(1− pcij) α log (pcij) if ycij = 1\n(1− ycij) β (pcij) α log (1− pcij) otherwise\n(1)\nwhere N is the number of objects in an image, and α and β are the hyperparameters which control the contribution of each point (we set α to 2 and β to 4 in all experiments). With the Gaussian bumps encoded in ycij , the (1 − ycij) term reduces the penalty around the ground truth locations.\nMany networks [15, 28] involve downsampling layers to gather global information and to reduce memory usage. When they are applied to an image fully convolutionally, the size of the output is usually smaller than the image. Hence, a location (x, y) in the image is mapped to the location (\n⌊ x n ⌋, ⌊ y n ⌋ )\nin the heatmaps, where n is the downsampling factor. When we remap the locations from the heatmaps to the input image, some precision may be lost, which can greatly affect the IoU of small bounding boxes with their ground truths. To address this issue we predict location offsets to slightly adjust the corner locations before remapping them to the input resolution.\nok = (xk n − ⌊xk n ⌋ , yk n − ⌊yk n ⌋)\n(2)\nwhere ok is the offset, xk and yk are the x and y coordinate for corner k. In particular, we predict one set of offsets shared by the top-left corners of all categories, and another set shared by the bottom-right corners. For training, we apply the smooth L1 Loss [11] at ground-truth corner locations:\nLoff = 1\nN\nN ∑\nk=1\nSmoothL1Loss (ok, ôk) (3)"
+  }, {
+    "heading": "3.3 Grouping Corners",
+    "text": "Multiple objects may appear in an image, and thus multiple top-left and bottomright corners may be detected. We need to determine if a pair of the top-left corner and bottom-right corner is from the same bounding box. Our approach is inspired by the Associative Embedding method proposed by Newell et al. [27] for the task of multi-person pose estimation. Newell et al. detect all human joints and generate an embedding for each detected joint. They group the joints based on the distances between the embeddings.\nThe idea of associative embedding is also applicable to our task. The network predicts an embedding vector for each detected corner such that if a top-left corner and a bottom-right corner belong to the same bounding box, the distance between their embeddings should be small. We can then group the corners based\non the distances between the embeddings of the top-left and bottom-right corners. The actual values of the embeddings are unimportant. Only the distances between the embeddings are used to group the corners.\nWe follow Newell et al. [27] and use embeddings of 1 dimension. Let etk be the embedding for the top-left corner of object k and ebk for the bottom-right corner. As in [26], we use the “pull” loss to train the network to group the corners and the “push” loss to separate the corners:\nLpull = 1\nN\nN ∑\nk=1\n[\n(etk − ek) 2 + (ebk − ek)\n2 ]\n, (4)\nLpush = 1\nN(N − 1)\nN ∑\nk=1\nN ∑\nj=1 j 6=k\nmax (0, ∆− |ek − ej |) , (5)\nwhere ek is the average of etk and ebk and we set ∆ to be 1 in all our experiments. Similar to the offset loss, we only apply the losses at the ground-truth corner location."
+  }, {
+    "heading": "3.4 Corner Pooling",
+    "text": "As shown in Fig. 2, there is often no local visual evidence for the presence of corners. To determine if a pixel is a top-left corner, we need to look horizontally towards the right for the topmost boundary of an object and vertically towards the bottom for the leftmost boundary. We thus propose corner pooling to better localize the corners by encoding explicit prior knowledge.\nSuppose we want to determine if a pixel at location (i, j) is a top-left corner. Let ft and fl be the feature maps that are the inputs to the top-left corner pooling layer, and let ftij and flij be the vectors at location (i, j) in ft and fl respectively. With H×W feature maps, the corner pooling layer first max-pools all feature vectors between (i, j) and (i,H) in ft to a feature vector tij , and\nmax-pools all feature vectors between (i, j) and (W, j) in fl to a feature vector lij . Finally, it adds tij and lij together. This computation can be expressed by the following equations:\ntij =\n{ max ( ftij , t(i+1)j )\nif i < H ftHj otherwise\n(6)\nlij =\n{ max ( flij , li(j+1) )\nif j < W fliW otherwise\n(7)\nwhere we apply an elementwise max operation. Both tij and lij can be computed efficiently by dynamic programming as shown Fig. 6.\nWe define bottom-right corner pooling layer in a similar way. It max-pools all feature vectors between (0, j) and (i, j), and all feature vectors between (i, 0) and (i, j) before adding the pooled results. The corner pooling layers are used in the prediction modules to predict heatmaps, embeddings and offsets.\nThe architecture of the prediction module is shown in Fig. 7. The first part of the module is a modified version of the residual block [15]. In this modified residual block, we replace the first 3×3 convolution module with a corner pooling module, which first processes the features from the backbone network by two 3×3 convolution modules 1 with 128 channels and then applies a corner pooling layer. Following the design of a residual block, we then feed the pooled features into a 3 × 3 Conv-BN layer with 256 channels and add back the projection shortcut. The modified residual block is followed by a 3× 3 convolution module with 256 channels, and 3 Conv-ReLU-Conv layers to produce the heatmaps, embeddings and offsets.\n1 Unless otherwise specified, our convolution module consists of a convolution layer, a BN layer [17] and a ReLU layer"
+  }, {
+    "heading": "3.5 Hourglass Network",
+    "text": "CornerNet uses the hourglass network [28] as its backbone network. The hourglass network was first introduced for the human pose estimation task. It is a fully convolutional neural network that consists of one or more hourglass modules. An hourglass module first downsamples the input features by a series of convolution and max pooling layers. It then upsamples the features back to the original resolution by a series of upsampling and convolution layers. Since details are lost in the max pooling layers, skip layers are added to bring back the details to the upsampled features. The hourglass module captures both global and local features in a single unified structure. When multiple hourglass modules are stacked in the network, the hourglass modules can reprocess the features to capture higher-level of information. These properties make the hourglass network an ideal choice for object detection as well. In fact, many current detectors [35, 10, 22, 19] already adopted networks similar to the hourglass network.\nOur hourglass network consists of two hourglasses, and we make some modifications to the architecture of the hourglass module. Instead of using max pooling, we simply use stride 2 to reduce feature resolution. We reduce feature resolutions 5 times and increase the number of feature channels along the way (256, 384, 384, 384, 512). When we upsample the features, we apply 2 residual modules followed by a nearest neighbor upsampling. Every skip connection also consists of 2 residual modules. There are 4 residual modules with 512 channels in the middle of an hourglass module. Before the hourglass modules, we reduce the image resolution by 4 times using a 7× 7 convolution module with stride 2 and 128 channels followed by a residual block [15] with stride 2 and 256 channels.\nFollowing [28], we also add intermediate supervision in training. However, we do not add back the intermediate predictions to the network as we find that this hurts the performance of the network. We apply a 3 × 3 Conv-BN module to both the input and output of the first hourglass module. We then merge them by element-wise addition followed by a ReLU and a residual block with 256 channels, which is then used as the input to the second hourglass module. The depth of the hourglass network is 104. Unlike many other state-of-the-art detectors, we only use the features from the last layer of the whole network to make predictions."
+  }, {
+    "heading": "4 Experiments",
+    "text": ""
+  }, {
+    "heading": "4.1 Training Details",
+    "text": "We implement CornerNet in PyTorch [29]. The network is randomly initialized under the default setting of PyTorch with no pretraining on any external dataset. As we apply focal loss, we follow [23] to set the biases in the convolution layers that predict the corner heatmaps. During training, we set the input resolution of the network to 511×511, which leads to an output resolution of 128×128. To reduce overfitting, we adopt standard data augmentation techniques including random horizontal flipping, random scaling, random cropping and random color\njittering, which includes adjusting the brightness, saturation and contrast of an image. Finally, we apply PCA [20] to the input image.\nWe use Adam [18] to optimize the full training loss:\nL = Ldet + αLpull + βLpush + γLoff (8)\nwhere α, β and γ are the weights for the pull, push and offset loss respectively. We set both α and β to 0.1 and γ to 1. We find that 1 or larger values of α and β lead to poor performance. We use a batch size of 49 and train the network on 10 Titan X (PASCAL) GPUs (4 images on the master GPU, 5 images per GPU for the rest of the GPUs). To conserve GPU resources, in our ablation experiments, we train the networks for 250k iterations with a learning rate of 2.5 × 10−4. When we compare our results with other detectors, we train the networks for an extra 250k iterations and reduce the learning rate to 2.5× 10−5 for the last 50k iterations."
+  }, {
+    "heading": "4.2 Testing Details",
+    "text": "During testing, we use a simple post-processing algorithm to generate bounding boxes from the heatmaps, embeddings and offsets. We first apply non-maximal suppression (NMS) by using a 3× 3 max pooling layer on the corner heatmaps. Then we pick the top 100 top-left and top 100 bottom-right corners from the heatmaps. The corner locations are adjusted by the corresponding offsets. We calculate the L1 distances between the embeddings of the top-left and bottomright corners. Pairs that have distances greater than 0.5 or contain corners from different categories are rejected. The average scores of the top-left and bottomright corners are used as the detection scores.\nInstead of resizing an image to a fixed size, we maintain the original resolution of the image and pad it with zeros before feeding it to CornerNet. Both the original and flipped images are used for testing. We combine the detections from the original and flipped images, and apply soft-nms [2] to suppress redundant detections. Only the top 100 detections are reported. The average inference time is 244ms per image on a Titan X (PASCAL) GPU."
+  }, {
+    "heading": "4.3 MS COCO",
+    "text": "We evaluate CornerNet on the very challenging MS COCO dataset [24]. MS COCO contains 80k images for training, 40k for validation and 20k for testing. All images in the training set and 35k images in the validation set are used for training. The remaining 5k images in validation set are used for hyper-parameter searching and ablation study. All results on the test set are submitted to an external server for evaluation. To provide fair comparisons with other detectors, we report our main results on the test-dev set. MS COCO uses average precisions (APs) at different IoUs and APs for different object sizes as the main evaluation metrics."
+  }, {
+    "heading": "4.4 Ablation Study",
+    "text": "Corner Pooling Corner pooling is a key component of CornerNet. To understand its contribution to performance, we train another network without corner pooling but with the same number of parameters.\nTab. 1 shows that adding corner pooling gives significant improvement: 2.0% on AP, 2.1% on AP50 and 2.2% on AP75. We also see that corner pooling is especially helpful for medium and large objects, improving their APs by 2.4% and 3.7% respectivel. This is expected because the topmost, bottommost, leftmost, rightmost boundaries of medium and large objects are likely to be further away from the corner locations.\nReducing penalty to negative locations We reduce the penalty given to negative locations around a positive location, within a radius determined by the size of the object (Sec. 3.2). To understand how this helps train CornerNet, we train one network with no penalty reduction and another network with a fixed radius of 2.5. We compare them with CornerNet on the validation set.\nTab. 2 shows that a fixed radius improves AP over the baseline by 2.7%, APm by 1.5% and APl by 5.3%. Object-dependent radius further improves the AP by 2.9%, APm by 2.6% and APl by 6.5%. In addition, we see that the penalty reduction especially benefits medium and large objects.\nError Analysis CornerNet simultaneously outputs heatmaps, offsets, and embeddings, all of which affect detection performance. An object will be missed\nif either corner is missed; precise offsets are needed to generate tight bounding boxes; incorrect embeddings will result in many false bounding boxes. To understand how each part contributes to the final error, we perform an error analysis by replacing the predicted heatmaps and offsets with the ground-truth values and evaluting performance on the validation set.\nTab. 3 shows that using the ground-truth corner heatmaps alone improves the AP from 38.5% to 74.0%. APs, APm and APl also increase by 43.1%, 40.9% and 30.1% respectively. If we replace the predicted offsets with the ground-truth offsets, the AP further increases by 13.1% to 87.1%. This suggests that although there is still ample room for improvement in both detecting and grouping corners, the main bottleneck is detecting corners. Fig. 8 shows two qualitative examples of the predicted corners."
+  }, {
+    "heading": "4.5 Comparisons with state-of-the-art detectors",
+    "text": "We compare CornerNet with other state-of-the-art detectors on MS COCO testdev (Tab. 4). With multi-scale evaluation, CornerNet achieves an AP of 42.1%, the state of the art among existing one-stage methods and competitive with two-stage methods."
+  }, {
+    "heading": "5 Conclusion",
+    "text": "We have presented CornerNet, a new approach to object detection that detects bounding boxes as pairs of corners. We evaluate CornerNet on MS COCO and demonstrate competitive results.\nAcknowledgements Toyota Research Institute (“TRI”) provided funds to assist the authors with their research but this article solely reflects the opinions and conclusions of its authors and not TRI or any other Toyota entity."
+  }],
+  "references": [{
+    "title": "Inside-outside net: Detecting objects in context with skip pooling and recurrent neural networks",
+    "authors": ["S. Bell", "C. Lawrence Zitnick", "K. Bala", "R. Girshick"],
+    "venue": "Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition. pp. 2874– 2883",
+    "year": 2016
+  }, {
+    "title": "Soft-nms—improving object detection with one line of code",
+    "authors": ["N. Bodla", "B. Singh", "R. Chellappa", "L.S. Davis"],
+    "venue": "2017 IEEE International Conference on Computer Vision (ICCV). pp. 5562–5570. IEEE",
+    "year": 2017
+  }, {
+    "title": "A unified multi-scale deep convolutional neural network for fast object detection",
+    "authors": ["Z. Cai", "Q. Fan", "R.S. Feris", "N. Vasconcelos"],
+    "venue": "European Conference on Computer Vision. pp. 354–370. Springer",
+    "year": 2016
+  }, {
+    "title": "Cascade r-cnn: Delving into high quality object detection",
+    "authors": ["Z. Cai", "N. Vasconcelos"],
+    "venue": "arXiv preprint arXiv:1712.00726",
+    "year": 2017
+  }, {
+    "title": "Dual path networks",
+    "authors": ["Y. Chen", "J. Li", "H. Xiao", "X. Jin", "S. Yan", "J. Feng"],
+    "venue": "Advances in Neural Information Processing Systems. pp. 4470–4478",
+    "year": 2017
+  }, {
+    "title": "R-fcn: Object detection via region-based fully convolutional networks",
+    "authors": ["J. Dai", "Y. Li", "K. He", "J. Sun"],
+    "venue": "arXiv preprint arXiv:1605.06409",
+    "year": 2016
+  }, {
+    "title": "Deformable convolutional networks",
+    "authors": ["J. Dai", "H. Qi", "Y. Xiong", "Y. Li", "G. Zhang", "H. Hu", "Y. Wei"],
+    "venue": "CoRR, abs/1703.06211 1(2), 3",
+    "year": 2017
+  }, {
+    "title": "Imagenet: A large-scale hierarchical image database",
+    "authors": ["J. Deng", "W. Dong", "R. Socher", "L.J. Li", "K. Li", "L. Fei-Fei"],
+    "venue": "Computer Vision and Pattern Recognition, 2009. CVPR 2009. IEEE Conference on. pp. 248–255. IEEE",
+    "year": 2009
+  }, {
+    "title": "The pascal visual object classes challenge: A retrospective",
+    "authors": ["M. Everingham", "S.A. Eslami", "L. Van Gool", "C.K. Williams", "J. Winn", "A. Zisserman"],
+    "venue": "International journal of computer vision 111(1), 98–136",
+    "year": 2015
+  }, {
+    "title": "Dssd: Deconvolutional single shot detector",
+    "authors": ["C.Y. Fu", "W. Liu", "A. Ranga", "A. Tyagi", "A.C. Berg"],
+    "venue": "arXiv preprint arXiv:1701.06659",
+    "year": 2017
+  }, {
+    "title": "Fast r-cnn",
+    "authors": ["R. Girshick"],
+    "venue": "arXiv preprint arXiv:1504.08083",
+    "year": 2015
+  }, {
+    "title": "Rich feature hierarchies for accurate object detection and semantic segmentation",
+    "authors": ["R. Girshick", "J. Donahue", "T. Darrell", "J. Malik"],
+    "venue": "Proceedings of the IEEE conference on computer vision and pattern recognition. pp. 580–587",
+    "year": 2014
+  }, {
+    "title": "Mask r-cnn",
+    "authors": ["K. He", "G. Gkioxari", "P. Dollár", "R. Girshick"],
+    "venue": "arxiv preprint arxiv: 170306870",
+    "year": 2017
+  }, {
+    "title": "Spatial pyramid pooling in deep convolutional networks for visual recognition",
+    "authors": ["K. He", "X. Zhang", "S. Ren", "J. Sun"],
+    "venue": "European Conference on Computer Vision. pp. 346–361. Springer",
+    "year": 2014
+  }, {
+    "title": "Deep residual learning for image recognition",
+    "authors": ["K. He", "X. Zhang", "S. Ren", "J. Sun"],
+    "venue": "Proceedings of the IEEE conference on computer vision and pattern recognition. pp. 770–778",
+    "year": 2016
+  }, {
+    "title": "Speed/accuracy trade-offs for modern convolutional object detectors",
+    "authors": ["J. Huang", "V. Rathod", "C. Sun", "M. Zhu", "A. Korattikara", "A. Fathi", "I. Fischer", "Z. Wojna", "Y. Song", "S Guadarrama"],
+    "venue": "IEEE CVPR",
+    "year": 2017
+  }, {
+    "title": "Batch normalization: Accelerating deep network training by reducing internal covariate shift",
+    "authors": ["S. Ioffe", "C. Szegedy"],
+    "venue": "International conference on machine learning. pp. 448–456",
+    "year": 2015
+  }, {
+    "title": "Adam: A method for stochastic optimization",
+    "authors": ["D.P. Kingma", "J. Ba"],
+    "venue": "arXiv preprint arXiv:1412.6980",
+    "year": 2014
+  }, {
+    "title": "Ron: Reverse connection with objectness prior networks for object detection",
+    "authors": ["T. Kong", "F. Sun", "A. Yao", "H. Liu", "M. Lu", "Y. Chen"],
+    "venue": "arXiv preprint arXiv:1707.01691",
+    "year": 2017
+  }, {
+    "title": "Imagenet classification with deep convolutional neural networks",
+    "authors": ["A. Krizhevsky", "I. Sutskever", "G.E. Hinton"],
+    "venue": "Advances in neural information processing systems. pp. 1097–1105",
+    "year": 2012
+  }, {
+    "title": "Light-head r-cnn: In defense of two-stage object detector",
+    "authors": ["Z. Li", "C. Peng", "G. Yu", "X. Zhang", "Y. Deng", "J. Sun"],
+    "venue": "arXiv preprint arXiv:1711.07264",
+    "year": 2017
+  }, {
+    "title": "Feature pyramid networks for object detection",
+    "authors": ["T.Y. Lin", "P. Dollár", "R. Girshick", "K. He", "B. Hariharan", "S. Belongie"],
+    "venue": "arXiv preprint arXiv:1612.03144",
+    "year": 2016
+  }, {
+    "title": "Focal loss for dense object detection",
+    "authors": ["T.Y. Lin", "P. Goyal", "R. Girshick", "K. He", "P. Dollár"],
+    "venue": "arXiv preprint arXiv:1708.02002",
+    "year": 2017
+  }, {
+    "title": "Microsoft coco: Common objects in context",
+    "authors": ["T.Y. Lin", "M. Maire", "S. Belongie", "J. Hays", "P. Perona", "D. Ramanan", "P. Dollár", "C.L. Zitnick"],
+    "venue": "European conference on computer vision. pp. 740–755. Springer",
+    "year": 2014
+  }, {
+    "title": "Ssd: Single shot multibox detector",
+    "authors": ["W. Liu", "D. Anguelov", "D. Erhan", "C. Szegedy", "S. Reed", "C.Y. Fu", "A.C. Berg"],
+    "venue": "European conference on computer vision. pp. 21–37. Springer",
+    "year": 2016
+  }, {
+    "title": "Pixels to graphs by associative embedding",
+    "authors": ["A. Newell", "J. Deng"],
+    "venue": "Advances in Neural Information Processing Systems. pp. 2168–2177",
+    "year": 2017
+  }, {
+    "title": "Associative embedding: End-to-end learning for joint detection and grouping",
+    "authors": ["A. Newell", "Z. Huang", "J. Deng"],
+    "venue": "Advances in Neural Information Processing Systems. pp. 2274–2284",
+    "year": 2017
+  }, {
+    "title": "Stacked hourglass networks for human pose estimation",
+    "authors": ["A. Newell", "K. Yang", "J. Deng"],
+    "venue": "European Conference on Computer Vision. pp. 483–499. Springer",
+    "year": 2016
+  }, {
+    "title": "Automatic differentiation in pytorch",
+    "authors": ["A. Paszke", "S. Gross", "S. Chintala", "G. Chanan", "E. Yang", "Z. DeVito", "Z. Lin", "A. Desmaison", "L. Antiga", "A. Lerer"],
+    "year": 2017
+  }, {
+    "title": "You only look once: Unified, real-time object detection",
+    "authors": ["J. Redmon", "S. Divvala", "R. Girshick", "A. Farhadi"],
+    "venue": "Proceedings of the IEEE conference on computer vision and pattern recognition. pp. 779–788",
+    "year": 2016
+  }, {
+    "title": "Yolo9000: better, faster, stronger",
+    "authors": ["J. Redmon", "A. Farhadi"],
+    "venue": "arXiv preprint 1612",
+    "year": 2016
+  }, {
+    "title": "Faster r-cnn: Towards real-time object detection with region proposal networks",
+    "authors": ["S. Ren", "K. He", "R. Girshick", "J. Sun"],
+    "venue": "Advances in neural information processing systems. pp. 91–99",
+    "year": 2015
+  }, {
+    "title": "Dsod: Learning deeply supervised object detectors from scratch",
+    "authors": ["Z. Shen", "Z. Liu", "J. Li", "Y.G. Jiang", "Y. Chen", "X. Xue"],
+    "venue": "The IEEE International Conference on Computer Vision (ICCV). vol. 3, p. 7",
+    "year": 2017
+  }, {
+    "title": "Learning object detectors from scratch with gated recurrent feature pyramids",
+    "authors": ["Z. Shen", "H. Shi", "R. Feris", "L. Cao", "S. Yan", "D. Liu", "X. Wang", "X. Xue", "T.S. Huang"],
+    "venue": "arXiv preprint arXiv:1712.00886",
+    "year": 2017
+  }, {
+    "title": "Beyond skip connections: Top-down modulation for object detection",
+    "authors": ["A. Shrivastava", "R. Sukthankar", "J. Malik", "A. Gupta"],
+    "venue": "arXiv preprint arXiv:1612.06851",
+    "year": 2016
+  }, {
+    "title": "Very deep convolutional networks for large-scale image recognition",
+    "authors": ["K. Simonyan", "A. Zisserman"],
+    "venue": "arXiv preprint arXiv:1409.1556",
+    "year": 2014
+  }, {
+    "title": "An analysis of scale invariance in object detection-snip",
+    "authors": ["B. Singh", "L.S. Davis"],
+    "venue": "arXiv preprint arXiv:1711.08189",
+    "year": 2017
+  }, {
+    "title": "Inception-v4, inception-resnet and the impact of residual connections on learning",
+    "authors": ["C. Szegedy", "S. Ioffe", "V. Vanhoucke", "A.A. Alemi"],
+    "venue": "AAAI. vol. 4, p. 12",
+    "year": 2017
+  }, {
+    "title": "Denet: Scalable real-time object detection with directed sparse sampling",
+    "authors": ["L. Tychsen-Smith", "L. Petersson"],
+    "venue": "arXiv preprint arXiv:1703.10295",
+    "year": 2017
+  }, {
+    "title": "Improving object localization with fitness nms and bounded iou loss",
+    "authors": ["L. Tychsen-Smith", "L. Petersson"],
+    "venue": "arXiv preprint arXiv:1711.00164",
+    "year": 2017
+  }, {
+    "title": "Selective search for object recognition",
+    "authors": ["J.R. Uijlings", "K.E. van de Sande", "T. Gevers", "A.W. Smeulders"],
+    "venue": "International journal of computer vision 104(2), 154–171",
+    "year": 2013
+  }, {
+    "title": "Subcategory-aware convolutional neural networks for object proposals and detection",
+    "authors": ["Y. Xiang", "W. Choi", "Y. Lin", "S. Savarese"],
+    "venue": "arXiv preprint arXiv:1604.04693",
+    "year": 2016
+  }, {
+    "title": "Deep regionlets for object detection",
+    "authors": ["H. Xu", "X. Lv", "X. Wang", "Z. Ren", "R. Chellappa"],
+    "venue": "arXiv preprint arXiv:1712.02408",
+    "year": 2017
+  }, {
+    "title": "Feature selective networks for object detection",
+    "authors": ["Y. Zhai", "J. Fu", "Y. Lu", "H. Li"],
+    "venue": "arXiv preprint arXiv:1711.08879",
+    "year": 2017
+  }, {
+    "title": "Single-shot refinement neural network for object detection",
+    "authors": ["S. Zhang", "L. Wen", "X. Bian", "Z. Lei", "S.Z. Li"],
+    "venue": "arXiv preprint arXiv:1711.06897",
+    "year": 2017
+  }, {
+    "title": "Couplenet: Coupling global structure with local parts for object detection",
+    "authors": ["Y. Zhu", "C. Zhao", "J. Wang", "X. Zhao", "Y. Wu", "H. Lu"],
+    "venue": "Proc. of Int’l Conf. on Computer Vision (ICCV)",
+    "year": 2017
+  }, {
+    "title": "Edge boxes: Locating object proposals from edges",
+    "authors": ["C.L. Zitnick", "P. Dollár"],
+    "venue": "European Conference on Computer Vision. pp. 391–405. Springer",
+    "year": 2014
+  }],
+  "id": "SP:852f34b53ed70268bbe4395fe752b5a789732a50",
+  "authors": [{
+    "name": "Hei Law",
+    "affiliations": []
+  }, {
+    "name": "Jia Deng",
+    "affiliations": []
+  }, {
+    "name": "J. Deng",
+    "affiliations": []
+  }],
+  "abstractText": "We propose CornerNet, a new approach to object detection where we detect an object bounding box as a pair of keypoints, the top-left corner and the bottom-right corner, using a single convolution neural network. By detecting objects as paired keypoints, we eliminate the need for designing a set of anchor boxes commonly used in prior single-stage detectors. In addition to our novel formulation, we introduce corner pooling, a new type of pooling layer that helps the network better localize corners. Experiments show that CornerNet achieves a 42.1% AP on MS COCO, outperforming all existing one-stage detectors.",
+  "title": "CornerNet: Detecting Objects as Paired Keypoints"
+}

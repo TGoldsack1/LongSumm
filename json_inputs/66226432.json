@@ -1,0 +1,238 @@
+{
+  "sections": [{
+    "heading": "1 Introduction",
+    "text": "Due to their ability to capture long-term dependencies, autoregressive models such as recurrent neural networks (RNN) have become generative models of choice for dealing with sequential data. By leveraging weight sharing across timesteps, they can model variable length sequences within a fixed parameter space. RNN dynamics involve a hidden state that is updated at each timestep to summarize all the information seen previously in the sequence. Given the hidden state at the current timestep, the network predicts the desired output, which in many cases corresponds to the next input in the sequence. Due to the deterministic evolution of the hidden state, RNNs capture the entropy in the observed sequences by shaping conditional output distributions for each step, which are usually of simple parametric form, i.e. unimodal or mixtures of unimodal. This may be insufficient for highly structured natural sequences, where there is correlation between output variables at the same step, i.e. simultaneities (Boulanger-Lewandowski et al., 2012), and complex dependencies between variables at different timesteps, i.e. long-term dependencies. For these reasons, recent efforts recur to highly multi-modal output distribution by augmenting the RNN with stochastic latent variables trained by amortised variational inference, or variational auto-encoding framework (VAE) (Kingma and Welling, 2014; Fraccaro et al., 2016; Kingma and Welling, 2014). The VAE framework allows efficient approximate inference by parametrizing the approximate posterior and generative model with neural networks trainable end-to-end by backpropagation.\n31st Conference on Neural Information Processing Systems (NIPS 2017), Long Beach, CA, USA.\nAnother motivation for including stochastic latent variables in autoregressive models is to infer, from the observed variables in the sequence (e.g. pixels or sound-waves), higher-level abstractions (e.g. objects or speakers). Disentangling in such way the factors of variations is appealing as it would increase high-level control during generation, ease semi-supervised and transfer learning, and enhance interpretability of the trained model (Kingma et al., 2014; Hu et al., 2017).\nStochastic recurrent models proposed in the literature vary in the way they use the stochastic variables to perform output prediction and in how they parametrize the posterior approximation for variational inference. In this paper, we propose a stochastic recurrent generative model that incorporates into a single framework successful techniques from earlier models. We associate a latent variable with each timestep in the generation process. Similar to Fraccaro et al. (2016), we use a (deterministic) RNN that runs backwards through the sequence to form our approximate posterior, allowing it to capture the future of the sequence. However, akin to Chung et al. (2015); Bayer and Osendorfer (2014), the latent variables are used to condition the recurrent dynamics for future steps, thus injecting highlevel decisions about the upcoming elements of the output sequence. Our architectural choices are motivated by interpreting the latent variables as encoding a “plan” for the future of the sequence. The latent plan is injected into the recurrent dynamics in order to shape the distribution of future hidden states. We show that mixing stochastic forward pass, conditional prior and backward recognition network helps building effective stochastic recurrent models.\nThe recent surge in generative models suggests that extracting meaningful latent representations is difficult when using a powerful autoregressive decoder, i.e. the latter captures well enough most of the entropy in the data distribution (Bowman et al., 2015; Kingma et al., 2016; Chen et al., 2017; Gulrajani et al., 2017). We show that by using an auxiliary, task-agnostic loss, we ease the training of the latent variables which, in turn, helps achieving higher performance for the tasks at hand. The latent variables in our model are forced to contain useful information by predicting the state of the backward encoder, i.e. by predicting the future information in the sequence.\nOur work provides the following contributions:\n• We unify several successful architectural choices into one generative stochastic model for sequences: backward posterior, conditional prior and latent variables that condition the hidden dynamics of the network. Our model achieves state-of-the-art in speech modeling.\n• We propose a simple way of improving model performance by providing the latent variables with an auxiliary, task-agnostic objective. In the explored tasks, the auxiliary cost yielded better performance than other strategies such as KL annealing. Finally, we show that the auxiliary signal helps the model to learn interpretable representations in a language modeling task."
+  }, {
+    "heading": "2 Background",
+    "text": "We operate in the well-known VAE framework (Kingma and Ba, 2014; Burda et al., 2015; Rezende and Mohamed, 2015), a neural network based approach for training generative latent variable models. Let x be an observation of a random variable, taking values in X . We assume that the generation of x involves a latent variable z, taking values in Z , by means of a joint density pθ(x, z), parametrized by θ. Given a set of observed datapoints D = {x1, . . . , xn}, the goal of maximum likelihood estimation (MLE) is to estimate the parameters θ that maximize the marginal log-likelihood L(θ;D):\nθ∗ = argmaxθ L(θ;D) = n∑ i=1 log ∫ z pθ(x i, z) dz . (1)\nOptimizing the marginal log-likelihood is usually intractable, due to the integration over the latent variables. A common approach is to maximize a variational lower bound on the marginal loglikelihood. The evidence lower bound (ELBO) is obtained by introducing an approximate posterior qφ(z|x) yielding:\nlog pθ(x) ≥ E qφ(z|x)\n[ log pθ(x, z)\nqφ(z|x)\n] = log p(x)−DKL ( qφ(z|x) ‖ p(z|x) ) = F(x; θ, φ), (2)\nwhere KL denotes the Kullback-Leibler divergence. The ELBO is particularly appealing because the bound is tight when the approximate posterior matches the true posterior, i.e. it reduces to the\nmarginal log-likelihood. The ELBO can also be rewritten as a minimum description length loss function (Honkela and Valpola, 2004):\nF(x; θ, φ) = E qφ(z|x)\n[ log pθ(x|z) ] −DKL ( qφ(z|x) ‖ pθ(z) ) , (3)\nwhere the second term measures the degree of dependence between x and z, i.e. if DKL ( qφ(z|x) ‖ pθ(z) ) is zero then z is independent of x. Usually, the parameters of the generative model pθ(x|z), the prior pθ(z) and the inference model qφ(z|x) are computed using neural networks. In this case, the ELBO can be maximized by gradient ascent on a Monte Carlo approximation of the expectation. For particularly simple parametric forms of qφ(z|x), e.g. multivariate diagonal Gaussian or, more generally, for reparamatrizable distributions (Kingma and Welling, 2014), one can backpropagate through the sampling process z ∼ qφ(z|x) by applying the reparametrization trick, which simulates sampling from qφ(z|x) by first sampling from a fixed distribution u, ∼ u( ), and then by applying deterministic transformation z = fφ(x, ). This makes the approach appealing in comparison to other approximate inference approaches.\nIn order to have a better generative model overall, many efforts have been put in augmenting the capacity of the approximate posteriors (Rezende and Mohamed, 2015; Kingma et al., 2016; Louizos and Welling, 2017), the prior distribution (Chen et al., 2017; Serban et al., 2017a) and the decoder (Gulrajani et al., 2017; Oord et al., 2016). By having more powerful decoders pθ(x|z), one could model more complex distributions over X . This idea has been explored while applying VAEs to sequences x = (x1, . . . , xT ), where the decoding distribution pθ(x|z) is modeled by an autoregressive model, pθ(x|z) = ∏ t pθ(xt|z, x1:t−1) (Bayer and Osendorfer, 2014; Chung et al., 2015; Fraccaro et al., 2016). In these models, z typically decomposes as a sequence of latent variables, z = (z1, . . . , zT ), yielding pθ(x|z) = ∏ t pθ(xt|z1:t−1, x1:t−1). We operate in this setting and, in the following section, we present our choices for parametrizing the generative model, the prior and the inference model."
+  }, {
+    "heading": "3 Proposed Approach",
+    "text": "In Figure 1, we report the dependencies in the inference and the generative parts of our model, compared to existing models. From a broad perspective, we use a backward recurrent network for the approximate posterior (akin to SRNN (Fraccaro et al., 2016)), we condition the recurrent state of the forward auto-regressive model with the stochastic variables and use a conditional prior (akin to VRNN (Chung et al., 2015), STORN (Bayer and Osendorfer, 2014)). In order to make better use\nof the latent variables, we use auxiliary costs (double arrows) to force the latent variables to encode information about the future. In the following, we describe each of these components."
+  }, {
+    "heading": "3.1 Generative Model",
+    "text": "Decoder Given a sequence of observations x = (x1, . . . , xT ), and desired set of labels or predictions y = (y1, . . . , yT ), we assume that there exists a corresponding set of stochastic latent variables z = (z1, . . . , zT ). In the following, without loss of generality, we suppose that the set of predictions corresponds to a shifted version of the input sequence, i.e. the model tries to predict the next observation given the previous ones, a common setting in language and speech modeling (Fraccaro et al., 2016; Chung et al., 2015). The generative model couples observations and latent variables by using an autoregressive model, i.e. by exploiting a LSTM architecture (Hochreiter and Schmidhuber, 1997), that runs through the sequence:\nht = −→ f (xt, ht−1, zt). (4)\nThe parameters of the conditional probability distribution on the next observation pθ(xt+1|x1:t, z1:t) are computed by a multi-layered feed-forward network that conditions on ht, f (o)(ht). In the case of continuous-valued observations, f (o) may output the µ, log σ parameters of a Gaussian distribution, or the categorical proportions in the case of one-hot predictions. Note that, even if f (o) is a simple unimodal distribution, the marginal distribution pθ(xt+1|x1:t) may be highly multimodal, due to the integration over the sequence of latent variables z. Note that f (o) does not condition on zt, i.e. zt is not directly used in the computation of the output conditional probabilities. We observed better performance by avoiding the latent variables from directly producing the next output.\nPrior The parameters of the prior distribution pθ(zt|x1:t, z1:t−1) over each latent variable are obtained by using a non-linear transformation of the previous hidden state of the forward network. A common choice in the VAE framework is to use Gaussian latent variables. Therefore, f (p) produces the parameters of a diagonal multivariate Gaussian distribution:\npθ(zt|x1:t, z1:t−1) = N (zt;µ(p)t , σ(p)t ) where [µ(p)t , log σ(p)t ] = f (p)(ht−1). (5) This type of conditional prior has proven to be useful in previous work (Chung et al., 2015)."
+  }, {
+    "heading": "3.2 Inference Model",
+    "text": "The inference model is responsible for approximating the true posterior over the latent variables p(z1, . . . , zT |x) in order to provide a tractable lower-bound on the log-likelihood. Our posterior approximation uses a LSTM processing the sequence x backwards:\nbt = ←− f (xt+1, bt+1). (6)\nEach state bt contains information about the future of the sequence and can be used to shape the approximate posterior for the latent zt. As the forward LSTM uses zt to condition future predictions, the latent variable can directly inform the recurrent dynamics about the future states, acting as a “plan” of the future in the sequence. This information is channeled into the posterior distribution by a feed-forward neural network f (q) taking as input both the previous forward state ht−1 and the backward state bt:\nqφ(zt|x) = N (zt;µ(q)t , σ(q)t ) where [µ(q)t , log σ(q)t ] = f (q)(ht−1, bt). (7)\nBy injecting stochasticity in the hidden state of the forward recurrent model, the true posterior distribution for a given variable zt depends on all the variables zt+1:T after zt through dependence on ht+1:T . In order to formulate an efficient posterior approximation, we drop the dependence on zt+1:T . This is at the cost of introducing intrinsic bias in the posterior approximation, e.g. we may exclude the true posterior from the space of functions modelled by our function approximator. This is in contrast with SRNN (Fraccaro et al., 2016), in which the posterior distribution factorizes in a tractable manner at the cost of not including the latent variables in the forward autoregressive dynamics, i.e. the latent variables don’t condition the hidden state, but only help in shaping a multi-modal distribution for the current prediction."
+  }, {
+    "heading": "3.3 Auxiliary Cost",
+    "text": "In various domains, such as text and images, it has been empirically observed that it is difficult to make use of latent variables when coupled with a strong autoregressive decoder (Bowman et al., 2015; Gulrajani et al., 2017; Chen et al., 2017). The difficulty in learning meaningful latent variables, in many cases of interest, is related to the fact that the abstractions underlying observed data may be encoded with a smaller number of bits than the observed variables. For example, there are multiple ways of picturing a particular “cat” (e.g. different poses, colors or lightning) without varying the more abstract properties of the concept “cat”. In these cases, the maximum-likelihood training objective may not be sensitive to how well abstractions are encoded, causing the latent variables to “shut off”, i.e. the local correlations at the pixel level may be too strong and bias the learning process towards finding parameter solutions for which the latent variables are unused. In these cases, the posterior approximation tends to provide a too weak or noisy signal, due to the variance induced by the stochastic gradient approximation. As a result, the decoder may learn to ignore z and instead to rely solely on the autoregressive properties of x, causing x and z to be independent, i.e. the KL term in Eq. 2 vanishes.\nRecent solutions to this problem generally propose to reduce the capacity of the autoregressive decoder (Bowman et al., 2015; Bachman, 2016; Chen et al., 2017; Semeniuta et al., 2017). The constraints on the decoder capacity inherently bias the learning towards finding parameter solutions for which z and x are dependent. One of the shortcomings with this approach is that, in general, it may be hard to achieve the desired solutions by architecture search. Instead, we investigate whether it is useful to keep the expressiveness of the autoregressive decoder but force the latent variables to encode useful information by adding an auxiliary training signal for the latent variables alone. In practice, our results show that this auxiliary cost, albeit simple, helps achieving better performance on the objective of interest.\nSpecifically, we consider training an additional conditional generative model of the backward states b = {b1, . . . , bT } given the forward states pξ(b|h) = ∫ z pξ(b, z|h)dz ≥ Eqξ(z|b,h)[log pξ(b|z) + log pξ(z|h) − log qξ(z|b, h)]. This additional model is also trained through amortized variational inference. However, we share its prior pξ(z|h) and approximate posterior qξ(z|b, h) with those of the “primary” model (b is a deterministic function of x per Eq. 6 and the approximate posterior is conditioned on b). In practice, we solely learn additional parameters ξ for the decoding model pξ(b|z) = ∏ t pξ(bt|zt). The auxiliary reconstruction model trains zt to contain relevant information about the future of the sequence contained in the hidden state of the backward network bt:\npξ(bt|zt) = N (µ(a)t , σ(a)t ) where [µ(a)t , log σ(a)t ] = f (a)(zt), (8) By means of the auxiliary reconstruction cost, the approximate posterior and prior of the primary model is trained with an additional signal that may help with escaping local minima due to short term reconstructions appearing in the lower bound, similarly to what has been recently noted in Karl et al. (2016)."
+  }, {
+    "heading": "3.4 Learning",
+    "text": "The training objective is a regularized version of the lower-bound on the data log-likelihood based on the variational free-energy, where the regularization is imposed by the auxiliary cost:\nL(x; θ, φ, ξ) = ∑ t E qφ(zt|x) [ log pθ(xt+1|x1:t, z1:t) + α log pξ(bt|zt) ] −DKL ( qφ(zt|x1:T ) ‖ pθ(zt|x1:t, z1:t−1) ) .\n(9)\nWe learn the parameters of our model by backpropagation through time (Rumelhart et al., 1988) and we approximate the expectation with one sample from the posterior qφ(z|x) by using reparametrization. When optimizing Eq. 9, we disconnect the gradients of the auxiliary prediction from affecting the backward network, i.e. we don’t use the gradients∇φ log pξ(bt|zt) to train the parameters φ of the approximate posterior: intuitively, the backward network should be agnostic about the auxiliary task assigned to the latent variables. It also performed better empirically. As the approximate posterior is trained only with the gradient flowing through the ELBO, the backward states b may be receiving a weak training signal early in training, which may hamper the usefulness of the auxiliary generative cost, i.e. all the backward states may be concentrated around the zero vector. Therefore,\nwe additionally train the backward network to predict the output variables in reverse (see Figure 1): L(x; θ, φ, ξ) = ∑ t E qφ(zt|x) [ log pθ(xt+1|x1:t, z1:t) + α log pξ(bt|zt) ] + β log pξ(xt|bt)\n−DKL ( qφ(zt|x1:T ) ‖ pθ(zt|x1:t, z1:t−1) ) .\n(10)"
+  }, {
+    "heading": "3.5 Connection to previous models",
+    "text": "Our model is similar to several previous stochastic recurrent models: similarly to STORN (Bayer and Osendorfer, 2014) and VRNN (Chung et al., 2015) the latent variables are provided as input to the autoregressive decoder. Differently from STORN, we use the conditional prior parametrization proposed in Chung et al. (2015). However, the generation process in the VRNN differs from our approach. In VRNN, zt are directly used, along with ht−1, to produce the next output xt. We found that the model performed better if we relieved the latent variables from producing the next output. VRNN has a “myopic” posterior in such that the latent variables are not informed about the whole future in the sequence. SRNN (Fraccaro et al., 2016) addresses the issue by running a posterior backward in the sequence and thus providing future context for the current prediction. However, the autoregressive decoder is not informed about the future of the sequence through the latent variables. Several efforts have been made in order to bias the learning process towards parameter solutions for which the latent variables are used (Bowman et al., 2015; Karl et al., 2016; Kingma et al., 2016; Chen et al., 2017; Zhao et al., 2017). Bowman et al. (2015) tackle the problem in a language modeling setting by dropping words from the input at random in order to weaken the autoregressive decoder and by annealing the KL divergence term during training. We achieve similar latent interpolations by using our auxiliary cost. Similarly, Chen et al. (2017) propose to restrict the receptive field of the pixel-level decoder for image generation tasks. Kingma et al. (2016) propose to reserve some free bits of KL divergence. In parallel to our work, the idea of using a task-agnostic loss for the latent variables alone has also been considered in (Zhao et al., 2017). The authors force the latent variables to predict a bag-of-words representation of a dialog utterance. Instead, we work in a sequential setting, in which we have a latent variable for each timestep in the sequence."
+  }, {
+    "heading": "4 Experiments",
+    "text": "In this section, we evaluate our proposed model on diverse modeling tasks (speech, images and text). We show that our model can achieve state-of-the-art results on two speech modeling datasets: Blizzard (King and Karaiskos, 2013) and TIMIT raw audio datasets (also used in Chung et al. (2015)). Our approach also gives competitive results on sequential generation on MNIST (Salakhutdinov and Murray, 2008). For text, we show that the the auxiliary cost helps the latent variables to capture information about latent structure of language (e.g. sequence length, sentiment). In all experiments, we used the ADAM optimizer (Kingma and Ba, 2014)."
+  }, {
+    "heading": "4.1 Speech Modeling and Sequential MNIST",
+    "text": "Blizzard and TIMIT We test our model in two speech modeling datasets. Blizzard consists in 300 hours of English, spoken by a single female speaker. TIMIT has been widely used in speech recognition and consists in 6300 English sentences read by 630 speakers. We train the model directly on raw sequences represented as a sequence of 200 real-valued amplitudes normalized using the global mean and standard deviation of the training set. We adopt the same train, validation and test split as in Chung et al. (2015). For Blizzard, we report the average log-likelihood for half-second sequences (Fraccaro et al., 2016), while for TIMIT we report the average log-likelihood for the sequences in the test set.\nIn this setting, our models use a fully factorized multivariate Gaussian distribution as the output distribution for each timestep. In order to keep our model comparable with the state-of-the-art, we keep the number of parameters comparable to those of SRNN (Fraccaro et al., 2016). Our forward/backward networks are LSTMs with 2048 recurrent units for Blizzard and 1024 recurrent units for TIMIT. The dimensionality of the Gaussian latent variables is 256. The prior f (p), inference f (q) and auxiliary networks f (a) have a single hidden layer, with 1024 units for Blizzard and 512 units for TIMIT, and use leaky rectified nonlinearities with leakiness 13 and clipped at ±3 (Fraccaro et al., 2016). For Blizzard, we use a learning rate of 0.0003 and batch size of 128, for TIMIT they are\n0.001 and 32 respectively. Previous work reliably anneal the KL term in the ELBO via a temperature weight during training (KL annealing) (Fraccaro et al., 2016; Chung et al., 2015). We report the results obtained by our model by training both with KL annealing and without. When KL annealing is used, the temperature was linearly annealed from 0.2 to 1 after each update with increments of 0.00005 (Fraccaro et al., 2016).\nWe show our results in Table 1 (left), along with results that were obtained by models of comparable size to SRNN. Similar to (Fraccaro et al., 2016; Chung et al., 2015), we report the conservative evidence lower bound on the log-likelihood. In Blizzard, the KL annealing strategy (Ours + kla) is effective in the first training iterations, but eventually converges to a slightly lower log-likelihood than the model trained without KL annealing (Ours). We explored different annealing strategies but we didn’t observe any improvements in performance. Models trained with the proposed auxiliary cost outperform models trained with KL annealing strategy in both datasets. In TIMIT, it appears that there is a slightly synergistic effect between KL annealing and auxiliary cost. Even if not explicitly reported in the table, similar performance gains were observed on the training sets.\nSequential MNIST The task consists in pixel-by-pixel generation of binarized MNIST digits. We use the standard binarized MNIST dataset used in Larochelle and Murray (2011). Both forward and backward networks are LSTMs with one layer of 1024 hidden units. We use a learning rate of 0.001 and batch size of 32. We report the results in Table 1 (right). In this setting, we observed that KL annealing hurt performance of the model. Although being architecturally flat, our model is competitive with respect to strong baselines, e.g. DRAW (Gregor et al., 2015), and is outperformed by deeper version of autoregressive models with latent variables, i.e. PixelVAE (gated) (Gulrajani et al., 2016), and deep autoregressive models such as PixelRNN (Oord et al., 2016) and MatNets (Bachman, 2016)."
+  }, {
+    "heading": "4.2 Language modeling",
+    "text": "A well-known result in language modeling tasks is that the generative model tends to fit the observed data without storing information in the latent variables, i.e. the KL divergence term in the ELBO becomes zero (Bowman et al., 2015; Zhao et al., 2017; Serban et al., 2017b). We test our proposed stochastic recurrent model trained with the auxiliary cost on a medium-sized IMDB text corpus containing 350K movie reviews (Diao et al., 2014). Following the setting described in Hu et al. (2017), we keep only sentences with less than 16 words and fixed the vocabulary size to 16K words. We split the dataset into train/valid/test sets following these ratios respectively: 85%, 5%, 10%. Special delimiter tokens were added at the beginning and end of each sentence but we only learned to\ngenerate the end of sentence token. We use a single layered LSTM with 500 hidden recurrent units, fix the dimensionality of word embeddings to 300 and use 64 dimensional latent variables. All the f (·) networks are single-layered with 500 hidden units and leaky relu activations. We used a learning rate of 0.001 and a batch size of 32.\nResults are shown in Table 2. As expected, it is hard to obtain better perplexity than a baseline model when latent variables are used in language models. We found that using the IWAE (Importance Weighted Autoencoder) (Burda et al., 2015) bound gave great improvements in perplexity. This observation highlights the fact that, in the text domain, the ELBO may be severely underestimating the likelihood of the model: the approximate posterior may loosely match the true posterior and the IWAE bound can correct for this mismatch by tightening the posterior approximation, i.e. the IWAE bound can be interpreted as the standard VAE lower bound with an implicit posterior distribution (Bachman and Precup, 2015). On the basis of this observation, we attempted training our models with the IWAE bound, but observed no noticeable improvement on validation perplexity.\nWe analyze whether the latent variables capture characteristics of language by interpolating in the latent space (Bowman et al., 2015). Given a sentence, we first infer the latent variables at each step by running the approximate posterior and then concatenate them in order to form a contiguous latent encoding for the input sentence. Then, we perform linear interpolation in the latent space between the latent encodings of two sentences. At each step of the interpolation, the latent encoding is run through the decoder network to generate a sentence. We show the results in Table 3."
+  }, {
+    "heading": "5 Conclusion",
+    "text": "In this paper, we proposed a recurrent stochastic generative model that builds upon recent architectures that use latent variables to condition the recurrent dynamics of the network. We augmented the inference network with a recurrent network that runs backward through the input sequence and added a new auxiliary cost that forces the latent variables to reconstruct the state of that backward network, thus explicitly encoding a summary of future observations. The model achieves state-of-the-art results on standard speech benchmarks such as TIMIT and Blizzard. The proposed auxiliary cost, albeit simple, appears to promote the use of latent variables more effectively compared to other similar strategies such as KL annealing. In future work, it would be interesting to use a multitask learning setting, e.g. sentiment analysis as in (Hu et al., 2017). Also, it would be interesting to incorporate the proposed approach with more powerful autogressive models, e.g. PixelRNN/PixelCNN (Oord et al., 2016)."
+  }, {
+    "heading": "Acknowledgments",
+    "text": "The authors would like to thank Phil Bachman, Alex Lamb and Adam Trischler for the useful discussions. AG and YB would also like to thank NSERC, CIFAR, Google, Samsung, IBM and Canada Research Chairs for funding, and Compute Canada and NVIDIA for computing resources. The authors would also like to express debt of gratitude towards those who contributed to Theano over the years (as it is no longer maintained), making it such a great tool."
+  }],
+  "year": 2017,
+  "references": [{
+    "title": "An architecture for deep, hierarchical generative models",
+    "authors": ["P. Bachman"],
+    "venue": "Advances in Neural Information Processing Systems, pages 4826–4834.",
+    "year": 2016
+  }, {
+    "title": "Training deep generative models: Variations on a theme",
+    "authors": ["P. Bachman", "D. Precup"],
+    "year": 2015
+  }, {
+    "title": "Learning stochastic recurrent networks",
+    "authors": ["J. Bayer", "C. Osendorfer"],
+    "venue": "arXiv preprint arXiv:1411.7610.",
+    "year": 2014
+  }, {
+    "title": "Modeling temporal dependencies in high-dimensional sequences: Application to polyphonic music generation and transcription",
+    "authors": ["N. Boulanger-Lewandowski", "Y. Bengio", "P. Vincent"],
+    "venue": "arXiv preprint arXiv:1206.6392.",
+    "year": 2012
+  }, {
+    "title": "Generating sentences from a continuous space",
+    "authors": ["S.R. Bowman", "L. Vilnis", "O. Vinyals", "A.M. Dai", "R. Jozefowicz", "S. Bengio"],
+    "venue": "arXiv preprint arXiv:1511.06349.",
+    "year": 2015
+  }, {
+    "title": "Importance weighted autoencoders",
+    "authors": ["Y. Burda", "R. Grosse", "R. Salakhutdinov"],
+    "venue": "arXiv preprint arXiv:1509.00519.",
+    "year": 2015
+  }, {
+    "title": "Variational lossy autoencoder",
+    "authors": ["X. Chen", "D.P. Kingma", "T. Salimans", "Y. Duan", "P. Dhariwal", "J. Schulman", "I. Sutskever", "P. Abbeel"],
+    "venue": "Proc. of ICLR.",
+    "year": 2017
+  }, {
+    "title": "A recurrent latent variable model for sequential data",
+    "authors": ["J. Chung", "K. Kastner", "L. Dinh", "K. Goel", "A.C. Courville", "Y. Bengio"],
+    "venue": "Advances in neural information processing systems, pages 2980–2988.",
+    "year": 2015
+  }, {
+    "title": "Jointly modeling aspects, ratings and sentiments for movie recommendation (jmars)",
+    "authors": ["Q. Diao", "M. Qiu", "Wu", "C.-Y.", "A.J. Smola", "J. Jiang", "C. Wang"],
+    "venue": "Proceedings of the 20th ACM SIGKDD international conference on Knowledge discovery and data mining, pages 193–202.",
+    "year": 2014
+  }, {
+    "title": "Sequential neural models with stochastic layers",
+    "authors": ["M. Fraccaro", "S.K. Sønderby", "U. Paquet", "O. Winther"],
+    "venue": "Advances in Neural Information Processing Systems, pages 2199–2207.",
+    "year": 2016
+  }, {
+    "title": "Made: Masked autoencoder for distribution estimation",
+    "authors": ["M. Germain", "K. Gregor", "I. Murray", "H. Larochelle"],
+    "venue": "ICML, pages 881–889.",
+    "year": 2015
+  }, {
+    "title": "Professor forcing: A new algorithm for training recurrent networks",
+    "authors": ["A. Goyal", "A. Lamb", "Y. Zhang", "S. Zhang", "A.C. Courville", "Y. Bengio"],
+    "venue": "Advances in Neural Information Processing Systems 29: Annual Conference on Neural Information Processing Systems 2016, December 5-10, 2016, Barcelona, Spain, pages 4601–4609.",
+    "year": 2016
+  }, {
+    "title": "Draw: A recurrent neural network for image generation",
+    "authors": ["K. Gregor", "I. Danihelka", "A. Graves", "D.J. Rezende", "D. Wierstra"],
+    "venue": "arXiv preprint arXiv:1502.04623.",
+    "year": 2015
+  }, {
+    "title": "Pixelvae: A latent variable model for natural images",
+    "authors": ["I. Gulrajani", "K. Kumar", "F. Ahmed", "A.A. Taiga", "F. Visin", "D. Vazquez", "A. Courville"],
+    "venue": "arXiv preprint arXiv:1611.05013.",
+    "year": 2016
+  }, {
+    "title": "Pixelvae: A latent variable model for natural images",
+    "authors": ["I. Gulrajani", "K. Kumar", "F. Ahmed", "A.A. Taiga", "F. Visin", "D. Vazquez", "A. Courville"],
+    "venue": "Proc. of ICLR.",
+    "year": 2017
+  }, {
+    "title": "Long short-term memory",
+    "authors": ["S. Hochreiter", "J. Schmidhuber"],
+    "venue": "Neural computation, 9(8):1735– 1780.",
+    "year": 1997
+  }, {
+    "title": "Variational learning and bits-back coding: an informationtheoretic view to bayesian learning",
+    "authors": ["A. Honkela", "H. Valpola"],
+    "venue": "IEEE Transactions on Neural Networks, 15(4):800–810.",
+    "year": 2004
+  }, {
+    "title": "Controllable text generation",
+    "authors": ["Z. Hu", "Z. Yang", "X. Liang", "R. Salakhutdinov", "E.P. Xing"],
+    "venue": "arXiv preprint arXiv:1703.00955.",
+    "year": 2017
+  }, {
+    "title": "Deep variational bayes filters: Unsupervised learning of state space models from raw data",
+    "authors": ["M. Karl", "M. Soelch", "J. Bayer", "P. van der Smagt"],
+    "venue": "arXiv preprint arXiv:1605.06432",
+    "year": 2016
+  }, {
+    "title": "The blizzard challenge 2013",
+    "authors": ["S. King", "V. Karaiskos"],
+    "venue": "The Ninth Annual Blizzard Challenge, 2013.",
+    "year": 2013
+  }, {
+    "title": "Adam: A method for stochastic optimization",
+    "authors": ["D. Kingma", "J. Ba"],
+    "venue": "arXiv preprint arXiv:1412.6980.",
+    "year": 2014
+  }, {
+    "title": "Semi-supervised learning with deep generative models",
+    "authors": ["D.P. Kingma", "S. Mohamed", "D.J. Rezende", "M. Welling"],
+    "venue": "Advances in Neural Information Processing Systems, pages 3581–3589.",
+    "year": 2014
+  }, {
+    "title": "Improved variational inference with inverse autoregressive flow",
+    "authors": ["D.P. Kingma", "T. Salimans", "R. Jozefowicz", "X. Chen", "I. Sutskever", "M. Welling"],
+    "venue": "Advances in Neural Information Processing Systems, pages 4743–4751.",
+    "year": 2016
+  }, {
+    "title": "Stochastic Gradient VB and the Variational Auto-Encoder",
+    "authors": ["D.P. Kingma", "M. Welling"],
+    "venue": "2nd International Conference on Learning Representationsm (ICLR), pages 1–14.",
+    "year": 2014
+  }, {
+    "title": "The neural autoregressive distribution estimator",
+    "authors": ["H. Larochelle", "I. Murray"],
+    "venue": "Proceedings of the Fourteenth International Conference on Artificial Intelligence and Statistics, pages 29–37.",
+    "year": 2011
+  }, {
+    "title": "Multiplicative normalizing flows for variational bayesian neural networks",
+    "authors": ["C. Louizos", "M. Welling"],
+    "venue": "arXiv preprint arXiv:1703.01961.",
+    "year": 2017
+  }, {
+    "title": "Pixel recurrent neural networks",
+    "authors": ["Oord", "A. v. d.", "N. Kalchbrenner", "K. Kavukcuoglu"],
+    "venue": "arXiv preprint arXiv:1601.06759.",
+    "year": 2016
+  }, {
+    "title": "Iterative neural autoregressive distribution estimator nade-k",
+    "authors": ["T. Raiko", "Y. Li", "K. Cho", "Y. Bengio"],
+    "venue": "Advances in neural information processing systems, pages 325–333.",
+    "year": 2014
+  }, {
+    "title": "Variational inference with normalizing flows",
+    "authors": ["D.J. Rezende", "S. Mohamed"],
+    "venue": "arXiv preprint arXiv:1505.05770.",
+    "year": 2015
+  }, {
+    "title": "Learning representations by backpropagating errors",
+    "authors": ["D.E. Rumelhart", "G.E. Hinton", "R.J. Williams"],
+    "venue": "Cognitive modeling, 5(3):1.",
+    "year": 1988
+  }, {
+    "title": "On the quantitative analysis of deep belief networks",
+    "authors": ["R. Salakhutdinov", "I. Murray"],
+    "venue": "Proceedings of the 25th international conference on Machine learning, pages 872–879. ACM.",
+    "year": 2008
+  }, {
+    "title": "Markov chain monte carlo and variational inference: Bridging the gap",
+    "authors": ["T. Salimans", "D.P. Kingma", "M. Welling"],
+    "venue": "arXiv preprint arXiv:1410.6460.",
+    "year": 2014
+  }, {
+    "title": "A hybrid convolutional variational autoencoder for text generation",
+    "authors": ["S. Semeniuta", "A. Severyn", "E. Barth"],
+    "venue": "arXiv preprint arXiv:1702.02390.",
+    "year": 2017
+  }, {
+    "title": "Piecewise latent variables for neural variational text processing",
+    "authors": ["I.V. Serban", "A.G.O. II", "J. Pineau", "A.C. Courville"],
+    "venue": "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing, EMNLP 2017, Copenhagen, Denmark, September 9-11, 2017, pages 422–432.",
+    "year": 2017
+  }, {
+    "title": "A hierarchical latent variable encoder-decoder model for generating dialogues",
+    "authors": ["I.V. Serban", "A. Sordoni", "R. Lowe", "L. Charlin", "J. Pineau", "A.C. Courville", "Y. Bengio"],
+    "venue": "In Proc. of AAAI.",
+    "year": 2017
+  }, {
+    "title": "Neural autoregressive distribution estimation",
+    "authors": ["B. Uria", "Côté", "M.-A.", "K. Gregor", "I. Murray", "H. Larochelle"],
+    "venue": "Journal of Machine Learning Research, 17(205):1–37.",
+    "year": 2016
+  }, {
+    "title": "Learning discourse-level diversity for neural dialog models using conditional variational autoencoders",
+    "authors": ["T. Zhao", "R. Zhao", "M. Eskenazi"],
+    "venue": "arXiv preprint arXiv:1703.10960.",
+    "year": 2017
+  }],
+  "id": "SP:8b59b5eeaf8bf1bcd0be52d4795751f3151417ea",
+  "authors": [{
+    "name": "Anirudh Goyal",
+    "affiliations": []
+  }, {
+    "name": "Alessandro Sordoni",
+    "affiliations": []
+  }],
+  "abstractText": "Many efforts have been devoted to training generative latent variable models with autoregressive decoders, such as recurrent neural networks (RNN). Stochastic recurrent models have been successful in capturing the variability observed in natural sequential data such as speech. We unify successful ideas from recently proposed architectures into a stochastic recurrent model: each step in the sequence is associated with a latent variable that is used to condition the recurrent dynamics for future steps. Training is performed with amortised variational inference where the approximate posterior is augmented with a RNN that runs backward through the sequence. In addition to maximizing the variational lower bound, we ease training of the latent variables by adding an auxiliary cost which forces them to reconstruct the state of the backward recurrent network. This provides the latent variables with a task-independent objective that enhances the performance of the overall model. We found this strategy to perform better than alternative approaches such as KL annealing. Although being conceptually simple, our model achieves state-of-the-art results on standard speech benchmarks such as TIMIT and Blizzard and competitive performance on sequential MNIST. Finally, we apply our model to language modeling on the IMDB dataset where the auxiliary cost helps in learning interpretable latent variables.",
+  "title": "Z-Forcing: Training Stochastic Recurrent Networks"
+}

@@ -1,0 +1,294 @@
+{
+  "sections": [{
+    "text": "I. INTRODUCTION\nDecision-making for autonomous driving is hard due to uncertainty on the continuous state of nearby vehicles and, in particular, due to uncertainty over their discrete potential intentions (such as turning at an intersection or changing lanes).\nPrevious approaches have employed hand-tuned heuristics [28, 29, 41] and numerical optimization [17, 21, 42], but these methods fail to capture the coupled dynamic effects of interacting traffic agents. Partially observable Markov decision process (POMDP) solvers [2, 26, 35] offer a theoreticallygrounded framework to capture these interactions, but have difficulty scaling up to real-world scenarios. In addition, current approaches for anticipating future intentions of other traffic agents [1, 22, 24, 25] either consider only the current state of the target vehicle, ignoring the history of its past actions, or rather require expensive collection of training data.\nIn this paper, we present an integrated behavioral anticipation and decision-making system that models behavior for both our vehicle and nearby vehicles as the result of closed-loop\npolicies. This approach is made tractable by considering only a finite set of a priori known policies. Each policy is designed to capture a different high-level behavior, such as following a lane, changing lanes, or turning at an intersection. Our system proceeds in a sequence of two interleaved stages of behavioral prediction and decision-making. In the first stage, we estimate the probability distribution over the potential policies other traffic agents may be executing. To this aim, we leverage Bayesian changepoint detection to estimate which policy a given vehicle was executing at each point in its history of actions, and then infer the likelihood of each potential intention of the vehicle. Furthermore, we propose a statistical test based on changepoint detection to identify anomalous behavior of other vehicles, such as driving in the wrong direction or swerving out of lanes. Individual policies can therefore adjust their behavior to react to anomalous cars.\nIn the second stage, we use this distribution to sample over permutations of other vehicle policies and the policies available for our car, with forward-simulation of these sampled intentions to evaluate their outcomes via a user-defined\nreward function. Our vehicle finally executes the policy that maximizes the expected reward given the sampled outcomes. Thus, our system is able to make decisions based on closedloop interactions between cars in a tractable manner.\nWe evaluate our behavioral prediction system using a realworld autonomous vehicle, and present decision-making results in simulation involving highway traffic scenarios.\nThe central contributions of this paper are: • A changepoint-based behavioral prediction approach that\nleverages the history of actions of a target vehicle to infer the likelihood of its possible future actions and detect anomalous behavior online. • A decision-making algorithm that evaluates the outcomes of modeled interactions between vehicles, being able to account for the effect of its actions on the future reactions of other participants. • An evaluation of the proposed system using both traffic data obtained from a real-world autonomous vehicle and simulated traffic scenarios.\nThis work extends our earlier work [11], where we proposed the strategy of selecting between multiple policies for our car by evaluating them via forward simulation, and demonstrated passing maneuvers using a real-world autonomous vehicle. However, that work did not address anticipation of policies for other cars. In contrast, this paper presents a fully integrated behavioral anticipation and decision-making approach."
+  }, {
+    "heading": "II. RELATED WORK",
+    "text": ""
+  }, {
+    "heading": "A. Related Work on Behavioral Prediction",
+    "text": "Despite the probabilistic nature of the anticipation problem, some approaches in the literature assume no uncertainty on the future states of other participants [10, 31, 33]. Such an approach could be justified in a scenario where vehicles broadcast their intentions over some communications channel, but it is an unrealistic assumption otherwise.\nSome approaches assume a dynamic model of the obstacle and propagate its state using standard filtering techniques such as the extended Kalman filter [13, 18]. Despite providing rigorous probabilistic estimates over an obstacle’s future states, these methods often perform poorly when dealing with nonlinearities in the assumed dynamics model and the multimodalities induced by discrete decisions (e.g. continuing straight, merging, or passing). Some researchers have explored using Gaussian mixture models (GMMs) [14, 22] and contextsensitive models [19, 20] to account for nonlinearities and multiple discrete decisions. However, this approach does not consider the history of previous states of the target object, assigning an equal likelihood to each discrete hypothesis and leading to a conservative estimate.\nA common anticipation strategy in autonomous driving [7, 16, 21] consists in computing the possible goals of a target vehicle by planning from its standpoint, accounting for its current state. This strategy is similar to our factorization of potential driving behavior into a set of policies, but lacks our closed-loop simulation of vehicle interactions.\nRecent work uses Gaussian process (GP) regression to learn typical motion patterns for classification and prediction of agent trajectories [24, 25, 40], particularly in autonomous driving [1, 38, 39]. Nonetheless, these methods require collecting training data to reflect all possible motion patterns the system may encounter, which can be time consuming. For instance, a lane change motion pattern learned in urban roads will not be representative of the same maneuver performed at higher speeds on the highway."
+  }, {
+    "heading": "B. Related Work on Decision Making",
+    "text": "The first instances of decision making systems for autonomous vehicles capable of handling urban traffic situations stem from the 2007 DARPA Urban Challenge [12]. In that event, participants tackled decision making using a variety of solutions ranging from finite state machines (FSMs) [29] and decision trees [28] to several heuristics [41]. However, these approaches were tailored for very specific and simplified situations and were, even according to their authors, “not robust to a varied world” [41].\nMore recent approaches have addressed the decision making problem for autonomous driving through the lens of trajectory optimization [17, 21, 42]. However, these methods do not model the closed-loop interactions between vehicles, failing to reason about their potential outcomes.\nThe POMDP model provides a mathematically rigorous formulation of the decision making problem in dynamic, uncertain scenarios such as autonomous driving. Unfortunately, finding an optimal solution to most POMDPs is intractable [27, 32]. A variety of general [2, 5, 26, 35, 37] and domainspecific [8] POMDP solvers exist in the literature that seek to approximate the solution. Nonetheless, online application of POMDP solvers [6] remains challenging because they often explore unlikely regions of the belief space.\nThe idea of assuming finite sets of policies to speed up planning has appeared before in the POMDP literature [3, 23, 36]. However, these approaches dedicate significant resources to compute their sets of policies, and as a result they are limited to short planning horizons and relatively small state, observation, and action spaces. In contrast, we propose to exploit domain knowledge to design a set of policies that are readily available at planning time."
+  }, {
+    "heading": "III. PROBLEM FORMULATION",
+    "text": "We first formulate the problem of decision making in dynamic, uncertain environments with tightly coupled interactions between multiple agents as a multiagent POMDP. We then show how we exploit autonomous driving domain knowledge to make approximations to the POMDP formulation, thus enabling principled decisions in a tractable manner."
+  }, {
+    "heading": "A. General Decision Process",
+    "text": "Let V denote the set of vehicles interacting in a local neighborhood of our vehicle, including our controlled vehicle. At time t, a vehicle v ∈ V can take an action avt ∈ Av to transition from state xvt ∈ X v to xvt+1. In our system, a state\nxvt is a tuple of the pose, velocity, and acceleration and an action avt is a tuple of controls for steering, throttle, brake, shifter, and directionals. As a notational convenience, let xt include all state variables xvt for all vehicles at time t, and similarly let at ∈ A be the actions of all vehicles.\nWe model the vehicle dynamics with a conditional probability function T (xt, at, xt+1) = p(xt+1|xt, at). Similarly, we model observation uncertainty as Z(xt, zvt ) = p(z v t |xt), where zvt ∈ Zv is the observation made by vehicle v at time t, and zt ∈ Z is the vector of all sensor observations made by all vehicles. In our system, an observation zvt is a tuple including the estimated poses and velocities of nearby vehicles and an occupancy grid of static obstacles. Further, we model uncertainty on the behavior of other agents with the following driver model: D(xt, zvt , a v t ) = p(a v t |xt, zvt ), where avt ∈ A is a latent variable that must be inferred from sensor observations. Our vehicle’s goal is to find an optimal policy π∗ that maximizes the expected reward over a given decision horizon H , where a policy is a mapping π : X × Zv → Av that yields an action from the current maximum a posteriori (MAP) estimate of the state and an observation:\nπ∗ = argmax π E [ H∑ t=t0 ∫ X R(xt)p(xt) dxt ] , (1)\nwhere R(xt) is a real-valued reward function R : X → R. The evolution of p(xt) over time is governed by\np(xt+1) = ∫∫∫ X Z A p(xt+1|xt, at)p(zt|xt)\np(at|xt, zt)p(xt) dat dzt dxt. (2)\nThe driver model D(xt, zvt , a v t ) implicitly assumes that the instantaneous actions of each vehicle are independent of each other, since avt is conditioned only on xt and z v t . However, modeled agents can still react to the observed states of nearby vehicles via zvt . That is to say that vehicles do not collaborate with each other, as would be implied by an action avt dependent on at. Thus, the joint density for a single vehicle v can be written as pv(xvt , x v t+1, z v t , a v t ) = p(x v t+1|xvt , avt )p(zvt |xvt )\np(avt |xvt , zvt )p(xvt ), (3)\nand the independence assumption finally leads to p(xt+1) = ∏ v∈V ∫∫∫ Xv Zv Av pv(xvt , x v t+1, z v t , a v t ) da v t dz v t dx v t .\n(4) Despite assuming independent vehicle actions, marginalizing over the large state, observation and action spaces in Eq. 4 is too expensive to find an optimal policy online in a timely manner. A possible approximation to speed up the process, commonly used by general POMDP solvers [2, 37] is to solve Eq. 1 by drawing samples from p(xt). However, sampling over the full probability space with random walks will yield a large number of low probability samples (see Fig. 1). This paper presents an approach designed to sample from high likelihood scenarios such that the decision-making process is tractable."
+  }, {
+    "heading": "B. Multipolicy Approach",
+    "text": "We make the following approximations to sample from the likely interactions of traffic agents:\n1) At any given time, both our vehicle and other vehicles are executing a policy from a discrete set of policies. 2) We approximate the vehicle dynamics and observation models through deterministic, closed-loop forward simulation of all vehicles with assigned policies.\nThese approximations allow us to evaluate the consequences of our decisions over a limited set of high-level behaviors determined by the available policies (for both our vehicle and other agents), rather than performing the evaluation for every possible control input of every vehicle.\nLet Π be a discrete set of policies, where each policy captures a specific high-level driving behavior. Let each policy π ∈ Π be parameterized by a parameter vector θ capturing variations of the given policy. For example, for a lanefollowing policy, θ can capture the “driving style” of the policy by regulating its acceleration profile to be more or less aggressive. We thus reduce the search in Eq. 1 to a limited set of policies. By assuming each vehicle v ∈ V is executing a policy πvt ∈ Π at time t, the driver model for other agents can be now expressed as:\nD(xt, z v t , a v t , π v t ) = p(a v t |xt, zvt , πvt )p(πvt |xt, z0:t), (5)\nwhere p(πvt |xt, z0:t) is the probability that vehicle v is executing the policy πvt (we describe how we infer this probability in §IV). Thus, the per-vehicle joint density from Eq. 3 can now be approximated in terms of πvt :\npv(xvt , x v t+1, z v t , a v t , π v t ) = p(x v t+1|xvt , avt )p(zvt |xvt )\np(avt |xvt , zvt , πvt )p(πvt |xt, z0:t)p(xvt ). (6)\nFinally, since we have full authority over the policy executed by our controlled car q ∈ V , we can separate our vehicle from the other agents in p(xt+1) as follows:\np(xt+1) ≈ ∫∫ X q Zq pq(xqt , x q t+1, z q t , a q t , π q t ) dz q t dx q t\n∏ v∈V |v 6=q ∑ Π ∫∫ Xv Zv pv(xvt , x v t+1, z v t , a v t , π v t ) dz v t dx v t  . (7) We have thus far factored out the action space from p(xt+1) by assuming actions are given by the available policies. However, Eq. 7 still requires integration over the state and observation spaces. Our second approximation addresses this issue. Given samples from p(πvt |xt, z0:t) that assign a policy to each vehicle, we simulate forward in time the interactions of our vehicle and other vehicles under their assigned policies, and obtain a corresponding sequence of future states and observations. We are thereby able to evaluate the reward function over the entire decision horizon."
+  }, {
+    "heading": "IV. BEHAVIORAL ANALYSIS AND PREDICTION VIA CHANGEPOINT DETECTION",
+    "text": "In this section, we describe how we infer the probability of the policies executed by other cars and their parameters. Our behavioral anticipation method is based on a segmentation of the history of observed states of each vehicle, where each segment is associated with the policy most likely to have generated the observations in the segment. We obtain this segmentation using Bayesian changepoint detection, which infers the points in the history of observations where the underlying policy generating the observations changes. Thereby, we can compute the likelihood of all available policies for the target car given the observations in the most recent segment, capturing the distribution p(πvt |xt, z0:t) over the car’s potential policies at the current timestep. Further, full history segmentation allows us to detect anomalous behavior that is not explained by the set of policies in our system. The changepoint-detection procedure is illustrated by the simulation in Fig. 2. We next describe the anticipation method for a single vehicle, which we then apply successively to all nearby vehicles."
+  }, {
+    "heading": "A. Changepoint Detection",
+    "text": "To segment a target car’s history of observed states, we adopt the recently proposed CHAMP algorithm by Niekum et al. [30], which builds upon the work of Fearnhead and Liu [15]. Given the set of available policies Π and a time series of the observed states of a given vehicle z1:n = (z1, z2, . . . , zn), CHAMP infers the MAP set of times τ1, τ2, . . . , τm, at which changepoints between policies have occurred, yielding m+ 1 segments. Thus, the ith segment consists of observations zτi+1:τi+1 and has an associated policy πi ∈ Π with parameters θi.\nThe changepoint positions are modeled as a Markov chain where the transition probabilites are a function of the time since the last changepoint:\np(τi+1 = t|τi = s) = g(t− s), (8)\nwhere g(·) is a pdf over time, and G(·) denotes its cdf. Given a segment from time s to t and a policy π, CHAMP approximates the logarithm of the policy evidence for that segment via the Bayesian information criterion (BIC) [4] as:\nlogL(s, t, π) ≈ log p(zs+1:t|π, θ̂)− 1\n2 kπ log(t− s), (9)\nwhere kπ is the number of parameters of policy π and θ̂ are estimated parameters for policy π. The BIC is a well-known approximation that avoids marginalizing over the policy parameters and provides a principled penalty against complex policies by assuming a Gaussian posterior around the estimated parameters θ̂. Thus, only the ability to fit policies to the observed data is required, which can be achieved via a maximum likelihood estimation (MLE) method of choice (we elaborate on this in §IV-B).\nAs shown by Fearnhead and Liu [15], the distribution Ct over the position of the first changepoint before time t can be\nestimated efficiently using standard Bayesian filtering and an online Viterbi algorithm. Defining\nPt(j, q) = p(Ct = j, q, Ej , z1:t) (10)\nPMAPt = p(Changepoint at t, Et, z1:t), (11)\nwhere Ej is the event that the MAP choice of changepoints has occurred prior to a given changepoint at time j, results in:\nPt(j, q) = (1−G(t− j − 1))L(j, t, q)p(q)PMAPj (12)\nPMAPt = max j,q\n[ g(t− j)\n1−G(t− j − 1) Pt(j, q)\n] . (13)\nAt any time, the most likely sequence of latent policies (called the Viterbi path) that results in the sequence of observations can be recovered by finding (j, q) that maximize PMAPt , and then repeating the maximization for PMAPj , successively until time zero is reached. Further details on this changepoint detection method are provided by Niekum et al. [30]."
+  }, {
+    "heading": "B. Behavioral Prediction",
+    "text": "In contrast with other anticipation approaches in the literature which consider only the current state of the target vehicle and assign equal likelihood to all its potential intentions [16, 21, 22], here we compute the likelihood of each latent policy by leveraging changepoint detection on the history of observed vehicle states.\nConsider the (m + 1)th segment (the most recent), obtained via changepoint detection and consisting of observations zτm+1:n. The likelihood and parameters of each latent policy π ∈ Π for the target vehicle given the present segment can be computed by solving the following MLE problem:\n∀π ∈ Π, L(π) = argmax θ log p(zτm+1:n|π, θ). (14)\nSpecifically, we assume p(zτm+1:n|π, θ) to be a multivariate Gaussian with mean at the trajectory ψπ,θ obtained by simulating forward in time the execution of policy π under parameters θ from timestep τm + 1:\np(zτm+1:n|π, θ) = N (zτm+1:n;ψπ,θ, σI), (15)\nwhere σ is a nuisance parameter capturing modeling error and I is a suitable identity matrix (we discuss our forward simulation of policies further in §V-B). That is, Eq. 15 essentially measures the deviation of the observed states from those prescribed by the given policy. The policy likelihoods obtained via Eq. 14 capture the probability distribution over the possible policies that the observed vehicle might be executing at the current timestep, which can be represented, using delta functions, as a mixture distribution:\np(πvt |xt, z0:t) = η |Π|∑ i=1 δ(αi) · L(πi), (16)\nwhere αi is the hypothesis over policy πi and η is a normalizing constant. We can therefore compute the approximated posterior of Eq. 7 by sampling from this distribution for each vehicle, obtaining high-likelihood samples from the coupled interactions of traffic agents."
+  }, {
+    "heading": "C. Anomaly Detection",
+    "text": "The time-series segmentation obtained via changepoint detection allows us to perform online detection of anomalous behavior not modeled by our policies. Inspired by prior work on anomaly detection [9, 25, 34], we first define the properties of anomalous behavior in terms of policy likelihoods, and then compare the observed data against labeled normal patterns in previously-recorded vehicle trajectories. Thus, we define the following two criteria for anomalous behavior:\n1) Unlikelihood against available policies. Anomalous behavior is not likely to be explained by any of the available policies, since they are designed to abide by traffic rules and provide a smooth riding experience. Therefore, behaviors like driving in the wrong direction or crossing a solid line on the highway will not be captured by the available policies. We thus measure the average likelihood among all segments in the vehicle’s history as the global similarity of the observed history to all available policies:\nS = 1 m+ 1 m+1∑ i=1 L(πi), (17)\nwhere πi is the policy associated with the ith segment. 2) Ambiguity among policies. A history segmentation that\nfluctuates frequently among different policies might be a sign of ambiguity on the segmentation. To express this criterion formally, we first construct a histogram capturing the occurrences of each policy in the vehicle’s segmented history. A histogram with a broad spread indicates frequent fluctuation, whereas one with a single mode is more likely to correspond to normal behavior. We measure this characteristic as the excess kurtosis of the histogram, κ = µ4σ4 − 3, where µ4 is the fourth moment of the mean and σ is the standard deviation. The excess kurtosis satisfies −2 < κ < ∞. If κ = 0, the histogram resembles a normal distribution, whereas if κ < 0, the histogram presents a broader spread. That is, we seek to identify changepoint sequences where there is no dominant policy.\nUsing these criteria, we define the following normality measure given a vehicle’s MAP choice of changepoints:\nN = 1\n2 [(κ+ 2)S] . (18)\nThis normality measure on the target car’s history can then be compared to that of a set of previously recorded trajectories of other vehicles. We thus define the normality test for the\ncurrent vehicle’s history as N < 0.5γ, where γ is the minimum normality measure evaluated on the prior time-series."
+  }, {
+    "heading": "V. MULTIPOLICY DECISION-MAKING",
+    "text": "We now present the policy selection procedure for our car (Algorithm 1), which implements the formulation and approximations given in §III by leveraging the anticipation scheme from §IV. The algorithm begins by drawing a set of samples s ∈ S from the distribution over policies of other cars via Eq. 16, where each sample assigns a policy πv ∈ Π to each nearby vehicle v, excluding our car. For each policy π available to our car and for each sample s, we roll out forward in time until the decision horizon H all vehicles under the policy assignments (π, s) with closed loop simulation to yield a set Ψ of simulated trajectories ψ. We then evaluate the reward rπ,s for each rollout Ψ, and finally select the policy π∗ maximizing the expected reward. The process continuously repeats in a receding horizon manner. Note that policies that are not applicable given the current state x0, such as an intersection handling policy when driving on the highway, are not considered for selection (line 5). We next discuss three key points of our decision-making procedure: the design of the set of available policies, using forward simulation to roll out potential interactions, and the reward function.\nAlgorithm 1: Policy selection procedure. Input: • Current MAP estimate of the state, x0. • Set of available policies Π. • Policy assignment probabilities (Eq. 16). • Planning horizon H .\n1 Draw a set of samples s ∈ S via Eq. 16, where each sample assigns a policy to each nearby vehicle. 2 R ← ∅ // Rewards for each rollout 3 foreach π ∈ Π do // Policies for our car 4 foreach s ∈ S do // Policies for other cars 5 if APPLICABLE(π, x0) then 6 Ψπ,s ← SIMULATEFORWARD(x0, π, s,H) // Ψπ,s captures all vehicles 7 R ← R∪{(π, s, COMPUTEREWARD(Ψπ,s))} 8 return π∗ ← SELECTBEST(R)"
+  }, {
+    "heading": "A. Policy Design",
+    "text": "There are many possible design choices for engineering the set of available policies in our approach, which we wish to explore in future work. However, in this work we use a set\nof policies that covers many in-lane and intersection driving situations, comprising the following policies: lane-nominal, drive in the current lane and maintain distance to the car directly in front; lane-change-right/lane-change-left, separate policies for a single lane change in each direction; and turnright, turn-left, go-straight, or yield at an intersection."
+  }, {
+    "heading": "B. Sample Rollout via Forward Simulation",
+    "text": "While it is possible to perform high-fidelity simulation for rolling out sampled policy assignments, a lower-fidelity simulation can capture the necessary interactions between vehicles to make reasonable choices for our vehicle behavior, while providing faster performance. In practice, we use a simplified simulation model for each vehicle that assumes an idealized steering controller. Nonetheless, this simplification still faithfully describes the high-level behavior of the between-vehicle interactions our method reasons about. For vehicles classified as anomalous, we simulate them using a single policy accounting only for their current state and map of the environment, since they are not likely to be modeled by the set of behaviors in our system."
+  }, {
+    "heading": "C. Reward Function",
+    "text": "The reward function for evaluating the outcome of a rollout Ψ involving all vehicles is a weighted combination of metrics mq(·) ∈ M, with weights wq that express user importance. The construction of a reward function based on a flexible set of metrics derives from our previous work [11], which we extend here to handle multiple potential policies for other vehicles. In our system, typical metrics include the distance to the goal at the end of the evaluation horizon as a measure of accomplishment, minimum distance to obstacles to evaluate safety, a lane choice bias to add a preference for the right lane, and the maximum yaw rate and longitudinal jerk to measure passenger comfort. For a full policy assignment (π, s) with rollout Ψπ,s, we compute the rollout reward rπ,s as the weighted sum rπ,s = ∑|M| q=1 wqmq(Ψ\nπ,s). We normalize each mq(Ψπ,s) across all rollouts to ensure comparability between metrics. To avoid biasing decisions, we set the weight wq to zero when the range of mq(·) across all samples is too small to be informative.\nWe finally evaluate each policy reward rπ for our vehicle as the expected reward over all rollout rewards rπ,s, computed as rπ = ∑|S| k=1 rπ,skp(sk), where p(sk) is the joint probability of the policy assignments in sample sk, computed as a product of the per-vehicle assignment probabilities (Eq. 16). We use expected reward to target better average-case performance, as it is easy to become overly conservative when negotiating traffic if one only accounts for worst-case behavior. By weighting by the probability of each sample, we can avoid overcorrecting for low-probability events."
+  }, {
+    "heading": "VI. RESULTS",
+    "text": "To evaluate our behavioral anticipation method and our multipolicy sampling strategy, we use traffic-tracking data collected using our autonomous vehicle platform. We first\nintroduce the traffic-tracking dataset and the vehicle used to collect it. Next, we use this dataset to evaluate our prediction and anomaly detection method and the performance of our multipolicy sampling strategy. Finally, we evaluate our multipolicy approach performing integrated behavioral analysis and decision-making on highway traffic scenarios using our multivehicle simulation engine."
+  }, {
+    "heading": "A. Autonomous Vehicle Platform, Dataset, and Setup",
+    "text": "To collect the traffic-tracking dataset we use in this work, we have used our autonomous vehicle platform (shown in Fig. 3), a 2013 Ford Fusion equipped with a sensor suite including four Velodyne HDL-32E 3D LIDAR scanners, an Applanix POSLV 420 inertial navigation system (INS), GPS, and several other sensors.\nThe vehicle uses prior maps of the area it operates on that capture information about the environment such as LIDAR reflectivity and road height, and are used for localization and tracking of other agents. The road network is encoded as a metric-topological map that provides information about the location and connectivity of road segments, and lanes therein.\nEstimates over the states of other traffic participants are provided by a dynamic object tracker running on the vehicle, which uses LIDAR range measurements. The geometry and location of static obstacles are also inferred onboard using LIDAR measurements.\nThe traffic-tracking dataset consists of 67 dynamic object trajectories recorded in an urban area. Of these 67 trajectories (shown in Fig. 4), 18 correspond to “follow the lane” maneuvers and 20 to lane change maneuvers, recorded on a divided highway. The remaining 29 trajectories correspond to maneuvers observed at a four-way intersection regulated by stop signs. All trajectories were recorded by the dynamic object tracker onboard the vehicle and extracted from approximately 3.5 h of total tracking data.\nIn all experiments we use a C implementation of our system running on a single 2.8GHz Intel i7 laptop computer."
+  }, {
+    "heading": "B. Behavioral Prediction",
+    "text": "For our system, we are interested in correctly identifying the behavior of target vehicles by associating it to the most likely policy according to the observations. Thus, we evaluate\nour behavioral analysis method in the context of a classification problem, where we want to map each trajectory to the underlying policy (class) that is generating it at the current timestep. The available policies used in this evaluation are:\nΠ = {lane-nominal, lane-change-left, lane-change-right} ∪\n{turn-right, turn-left, go-straight, yield}, (19)\nwhere the first subset applies to in-lane maneuvers and the second subset applies to intersection maneuvers. For all policies we use a fixed set of parameters tuned empirically to control our autonomous vehicle platform, including maximum longitudinal and lateral accelerations, and allowed distances to nearby cars, among other parameters.\nTo assess each classification as correct or incorrect, we leverage the road network map and compare the final lane where the trajectory actually ends to that predicted by the declared policy. In addition, we assess behavioral prediction performance on subsequences of incremental duration of the input trajectory, measuring classification performance on increasingly longer observation sequences.\nFig. 5 shows the accuracy and precision curves for policy classification over the entire dataset. The ambiguity among hypotheses results in poor performance when only an early stage of the trajectories is used, especially under 30% completion. However, we are able to classify the trajectories with over 85% accuracy and precision after only 50% of the trajectory has\nbeen completed. Note, however, that the closed-loop nature of our policies allows us to maintain safety at all times regardless of anticipation performance."
+  }, {
+    "heading": "C. Anomaly Detection",
+    "text": "We now qualitatively explore the performance of our anomaly detection test. We recorded three additional trajectories corresponding to two bikes and a bus. The bikes crossed the intersection from the sidewalk, while the bus made a significantly wide turn. We run the test on these trajectories and on three additional intersection trajectories using the minimum normality value on the intersection portion of the dataset, γ = 0.1233. As shown by the results in Fig. 6, our test is able to correctly detect the anomalous behaviors not modeled in our system."
+  }, {
+    "heading": "D. Multipolicy Sampling Performance",
+    "text": "To show that our approach makes decision-making tractable, we assess the sampling performance in terms of the likelihood of the samples using the recorded intersection trajectories. We compare our multipolicy sampling strategy to an uninformed sampling strategy such as those used by general decisionmaking algorithms that do not account for domain knowledge to focus sampling (e.g., Silver and Veness [35], Thrun [37]).\nWe take groups of coupled trajectories from the dataset involving from one to four vehicles negotiating the intersection simultaneously. For each vehicle in each group, we compute, via Eq. 15, the likelihood of the most likely policy πML in {turn-right, turn-left, go-straight, yield} according to the corresponding trajectory in the group. We then evaluate the computation time required by each of the two sampling strategies to find a sampled trajectory with a likelihood equal or greater than L(πML).\nThe uninformed strategy generates, for each vehicle involved, a trajectory that either remains static for the duration of the trajectory to yield or crosses the intersection at constant speed. This decision is made at random. If the decision is to cross, the direction of the vehicle is determined via random steering wheel angle rates in a simple car kinematic model. Conversely, the multipolicy sampling strategy consists of randomly selecting policies for each vehicle and obtaining their rollouts. The computation times for each strategy are shown in Table I. Times are computed out of 100 simulations for each case (from one to four cars). Although the time required grows dramatically fast for both strategies due to the combinatorial explosion of vehicle intentions, these results show that our multipolicy sampling strategy is able to find high-likelihood samples orders of magnitude faster than an uninformed sampling strategy. A visualization of a sample simulation of this experiment is shown in Fig. 1."
+  }, {
+    "heading": "E. Decision-Making Results",
+    "text": "We tested the full decision-making algorithm with behavioral prediction in a simulated environment with a multi-lane highway scenario involving two nearby cars. Fig. 7(a) shows the scenario used for testing at an illustrative point at half way through the scenario. This simulation uses the same policy models we have developed and tested on our real-world test car [11]. Fig. 7(b) shows the policy reward function, in which the chosen policy is the maximum of the available policies. Note that this decision process is instantaneous, which explains the oscillations when policies are near decision surfaces. We prevent the executed policy from oscillating with a simple pre-emption model that ensures we only switch policies when distinct maneuvers (such as lane-changes) are complete.\nWe collected timing information on different operations in the experiment to evaluate runtime performance. The main expense is forward simulation and metric evaluation for each\nrollout, however, these tasks are easily parallelizable. In the test scenario in which we rollout all sample permutations, the theoretical maximum number of rollouts is 27 given 3 policy options per vehicle, but in practice the maximum number of rollouts was 12, with a mean of 8.6. This smaller number of rollouts is because not all policies are applicable at once. Parallel evaluation performance is bounded by the maximum time for a single rollout, for which the mean worst time was 84ms, and the worst time over the whole experiment was 106ms. Even in the worst case, our real-time decision-making target of 1 Hz is acheiveable."
+  }, {
+    "heading": "VII. CONCLUSION",
+    "text": "We introduced a principled framework for integrated behavioral anticipation and decision-making in environments with extensively coupled interactions between agents. By explicitly modeling reasonable behaviors of both our vehicle and other vehicles as policies, we make informed high-level behavioral decisions that account for the consequences of our actions.\nWe presented a behavior analysis and anticipation system based on Bayesian changepoint detection that infers the likelihood of policies of other vehicles. Furthermore, we provided a normality test to detect unexpected behavior of other traffic participants. We have shown that our behavioral anticipation approach can identify the most-likely underlying policies that explain the observed behavior of other cars, and to detect anomalous behavior not modeled by the policies in our system.\nIn future work we will explicitly model unexpected behavior, such as the appearance of a pedestrian or vehicles occluded by large objects. We can also extend the system to scale to larger environments by strategically sampling policies to focus on those outcomes that most affect our choices. Exploring principled methods for reacting to detected anomalous behavior is also an avenue for future work."
+  }, {
+    "heading": "ACKNOWLEDGMENTS",
+    "text": "This work was supported in part by a grant from Ford Motor Company via the Ford-UM Alliance under award N015392 and in part by DARPA under award D13AP00059.\nThe authors are sincerely grateful to Patrick Carmody for his help in collecting the traffic-tracking data used in this work and to Ryan Wolcott for his helpful comments."
+  }],
+  "year": 2015,
+  "references": [{
+    "title": "Probabilistically safe motion planning to avoid dynamic obstacles with uncertain motion patterns",
+    "authors": ["G.S. Aoude", "B.D. Luders", "J.M. Joseph", "N. Roy", "J.P. How"],
+    "venue": "Auton. Robot.,",
+    "year": 2013
+  }, {
+    "title": "Integrated perception and planning in the continuous space: A POMDP approach",
+    "authors": ["H. Bai", "D. Hsu", "W.S. Lee"],
+    "venue": "Int. J. Robot. Res.,",
+    "year": 2014
+  }, {
+    "title": "Intention-aware motion planning",
+    "authors": ["T. Bandyopadhyay", "K. Won", "E. Frazzoli", "D. Hsu", "W. Lee", "D. Rus"],
+    "venue": "Proc. Int. Work. Alg. Foundation of Robotics,",
+    "year": 2013
+  }, {
+    "title": "Pattern Recognition and Machine Learning",
+    "authors": ["C.M. Bishop"],
+    "venue": "Information Science and Statistics. Springer,",
+    "year": 2007
+  }, {
+    "title": "Solving continuous pomdps: Value iteration with incremental learning of an efficient space representation",
+    "authors": ["S. Brechtel", "T. Gindele", "R. Dillmann"],
+    "venue": "Proc. Int. Conf. Machine Learning,",
+    "year": 2013
+  }, {
+    "title": "Probabilistic decision-making under uncertainty for autonomous driving using continuous POMDPs",
+    "authors": ["S. Brechtel", "T. Gindele", "R. Dillmann"],
+    "venue": "In Proc. IEEE Int. Conf. Intell. Transp. Syst.,",
+    "year": 2014
+  }, {
+    "title": "Monte carlo road safety reasoning",
+    "authors": ["A. Broadhurst", "S. Baker", "T. Kanade"],
+    "venue": "In Proc. IEEE Intell. Veh. Symp.,",
+    "year": 2005
+  }, {
+    "title": "Exploiting domain knowledge in planning for uncertain robot systems modeled as pomdps",
+    "authors": ["S. Candido", "J. Davidson", "S. Hutchinson"],
+    "venue": "In Proc. IEEE Int. Conf. Robot. and Automation,",
+    "year": 2010
+  }, {
+    "title": "Anomaly detection: A survey",
+    "authors": ["V. Chandola", "A. Banerjee", "V. Kumar"],
+    "venue": "ACM Computing Surveys,",
+    "year": 2009
+  }, {
+    "title": "Analytic collision anticipation technology considering agents’ future behavior",
+    "authors": ["J. Choi", "G. Eoh", "J. Kim", "Y. Yoon", "J. Park", "B.-H. Lee"],
+    "venue": "In Proc. IEEE/RSJ Int. Conf. Intell. Robots and Syst.,",
+    "year": 2010
+  }, {
+    "title": "MPDM: Multipolicy decision-making in dynamic, uncertain environments for autonomous driving",
+    "authors": ["A.G. Cunningham", "E. Galceran", "R.M. Eustice", "E. Olson"],
+    "venue": "In Proc. IEEE Int. Conf. Robot. and Automation,",
+    "year": 2015
+  }, {
+    "title": "Robotic motion planning in dynamic, cluttered, uncertain environments",
+    "authors": ["N. Du Toit", "J. Burdick"],
+    "venue": "In Proc. IEEE Int. Conf. Robot. and Automation,",
+    "year": 2010
+  }, {
+    "title": "Robot motion planning in dynamic, uncertain environments",
+    "authors": ["N.E. Du Toit", "J.W. Burdick"],
+    "venue": "IEEE Trans. Robot.,",
+    "year": 2012
+  }, {
+    "title": "On-line inference for multiple changepoint problems",
+    "authors": ["P. Fearnhead", "Z. Liu"],
+    "venue": "J. Royal Statistical Society: Series B (Statistical Methodology),",
+    "year": 2007
+  }, {
+    "title": "Detection, prediction, and avoidance of dynamic obstacles in urban environments",
+    "authors": ["D. Ferguson", "M. Darms", "C. Urmson", "S. Kolski"],
+    "venue": "In Proc. IEEE Intell. Veh. Symp.,",
+    "year": 2008
+  }, {
+    "title": "Motion planning in urban environments",
+    "authors": ["D. Ferguson", "T.M. Howard", "M. Likhachev"],
+    "venue": "J. Field Robot.,",
+    "year": 2008
+  }, {
+    "title": "Probabilistic navigation in dynamic environment using rapidly-exploring random trees and gaussian processes",
+    "authors": ["C. Fulgenzi", "C. Tay", "A. Spalanzani", "C. Laugier"],
+    "venue": "In Proc. IEEE/RSJ Int. Conf. Intell. Robots and Syst.,",
+    "year": 2008
+  }, {
+    "title": "A probabilistic model for estimating driver behaviors and vehicle trajectories in traffic environments",
+    "authors": ["T. Gindele", "S. Brechtel", "R. Dillmann"],
+    "venue": "In Proc. IEEE Int. Conf. Intell. Transp. Syst.,",
+    "year": 2010
+  }, {
+    "title": "Learning context sensitive behavior models from observations for predicting traffic situations",
+    "authors": ["T. Gindele", "S. Brechtel", "R. Dillmann"],
+    "venue": "In Proc. IEEE Int. Conf. Intell. Transp. Syst.,",
+    "year": 2013
+  }, {
+    "title": "Contingency planning over probabilistic obstacle predictions for autonomous road vehicles",
+    "authors": ["J. Hardy", "M. Campbell"],
+    "venue": "IEEE Trans. Robot.,",
+    "year": 2013
+  }, {
+    "title": "Discrete and continuous, probabilistic anticipation for autonomous robots in urban environments",
+    "authors": ["F. Havlak", "M. Campbell"],
+    "venue": "IEEE Trans. Robot.,",
+    "year": 2014
+  }, {
+    "title": "Efficient planning under uncertainty with macro-actions",
+    "authors": ["R. He", "E. Brunskill", "N. Roy"],
+    "venue": "J. Artif. Intell. Res.,",
+    "year": 2011
+  }, {
+    "title": "A Bayesian nonparametric approach to modeling motion patterns",
+    "authors": ["J. Joseph", "F. Doshi-Velez", "A.S. Huang", "N. Roy"],
+    "venue": "Auton. Robot.,",
+    "year": 2011
+  }, {
+    "title": "Gaussian process regression flow for analysis of motion trajectories",
+    "authors": ["K. Kim", "D. Lee", "I. Essa"],
+    "venue": "In Proc. IEEE Int. Conf. Comput. Vis.,",
+    "year": 2011
+  }, {
+    "title": "SARSOP: Efficient point-based POMDP planning by approximating optimally reachable belief spaces",
+    "authors": ["H. Kurniawati", "D. Hsu", "W. Lee"],
+    "venue": "In Proc. Robot.: Sci. & Syst. Conf.,",
+    "year": 2008
+  }, {
+    "title": "On the undecidability of probabilistic planning and related stochastic  optimization problems",
+    "authors": ["O. Madani", "S. Hanks", "A. Condon"],
+    "venue": "Artificial Intelligence,",
+    "year": 2003
+  }, {
+    "title": "Team Cornell’s Skynet: Robust perception and planning in an urban environment",
+    "authors": ["I. Miller"],
+    "venue": "J. Field Robot.,",
+    "year": 2008
+  }, {
+    "title": "Junior: The Stanford entry in the Urban Challenge",
+    "authors": ["M. Montemerlo"],
+    "venue": "J. Field Robot.,",
+    "year": 2008
+  }, {
+    "title": "CHAMP: Changepoint detection using approximate model parameters",
+    "authors": ["S. Niekum", "S. Osentoski", "C.G. Atkeson", "A.G. Barto"],
+    "venue": "Technical Report CMU-RI-TR- 14-10,",
+    "year": 2014
+  }, {
+    "title": "Collision avoidance method for mobile robot considering motion and personal spaces of evacuees",
+    "authors": ["T. Ohki", "K. Nagatani", "K. Yoshida"],
+    "venue": "In Proc. IEEE/RSJ Int. Conf. Intell. Robots and Syst.,",
+    "year": 2010
+  }, {
+    "title": "The complexity of Markov decision processes",
+    "authors": ["C.H. Papadimitriou", "J.N. Tsitsiklis"],
+    "venue": "Mathematics of Operations Research,",
+    "year": 1987
+  }, {
+    "title": "Safe motion planning in dynamic environments",
+    "authors": ["S. Petti", "T. Fraichard"],
+    "venue": "In Proc. IEEE/RSJ Int. Conf. Intell. Robots and Syst.,",
+    "year": 2005
+  }, {
+    "title": "On-line trajectory clustering for anomalous events detection",
+    "authors": ["C. Piciarelli", "G. Foresti"],
+    "venue": "Pattern Recognition Letters,",
+    "year": 2006
+  }, {
+    "title": "Monte-carlo planning in large POMDPs",
+    "authors": ["D. Silver", "J. Veness"],
+    "venue": "Advances in Neural Information Processing Systems",
+    "year": 2010
+  }, {
+    "title": "DESPOT: Online POMDP planning with regularization",
+    "authors": ["A. Somani", "N. Ye", "D. Hsu", "W.S. Lee"],
+    "venue": "Advances in Neural Information Processing Systems",
+    "year": 2013
+  }, {
+    "title": "Monte Carlo POMDPs",
+    "authors": ["S. Thrun"],
+    "venue": "Proc. Advances Neural Inform. Process. Syst. Conf., pages 1064–1070,",
+    "year": 2000
+  }, {
+    "title": "Modelling of traffic situations at urban intersections with probabilistic non-parametric regression",
+    "authors": ["Q. Tran", "J. Firl"],
+    "venue": "In Proc. IEEE Intell. Veh. Symp.,",
+    "year": 2013
+  }, {
+    "title": "Online maneuver recognition and multimodal trajectory prediction for intersection assistance using non-parametric regression",
+    "authors": ["Q. Tran", "J. Firl"],
+    "venue": "In Proc. IEEE Intell. Veh. Symp.,",
+    "year": 2014
+  }, {
+    "title": "Unfreezing the robot: Navigation in dense, interacting crowds",
+    "authors": ["P. Trautman", "A. Krause"],
+    "venue": "In Proc. IEEE/RSJ Int. Conf. Intell. Robots and Syst.,",
+    "year": 2010
+  }, {
+    "title": "Autonomous driving in urban environments: Boss and the Urban Challenge",
+    "authors": ["C. Urmson"],
+    "venue": "J. Field Robot.,",
+    "year": 2008
+  }, {
+    "title": "A real-time motion planner with trajectory optimization for autonomous vehicles",
+    "authors": ["W. Xu", "J. Wei", "J. Dolan", "H. Zhao", "H. Zha"],
+    "venue": "In Proc. IEEE Int. Conf. Robot. and Automation,",
+    "year": 2012
+  }],
+  "id": "SP:8c05cdd39c8e56780f4a7d321794b6bc7cac2b72",
+  "authors": [{
+    "name": "Enric Galceran",
+    "affiliations": []
+  }, {
+    "name": "Alexander G. Cunningham",
+    "affiliations": []
+  }, {
+    "name": "Ryan M. Eustice",
+    "affiliations": []
+  }, {
+    "name": "Edwin Olson",
+    "affiliations": []
+  }],
+  "abstractText": "To operate reliably in real-world traffic, an autonomous car must evaluate the consequences of its potential actions by anticipating the uncertain intentions of other traffic participants. This paper presents an integrated behavioral inference and decision-making approach that models vehicle behavior for both our vehicle and nearby vehicles as a discrete set of closedloop policies that react to the actions of other agents. Each policy captures a distinct high-level behavior and intention, such as driving along a lane or turning at an intersection. We first employ Bayesian changepoint detection on the observed history of states of nearby cars to estimate the distribution over potential policies that each nearby car might be executing. We then sample policies from these distributions to obtain high-likelihood actions for each participating vehicle. Through closed-loop forward simulation of these samples, we can evaluate the outcomes of the interaction of our vehicle with other participants (e.g., a merging vehicle accelerates and we slow down to make room for it, or the vehicle in front of ours suddenly slows down and we decide to pass it). Based on those samples, our vehicle then executes the policy with the maximum expected reward value. Thus, our system is able to make decisions based on coupled interactions between cars in a tractable manner. This work extends our previous multipolicy system [11] by incorporating behavioral anticipation into decision-making to evaluate sampled potential vehicle interactions. We evaluate our approach using real-world traffic-tracking data from our autonomous vehicle platform, and present decision-making results in simulation involving highway traffic scenarios.",
+  "title": "Multipolicy Decision-Making for Autonomous Driving via Changepoint-based Behavior Prediction"
+}

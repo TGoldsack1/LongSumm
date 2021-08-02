@@ -1,0 +1,261 @@
+{
+  "sections": [{
+    "text": "Keywords: 3D Object Detection, Multi-Sensor Fusion, Autonomous Driving"
+  }, {
+    "heading": "1 Introduction",
+    "text": "One of the fundamental problems when building perception systems for autonomous driving is to be able to detect objects in 3D space. An autonomous vehicle needs to perceive the objects present in the 3D scene from its sensors in order to plan its motion safely. Most self-driving vehicles are equipped with both cameras and 3D sensors. This brings potential to exploit the advantage of different sensor modalities to conduct accurate and reliable 3D object detection. During the past years, 2D object detection from camera images has seen significant progress [13, 12, 30, 7, 21, 29, 23, 22]. However, there is still large space for improvement when it comes to object localization in 3D space.\nLIDAR based 3D object detection has drawn much attention recently when combined with the power of deep learning. Representative works either project the 3D LIDAR points onto camera perspective [20], overhead view [24, 37, 19, 38], 3D volumes [39, 10] or directly conduct 3D bounding box estimation over unordered 3D points [26]. However, these approaches suffer at long range and when dealing with occluded objects due to the sparsity of the LIDAR returns over these regions.\nImages, on the other hand, provide dense measurements, but precise 3D localization is hard due to the loss of depth information caused by perspective\nprojection, particularly when using monocular cameras [3, 5]. Recently, several approaches have tried to exploit both cameras and LIDAR jointly. In [26, 4] camera view is used to generate proposals while LIDAR is used to conduct the final 3D localization. However, these cascading approaches do not exploit the capability to perform joint reasoning over multi-sensor’s inputs. As a consequence, the 3D detection performance is bounded by the 2D image-only detection step. Other approaches [6, 18, 8] apply 2D convolutional networks on both camera image and LIDAR bird’s eye view (BEV) representations, and fuse them at the intermediate region-wise convolutional feature map via feature concatenation. This fusion usually happens at a coarse level, with significant resolution loss. Thus, it remains an open problem to design 3D detectors that can better exploit multiple modalities. The challenge lies in the fact that the LIDAR points are sparse and continuous, while cameras capture dense features at discrete state; thus, fusing them is non-trivial.\nIn this paper, we propose a 3D object detector that reasons in bird’s eye view (BEV) and fuses image features by learning to project them into BEV space. Towards this goal, we design an end-to-end learnable architecture that exploits continuous convolutions to fuse image and LIDAR feature maps at different levels of resolution. The proposed continuous fusion layer is capable of encoding dense accurate geometric relationships between positions under the two modalities. This enables us to design a novel, reliable and efficient 3D object detector based on multiple sensors. Our experimental evaluation on both KITTI [11] and a large scale 3D object detection benchmark [37] shows significant improvements over the state of the art."
+  }, {
+    "heading": "2 Related Work",
+    "text": "LIDAR-Based Detection: Several detectors have been proposed recently to produce accurate localization from 3D sensors. VeloFCN [20] projects the LIDAR points to front view and applies a 2D fully convolutional network on the frontview representation to generate 3D detections. 3DFCN [19] exploits a bird’s eye view representation of the LIDAR and applies a 3D fully convolutional network. PIXOR [37] conducts a single-stage, proposal-free detection over a heightencoded bird’s eye view representation. DPT [24] conducts detection, tracking and short-term future prediction jointly within a single network.\nJoint Camera-3D Sensor Detection: Over the past few years, many techniques have explored both cameras and 3D sensors jointly to perform 3D reasoning. One common practice is to perform depth image based processing, which encodes the 3D geometry as an additional image channel [32, 13, 15]. For instance, [15] proposes a novel geocentric embedding for the depth image and, through concatenating with the RGB image features, significant improvement can be achieved. However, the output space of these approaches is on the camera image plane. In the context of autonomous driving, this is not desirable as we wish to localize objects in 3D space. Additional efforts have to be made in order to\ngenerate amodal object bounding boxes in 3D. An alternative idea is to use voxelization, and consider the color image in the voxels as additional channels [34, 35]. However, this is not efficient in memory and computation, and color information is lost over many voxels due to the perspective projection. Other methods exploit one sensor modality to generate bounding box proposals and another to conduct final classification and regression. For instance, [4] exploits a depth map to generate 3D object proposals and uses images to perform box classification. On the other hand, F-Pointnet [26] uses the camera to generate 2D proposals, and PointNet [27] to directly predict the 3D shape and location within the visual frustum produced by 2D bounding box. [6] proposes to fuse features from multiple sensors in multiple views through ROI-pooling. However, accurate geometric information is lost in this coarse-level region-based pooling scheme.\nConvolution on 3D Point Clouds: Our approach is also related to the line of work that conducts learnable convolution-like operators over point clouds. Graph (convolutional) neural networks [31, 17, 2] consider each point as a node in the graph while the edges are built through spatial proximity. Messages are sent between nodes to propagate information. Another family of methods designs the convolution [36, 33, 25, 1] or pooling operators [27, 28] directly over points or 3D meshes. These approaches are more powerful and able to encode geometric relationship without losing accuracy. Our proposed continuous fusion layer can be considered as a special case that connects points between different modalities."
+  }, {
+    "heading": "3 Multi-sensor 3D Object Detection",
+    "text": "Recently, several works [19, 38, 39, 18, 6, 5] have shown very promising results by performing 3D object detection in BEV. These detectors are effective as BEV maintains the structure native to 3D sensors such as LIDAR. As a consequence, convolutional networks can be easily trained and strong priors like object size can be exploited. Since most self-driving cars are equipped with both LIDAR and cameras, sensor fusion between these modalities is desirable in order to further boost performance.\nFusing information between LIDAR and images is non-trivial as images represent a projection of the world onto the camera plane, while LIDAR captures the world’s native 3D structure. One possibility is to project the LIDAR points onto the image, append an extra channel with depth information and exploit traditional 2D detection architectures. This has been shown to be very effective when reasoning in image space (e.g., [32, 15, 9]). Unfortunately, a second step is necessary in order to obtain 3D detections from the 2D outputs.\nIn contrast, in this paper we perform the opposite operation. We exploit image features extracted by a convolutional network, and then project the image features into BEV and fuse them with the convolution layers of a LIDAR based detector. This fusing operation is non-trivial, as image features happen at discrete locations; thus, one needs to “interpolate” to create a dense BEV feature\nmap. To perform this operation, we take advantage of continuous convolutions [36] to extract information from the nearest corresponding image features for each point in BEV space. Our overall architecture includes two streams, with one stream extracting image features and another one extracting features from LIDAR BEV. We design the continuous fusion layer to bridge multiple intermediate layers on both sides in order to perform multi-sensor fusion at multiple scales. This architecture allows us to generate the final detection results in BEV space, as desired by our autonomous driving application. We refer the reader to Fig. 1 for an illustration of our architecture.\nIn the remainder of the section, we first review continuous convolutions, and then show how they can be exploited to fuse information from LIDAR and images. After that we propose a deep multi-sensor detection architecture using this new continuous fusion layer."
+  }, {
+    "heading": "3.1 Continuous Fusion Layer",
+    "text": "Deep Parametric Continuous Convolution: Deep parametric continuous convolution [36] is a learnable operator that operates over non-grid-structured data. The motivation behind this operator is to extend the standard grid-structured convolution to non-grid-structured data, while retaining high capacity and low complexity. The key idea is to exploit multi-layer perceptrons as parameterized kernel functions for continuous convolution. This parametric kernel function spans the full continuous domain. Furthermore, the weighted summation over finite number of neighboring points is used to approximate the otherwise computationally prohibitive continuous convolution. Each neighbor is weighted differently according to its relative geometric offset with regard to the target point. More specifically, parametric continuous convolution conducts the following operation:\nhi = ∑\nj\nMLP(xi − xj) · fj\nwhere j indexes over the neighbors of point i, fj is the input feature and xj is the continuous coordinate associated with a point. The MLP computes the convolutional weight at each neighbor point. The advantage of parametric continuous convolution is that it utilizes the concept of standard convolution to capture local information from neighboring observations, without a rasterization stage that could lead to geometric information loss. In this paper we argue that continuous convolution is a good fit for our task, due to the fact that both camera view and BEV are connected through a 3D point set, and modeling such geometric relationships between them in a lossless manner is key to fusing information.\nContinuous Fusion Layer: Our proposed continuous fusion layer exploits continuous convolutions to overcome the two aforementioned problems, namely the sparsity in the observations and the handling of the spatially-discrete features in camera view image. Given the input camera image feature map and a set of LIDAR points, the target of the continuous fusion layer is to create a dense BEV feature map where each discrete pixel contains features generated from the camera image. This dense feature map can then be readily fused with BEV feature maps extracted from LIDAR. One difficulty of image-BEV fusion is that not all the discrete pixels on BEV space are observable in the camera. To overcome this, for each target pixel in the dense map, we find its nearest K LIDAR points over the 2D BEV plane using Euclidean distance. We then exploit MLP to fuse information from these K nearest points to “interpolate” the unobserved feature at the target pixel. For each source LIDAR point, the input of our MLP contains two parts: First, we extract the corresponding image features by projecting the source LIDAR point onto the image plane. Bilinear interpolation is used to get the image feature at the continuous coordinates. Second, we encode\nthe 3D neighboring offset between the source LIDAR point and the target pixel on the dense BEV feature map, in order to model the dependence of each LIDAR point’s contribution on its relative position to the target. Overall, this gives us a K × (Di + 3)-d input to the MLP for each target pixel, where Di is the input feature dimension. For each target pixel, the MLP outputs a Do-dimensional output feature by summing over the MLP output for all its neighbors.\nThat is to say:\nhi = ∑\nj\nMLP(concat [fj ,xj − xi])\nwhere fj is the input image feature of point j, xj − xi is the 3D offset from neighbor point j to the target i and concat(·) is the concatenation of multiple vectors. In practice, we utilize a 3-layer perceptron where each layer has Di hidden features. The MLP’s output features are then combined by element-wise summation with the BEV features from the previous layer to fuse multi-sensor information. The overall computation graph is shown in Fig. 2.\nComparison against Standard Continuous Convolution: Compared against standard parametric continuous convolution [36], the proposed continuous fusion layer utilizes MLP to directly output the target feature, instead of outputting weights to sum over features. This gives us stronger capability and more flexibility to aggregate information from multiple neighbors. Another advantage is memory-efficiency. Since the MLP directly outputs features rather than weights, our approach does not need to explicitly store an additional weighting matrix in GPU memory."
+  }, {
+    "heading": "3.2 Multi-Sensor Object Detection Network",
+    "text": "Our multi-sensor detection network has two streams: the image feature network and the BEV network. We use four continuous fusion layers to fuse multiple scales of image features into BEV network from lower level to higher level. The overall architecture is depicted in Fig. 1. In this section we will discuss each individual component in more details.\nBackbone Networks: We choose the lightweight ResNet18 as the backbone of the image network because of its efficiency. In our application domain, real time estimates are crucial for safety. The BEV network is customized to have one group of convolutional layers (the first group) and four groups of residual blocks. The number of convolutions per each group is 2, 4, 8, 12 and 12 respectively. All groups start with a stride 2 convolution except for the first group, and all other convolutions have stride 1. The feature dimension of each group is 32, 64, 128, 192 and 256 respectively.\nFusion Layers: Four continuous fusion layers are used to fuse multi-scale image features into the four residual groups of the BEV network. The input of each continuous fuse layer is an image feature map combined from the outputs of\nall four image residual groups. We use the same combination approach as the feature pyramid network (FPN) [21]. The output feature in BEV space has the same shape as the corresponding BEV layer and is combined into BEV through element-wise summation. Our final BEV feature output also combines the last three residual groups’ output in a similar manner as FPN [21], in order to exploit multi-scale information.\nDetection Header: We use a simple detection header for real-time efficiency. A 1 × 1 convolutional layer is computed over the final BEV layer to generate the detection output. At each output location we use two anchors which have fixed size and two orientations, 0 and π/2 radians respectively. Each anchor’s output includes the per-pixel class confidence and its associated box’s center location, size and orientation. A Non-Maximum Suppression (NMS) layer follows to generate the final object boxes based on the output map.\nTraining: We use a multi-task loss to train our network. Following common practice in object detection [13, 12, 30], we define the loss function as the summation of classification and regression losses.\nL = Lcls + αLreg (1)\nwhere Lcls and Lreg are the classification loss and regression loss, respectively. Lcls is defined as the binary cross entropy between class confidence and the label\nLcls = 1\nN (lc log(pc) + (1− lc) log (1− pc)) (2)\nwhere pc is the predicted classification score, lc is the binary label, and N is the number of samples. For 3D detection, Lreg is the sum of seven terms\nLreg = 1\nNpos\n∑\nk∈(x,y,z,w,h,d,t)\nD(pk, lk) (3)\nwhere (x, y, z) denotes the 3D box center, (w, h, d) denotes the box size, t denotes the orientation, and Npos is the number of positive samples. D is a smoothed L1-norm defined as:\nD(pk, lk) =\n{\n0.5(pk − lk) 2 if |pk − lk| < 1 |pk − lk| − 0.5 otherwise, (4)\nwith pk and lk the predicted and ground truth offsets respectively. For k ∈ (x, y, z), pk is encoded as:\npk = (k − ak)/ak (5)\nwhere ak is the coordinate of the anchor. For k ∈ (w, h, d), pk is encoded as:\npk = log(k/ak) (6)\nwhere ak is the size of anchor. The orientation offset is simply defined as the difference between predicted and labeled orientations:\npt = k − ak (7)\nWhen only BEV detections are required, the z and d terms are removed from the regression loss. Positive and negative samples are determined based on distance to the ground-truth object center. Hard negative mining is used to sample the negatives. In particular, we first randomly select 5% negative anchors and then only use top-k among them for training, based on the classification score. We initialize the image network with ImageNet pre-trained weights and initialize the BEV network and continuous fusion layers using Xavier initialization [14]. The whole network is trained end-to-end through back-propagation. Note that there is no direct supervision on the image stream; instead, error is propagated along the bridge of continuous fusion layer from the BEV feature space."
+  }, {
+    "heading": "4 Experiments",
+    "text": "We evaluate our multi-sensor 3D object detector on two datasets: the public KITTI benchmark [11] and a large-scale 3D object detection dataset (TOR4D) [37]. On the public KITTI dataset we compare with other state-of-the-art methods in both 3D object detection and BEV object detection tasks. An ablation study is also conducted that compares different model design choices. We also evaluate our model on TOR4D, a large-scale 3D object detection dataset collected in-house on roads of North-American cities. On this dataset we show that the proposed approach works particularly well in long-range (> 60m) detection, which plays an important role in practical object detection systems for autonomous driving. Finally we show qualitative results and discuss future directions."
+  }, {
+    "heading": "4.1 KITTI 3D/BEV Object Detection",
+    "text": "Dataset and metric KITTI [11] object detection benchmark has 7,481 training frames and 7,518 testing frames. For each frame, an RGB camera image is shot by a front-facing camera mounted on top of the vehicle, and a 3D LIDAR point cloud is captured by a laser scanner (Velodyne HDL-64E) mounted on top of the vehicle. KITTI annotates objects that appear in camera view with ground-aligned 3D bounding boxes. For detection, we evaluate on “Car” class only because other classes do not have enough labels to train our neural network based method.\nDetection results on the testing set are submitted to the KITTI evaluation server for evaluation. The 11-point AP is used as the official metric. For 3D object detection task, 3D Intersection-Over-Union (IoU) is used to distinguish between true positive and false positive with a threshold of 0.7. For BEV object detection, 2D IoU on BEV is used with the same threshold. “DontCare” and “Van” classes do not count as false positives. KITTI divides the labels into three subsets: easy, moderate and hard, according to the heights of their 2D bounding boxes, occlusion levels and truncation levels. The leaderboard ranks all entries by AP in the moderate subset.\nImplementation details All camera images are cropped to the size of 370 × 1224. BEV input is generated by voxelizing the 3D space into a 512× 448× 32 volume, corresponding to 70 meters in front direction, ±40 meters on left and right sides of the ego-car. 8-neighbor interpolation is used during voxelization. We train a 3D multi-sensor fusion detection model, where all seven regression terms in Equation 3 are used. Because the height of the 2D box is needed by KITTI evaluation server, we add another regression term to predict the 2D height. As a result, we have a final output tensor with the size 118 × 112 × 2 × 9, where 118 × 112 is the number of spatial anchors and 2 is the number of orientation anchors.\nSince the training data in KITTI is limited, we adopt several data augmentation techniques to alleviate over-fitting. For each frame during training, we apply random scaling (0.9 ∼ 1.1 for all 3 axes), translation (−5 ∼ 5 meters for xy axes and −1 ∼ 1 for z axis) and rotation (−5 ∼ 5 degrees along z axis) on 3D LIDAR point clouds, and random scaling (0.9 ∼ 1.1) and translation (−50 ∼ 50 pixels) on camera images. We modify the transformation matrix from LIDAR to camera accordingly to ensure their correspondence. We do not apply data augmentation during testing.\nWe train the model with a batch size of 16 on 4 GPUs. Adam [16] is used for optimization with 0 weight decay. The learning rate is initialized as 0.001, and decayed by 0.1 at 30 epochs and 45 epochs. The training ends after 50 epochs.\nEvaluation results We compare our 3D detector with other state-of-the-art methods in Table 1. We divide all comparing methods into two categories depending on whether the image is used. For BEV detection, our model outperforms all other methods (measured by moderate AP). For 3D detection, our\nmodel ranks third among the models, but has the best AP on the easy subset. While keeping a high detection accuracy, our model is able to run at real-time efficiency. Our detector runs at > 15 frames per second, much faster than all other LIDAR based and fusion based methods."
+  }, {
+    "heading": "4.2 Ablation Study on KITTI",
+    "text": "Continuous fusion has two components which enables the dense accurate fusion between image and LIDAR. The first is KNN pooling, which gathers image feature input for dense BEV pixels through sparse neighboring points. The second is the geometric feature input to MLP, which compensates for the continuous offsets between the matched position pairs of the two modalities. We investigate these components by comparing the continuous fusion model with a set of derived models. We also investigate the model with different KNN hyper-parameters. The experiments are conducted on the same training/validation split provided by MV3D [6]. We modify KITTI’s AP metric from 11-point area-under-curve to 100-point for smaller variance. In practice, these two versions have < 1% discrepancy.\nThe first derived model is a LIDAR BEV only model, which uses the BEV stream of the continuous fusion model as its backbone net and the same detection header. All continuous fusion models significantly outperform the BEV model in all six metrics, which demonstrates the great advantage of our model. This advantage is even larger for 3D detection, suggesting that the fused image features provide complementary z axis information to BEV features.\nThe second derived model is a discrete fusion model, which has neither KNN pooling nor geometric feature. This model projects the LIDAR points onto image and BEV to find the matched pixel pairs, whose features are then fused. Continuous fusion models outperform the discrete fusion model in all metrics. For BEV detection, the discrete fusion model even has similar scores as the BEV\nmodel. This result confirms that fusing image and LIDAR features is not a trivial task.\nWhen geometric feature is removed from MLP input, the performance of the continuous fusion model significantly drops. However, even when offsets are absent, the continuous fusion model still outperforms the discrete one, which justifies the importance of interpolation by KNN pooling.\nContinuous fusion layer has two hyper-parameters, the maximum neighbor distance d and number of nearest neighbors k. Setting a threshold on the distance to selected neighbors prevents propagation of wrong information from far away neighbors. However, as shown in Table 2, the model is insensitive to such threshold (k=1, d=+inf). One reason might be that the model learns to “ignore” neighbors when their distance is too far. When the number of nearest neighbor is increased from 1 to 3, the performance is even worse. A possible reason is that larger k will lead to more distant neighbors, which have less prediction power than close neighbors. Empirically, for any of distance threshold chosen, the model with KNN pooling consistently outperforms the model without KNN pooling."
+  }, {
+    "heading": "4.3 TOR4D BEV Object Detection",
+    "text": "Dataset and metrics. We evaluate our model on TOR4D, a newly collected large scale 3D object detection dataset with long range object labels annotated. The training set has more than 1.2 million frames, extracted from 5K sequences. The validation set contains 5969 frames, extracted from 500 sequences. The sampling rate for training and validation frames are 10 Hz and 0.5 Hz, respectively. The data is collected on roads in North-American cities. Both LIDAR and images are collected, and BEV bounding box annotations are provided over 100 meters.\nThe model architecture and training procedure are similar to those on KITTI. One major difference is the input size. On TOR4D our BEV input spans 100 meters in front direction. To compensate for the extra time cost caused by larger input, we reduce the feature dimension of the BEV network. The input image\nsize is 1200×1920, which is also larger than KITTI images. To achieve real-time efficiency, we only use a narrow image crop of size 224 × 1920. Overall, after these changes our TOR4D model is even faster than the KITTI model, running at 0.05 second per frame.\nA multi-class BEV object detection model is trained on the dataset. The model detects three classes, including vehicle, pedestrian and bicyclist. We changed the detection header to have multiple classification and regression outputs, one for each class. The two z axis related regression terms are removed from the loss function. 2D rotated IoU on BEV is used as the evaluation metric. AP0.5 and AP0.7 are used for vehicle class, and AP0.3 and AP0.5 are used for the other two classes. On this large scale dataset we do not find significant benefit from regularization techniques, such as data augmentation and dropout. We thus do not use these techniques. The model is trained with Adam optimizer [16] at 0.001 learning rate for 1 epoch, and then 0.0001 learning rate for another 0.4 epoch.\nEvaluation results We compare the continuous fusion model with two baseline models. One is a BEV model which is basically the BEV stream of the fusion model. The other one is a recent state-of-the-art BEV detection model, PIXOR [37], which is based on LIDAR input only. We evaluate the models over the range of 0 ≤ x ≤ 100 and −40 ≤ y ≤ 40, where x and y are axes in the LIDAR space.\nOur continuous fusion model significantly outperforms the other two LIDAR based methods on all classes(Table 3). To better illustrate the performance of our model on long range object detection, we compute range based piecewise AP for the three classes (Figure 3). Each point is computed over 10-meter range for vehicle and pedestrian and 20-meter range for bicyclist along the x axis. The continuous fusion model outperforms BEV and PIXOR [37] at most ranges, and achieves more gains for long range detection."
+  }, {
+    "heading": "4.4 Qualitative Results and Discussion",
+    "text": "Qualitative detection results on KITTI are provided in Fig. 4. The BEV and image pairs and detected bounding boxes by our continuous fusion model are shown. The 2D bounding boxes are obtained by projecting 3D detections onto images. The model detects the cars quite well, even when the car is distant or heavily occluded. We also show multi-class qualitative results on the TOR4D dataset in Fig. 5. Because the BEV model does not output height information, we use a fixed z position and height to generate the bounding boxes on images.\nOverall, these results demonstrate the excellent scalability of our proposed approach and its superior performance in long range detection. Long range detection is important for autonomous driving. While LIDAR suffers from the extreme data sparsity for distant object detection, high resolution images become a useful information source. High resolution images can be readily incorporated into our model, thanks to the flexibility of continuous fusion layer. Furthermore,\nno extra image labels are needed because our model can be trained on 3D/BEV detection only."
+  }, {
+    "heading": "5 Conclusion",
+    "text": "We have proposed a novel end-to-end learnable 3D object detector that exploits both LIDAR and cameras to perform very accurate 3D localization. Our approach uses continuous convolutions to fuse both sensor modalities at different levels of resolution by projecting the image features into bird’s eye view. Our experimental evaluation on both KITTI [11] and the large scale TOR4D[37] shows that our approach significantly outperforms the state of the art."
+  }],
+  "references": [{
+    "title": "Learning shape correspondence with anisotropic convolutional neural networks",
+    "authors": ["D. Boscaini", "J. Masci", "E. Rodolà", "M. Bronstein"],
+    "venue": "NIPS",
+    "year": 2016
+  }, {
+    "title": "Geometric deep learning: going beyond euclidean data",
+    "authors": ["M.M. Bronstein", "J. Bruna", "Y. LeCun", "A. Szlam", "P. Vandergheynst"],
+    "venue": "IEEE Signal Processing Magazine",
+    "year": 2017
+  }, {
+    "title": "Monocular 3d object detection for autonomous driving",
+    "authors": ["X. Chen", "K. Kundu", "Z. Zhang", "H. Ma", "S. Fidler", "R. Urtasun"],
+    "venue": "CVPR",
+    "year": 2016
+  }, {
+    "title": "3d object proposals for accurate object class detection",
+    "authors": ["X. Chen", "K. Kundu", "Y. Zhu", "A.G. Berneshawi", "H. Ma", "S. Fidler", "R. Urtasun"],
+    "venue": "NIPS",
+    "year": 2015
+  }, {
+    "title": "3d object proposals using stereo imagery for accurate object class detection",
+    "authors": ["X. Chen", "K. Kundu", "Y. Zhu", "H. Ma", "S. Fidler", "R. Urtasun"],
+    "venue": "TPAMI",
+    "year": 2017
+  }, {
+    "title": "Multi-view 3d object detection network for autonomous driving",
+    "authors": ["X. Chen", "H. Ma", "J. Wan", "B. Li", "T. Xia"],
+    "venue": "CVPR",
+    "year": 2017
+  }, {
+    "title": "R-fcn: Object detection via region-based fully convolutional networks",
+    "authors": ["J. Dai", "Y. Li", "K. He", "J. Sun"],
+    "venue": "NIPS",
+    "year": 2016
+  }, {
+    "title": "A general pipeline for 3d detection of vehicles",
+    "authors": ["X. Du", "M.H. Ang Jr", "S. Karaman", "D. Rus"],
+    "venue": "arXiv preprint arXiv:1803.00387",
+    "year": 2018
+  }, {
+    "title": "Multimodal deep learning for robust rgb-d object recognition",
+    "authors": ["A. Eitel", "J.T. Springenberg", "L. Spinello", "M. Riedmiller", "W. Burgard"],
+    "venue": "IROS",
+    "year": 2015
+  }, {
+    "title": "Vote3deep: Fast object detection in 3d point clouds using efficient convolutional neural networks",
+    "authors": ["M. Engelcke", "D. Rao", "D.Z. Wang", "C.H. Tong", "I. Posner"],
+    "venue": "ICRA",
+    "year": 2017
+  }, {
+    "title": "Are we ready for autonomous driving? the kitti vision benchmark suite",
+    "authors": ["A. Geiger", "P. Lenz", "R. Urtasun"],
+    "venue": "CVPR",
+    "year": 2012
+  }, {
+    "title": "Fast r-cnn",
+    "authors": ["R. Girshick"],
+    "venue": "ICCV",
+    "year": 2015
+  }, {
+    "title": "Rich feature hierarchies for accurate object detection and semantic segmentation",
+    "authors": ["R. Girshick", "J. Donahue", "T. Darrell", "J. Malik"],
+    "venue": "CVPR",
+    "year": 2014
+  }, {
+    "title": "Understanding the difficulty of training deep feedforward neural networks",
+    "authors": ["X. Glorot", "Y. Bengio"],
+    "venue": "AISTATS",
+    "year": 2010
+  }, {
+    "title": "Learning rich features from rgb-d images for object detection and segmentation",
+    "authors": ["S. Gupta", "R. Girshick", "P. Arbeláez", "J. Malik"],
+    "venue": "ECCV",
+    "year": 2014
+  }, {
+    "title": "Adam: A method for stochastic optimization",
+    "authors": ["D. Kingma", "J. Ba"],
+    "venue": "ICLR",
+    "year": 2015
+  }, {
+    "title": "Semi-supervised classification with graph convolutional networks",
+    "authors": ["T.N. Kipf", "M. Welling"],
+    "venue": "ICLR",
+    "year": 2017
+  }, {
+    "title": "Joint 3d proposal generation and object detection from view aggregation",
+    "authors": ["J. Ku", "M. Mozifian", "J. Lee", "A. Harakeh", "S. Waslander"],
+    "venue": "arXiv preprint arXiv:1712.02294",
+    "year": 2017
+  }, {
+    "title": "3d fully convolutional network for vehicle detection in point cloud",
+    "authors": ["B. Li"],
+    "venue": "IROS",
+    "year": 2017
+  }, {
+    "title": "Vehicle detection from 3d lidar using fully convolutional network",
+    "authors": ["B. Li", "T. Zhang", "T. Xia"],
+    "venue": "RSS",
+    "year": 2016
+  }, {
+    "title": "Feature pyramid networks for object detection",
+    "authors": ["T.Y. Lin", "P. Dollár", "R. Girshick", "K. He", "B. Hariharan", "S. Belongie"],
+    "venue": "CVPR",
+    "year": 2017
+  }, {
+    "title": "Focal loss for dense object detection",
+    "authors": ["T.Y. Lin", "P. Goyal", "R. Girshick", "K. He", "P. Dollár"],
+    "venue": "ICCV",
+    "year": 2017
+  }, {
+    "title": "Ssd: Single shot multibox detector",
+    "authors": ["W. Liu", "D. Anguelov", "D. Erhan", "C. Szegedy", "S. Reed", "C.Y. Fu", "A.C. Berg"],
+    "venue": "ECCV",
+    "year": 2016
+  }, {
+    "title": "Fast and furious: Real time end-to-end 3d detection, tracking and motion forecasting with a single convolutional net",
+    "authors": ["W. Luo", "B. Yang", "R. Urtasun"],
+    "venue": "CVPR",
+    "year": 2018
+  }, {
+    "title": "Geometric deep learning on graphs and manifolds using mixture model cnns",
+    "authors": ["F. Monti", "D. Boscaini", "J. Masci", "E. Rodolà", "J. Svoboda", "M.M. Bronstein"],
+    "venue": "CVPR",
+    "year": 2017
+  }, {
+    "title": "Frustum pointnets for 3d object detection from rgb-d data",
+    "authors": ["C.R. Qi", "W. Liu", "C. Wu", "H. Su", "L.J. Guibas"],
+    "venue": "CVPR",
+    "year": 2018
+  }, {
+    "title": "Pointnet: Deep learning on point sets for 3d classification and segmentation",
+    "authors": ["C.R. Qi", "H. Su", "K. Mo", "L.J. Guibas"],
+    "venue": "CVPR",
+    "year": 2017
+  }, {
+    "title": "Pointnet++: Deep hierarchical feature learning on point sets in a metric space",
+    "authors": ["C.R. Qi", "L. Yi", "H. Su", "L.J. Guibas"],
+    "year": 2017
+  }, {
+    "title": "You only look once: Unified, real-time object detection",
+    "authors": ["J. Redmon", "S. Divvala", "R. Girshick", "A. Farhadi"],
+    "venue": "CVPR",
+    "year": 2016
+  }, {
+    "title": "Faster r-cnn: Towards real-time object detection with region proposal networks",
+    "authors": ["S. Ren", "K. He", "R. Girshick", "J. Sun"],
+    "venue": "NIPS",
+    "year": 2015
+  }, {
+    "title": "The graph neural network model",
+    "authors": ["F. Scarselli", "M. Gori", "A.C. Tsoi", "M. Hagenbuchner", "G. Monfardini"],
+    "venue": "TNN",
+    "year": 2009
+  }, {
+    "title": "Indoor segmentation and support inference from rgbd images",
+    "authors": ["N. Silberman", "D. Hoiem", "P. Kohli", "R. Fergus"],
+    "venue": "ECCV",
+    "year": 2012
+  }, {
+    "title": "Dynamic edge-conditioned filters in convolutional neural networks on graphs",
+    "authors": ["M. Simonovsky", "N. Komodakis"],
+    "venue": "CVPR",
+    "year": 2017
+  }, {
+    "title": "Sliding shapes for 3d object detection in depth images",
+    "authors": ["S. Song", "J. Xiao"],
+    "venue": "ECCV",
+    "year": 2014
+  }, {
+    "title": "Deep sliding shapes for amodal 3d object detection in rgb-d images",
+    "authors": ["S. Song", "J. Xiao"],
+    "venue": "CVPR",
+    "year": 2016
+  }, {
+    "title": "Deep parameteric convolutional neural networks",
+    "authors": ["S. Wang", "S. Suo", "W.C. Ma", "R. Urtasun"],
+    "venue": "CVPR",
+    "year": 2018
+  }, {
+    "title": "Pixor: Real-time 3d object detection from point clouds",
+    "authors": ["B. Yang", "W. Luo", "R. Urtasun"],
+    "venue": "CVPR",
+    "year": 2018
+  }, {
+    "title": "Vehicle detection and localization on bird’s eye view elevation images using convolutional neural network",
+    "authors": ["S.L. Yu", "T. Westfechtel", "R. Hamada", "K. Ohno", "S. Tadokoro"],
+    "venue": "SSRR",
+    "year": 2017
+  }, {
+    "title": "Voxelnet: End-to-end learning for point cloud based 3d object detection",
+    "authors": ["Y. Zhou", "O. Tuzel"],
+    "venue": "CVPR",
+    "year": 2018
+  }],
+  "id": "SP:85d9aff092d860aebf8ea5aa255b06de25a1930e",
+  "authors": [{
+    "name": "Ming Liang",
+    "affiliations": []
+  }, {
+    "name": "Bin Yang",
+    "affiliations": []
+  }, {
+    "name": "Shenlong Wang",
+    "affiliations": []
+  }, {
+    "name": "Raquel Urtasun",
+    "affiliations": []
+  }, {
+    "name": "M. Liang",
+    "affiliations": []
+  }, {
+    "name": "B. Yang",
+    "affiliations": []
+  }, {
+    "name": "S. Wang",
+    "affiliations": []
+  }, {
+    "name": "R. Urtasun",
+    "affiliations": []
+  }],
+  "abstractText": "In this paper, we propose a novel 3D object detector that can exploit both LIDAR as well as cameras to perform very accurate localization. Towards this goal, we design an end-to-end learnable architecture that exploits continuous convolutions to fuse image and LIDAR feature maps at different levels of resolution. Our proposed continuous fusion layer encode both discrete-state image features as well as continuous geometric information. This enables us to design a novel, reliable and efficient end-to-end learnable 3D object detector based on multiple sensors. Our experimental evaluation on both KITTI as well as a large scale 3D object detection benchmark shows significant improvements over the state of the art.",
+  "title": "Deep Continuous Fusion for Multi-Sensor 3D Object Detection"
+}

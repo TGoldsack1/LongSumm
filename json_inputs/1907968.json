@@ -1,0 +1,117 @@
+{
+  "sections": [{
+    "heading": "1 Introduction",
+    "text": "Convolutional neural networks (CNNs) have made impressive improvements in object detection for several years. Thanks to many innovative work, recent object detection systems have met acceptable accuracies for commercialization in a broad range of markets like automotive and surveillance. In terms of detection speed, however, even the best algorithms are still suffering from heavy computational cost. Although recent work on network compression and quantization shows promising result, it is important to reduce the computational cost in the network design stage.\nThis paper presents our lightweight feature extraction network architecture for object detection, named PVANET1, which achieves real-time object detection performance without losing accuracy compared to the other state-of-the-art systems:\n• Computational cost: 7.9GMAC for feature extraction with 1065x640 input (cf. ResNet-101 [1]: 80.5GMAC2)\n∗These authors contributed equally. Corresponding author: Sanghoon Hong 1The code and the trained models are available at https://github.com/sanghoon/ pva-faster-rcnn 2ResNet-101 used multi-scale testing without mentioning additional computation cost. If we take this into account, ours requires only <7% of the computational cost compared to ResNet-101.\nar X\niv :1\n60 8.\n08 02\n1v 3\n[ cs\n.C V\n] 3\n0 Se\n• Runtime performance: 750ms/image (1.3FPS) on Intel i7-6700K CPU with a single core; 46ms/image (21.7FPS) on NVIDIA Titan X GPU\n• Accuracy: 83.8% mAP on VOC-2007; 82.5% mAP on VOC-2012 (2nd place)\nThe key design principle is “less channels with more layers”. Additionally, our networks adopted some recent building blocks while some of them have not been verified their effectiveness on object detection tasks:\n• Concatenated rectified linear unit (C.ReLU) [2] is applied to the early stage of our CNNs (i.e., first several layers from the network input) to reduce the number of computations by half without losing accuracy.\n• Inception [3] is applied to the remaining of our feature generation sub-network. An Inception module produces output activations of different sizes of receptive fields, so that increases the variety of receptive field sizes in the previous layer. We observed that stacking up Inception modules can capture widely varying-sized objects more effectively than a linear chain of convolutions.\n• We adopted the idea of multi-scale representation like HyperNet [4] that combines several intermediate outputs so that multiple levels of details and non-linearities can be considered simultaneously.\nWe will show that our thin but deep network can be trained effectively with batch normalization [5], residual connections [1], and learning rate scheduling based on plateau detection [1].\nIn the remaining of the paper, we describe our network design briefly (Section 2) and summarize the detailed structure of PVANET (Section 3). Finally we provide some experimental results on VOC-2007 and VOC-2012 benchmarks, with detailed settings for training and testing (Section 4)."
+  }, {
+    "heading": "2 Details on Network Design",
+    "text": ""
+  }, {
+    "heading": "2.1 C.ReLU: Earlier building blocks in feature generation",
+    "text": "C.ReLU is motivated from an interesting observation of intermediate activation patterns in CNNs. In the early stage, output nodes tend to be “paired” such that one node’s activation is the opposite side of another’s. From this observation, C.ReLU reduces the number of output channels by half, and doubles it by simply concatenating the same outputs with negation, which leads to 2x speed-up of the early stage without losing accuracy.\nFigure 1 illustrates our C.ReLU implementation. Compared to the original C.ReLU, we append scaling and shifting after concatenation to allow that each channel’s slope and activation threshold can be different from those of its opposite channel."
+  }, {
+    "heading": "2.2 Inception: Remaining building blocks in feature generation",
+    "text": "For object detection tasks, Inception has neither been widely applied to existing work, nor been verified its effectiveness. We found that Inception can be one of the most cost-effective building block for capturing both small and large objects in an input image. To Learn visual patterns for capturing large object, output features of CNNs should correspond to sufficiently large receptive fields, which can be easily fulfilled by stacking up convolutions of 3x3 or larger kernels. On the other hand, for capturing small-sized objects, output features should correspond to sufficiently small receptive fields to localize small regions of interest precisely.\nFigure 2 clearly shows that Inception can fulfill both requirements. 1x1 convolution plays the key role to this end, by preserving the receptive field of the previous layer. Just increasing the nonlinearity of input patterns, it slows down the growth of receptive fields for some output features so that small-sized objects can be captured precisely. Figure 3 illustrates our Inception implementation. 5x5 convolution is replaced with a sequence of two 3x3 convolutions."
+  }, {
+    "heading": "2.3 HyperNet: Concatenation of multi-scale intermediate outputs",
+    "text": "Multi-scale representation and its combination are proven to be effective in many recent deep learning tasks [4, 6, 7]. Combining fine-grained details with highly-abstracted information in feature extraction layer helps the following region proposal network and classification network to detect objects of different scales. However, since the direct concatenation of all abstraction layers may produce redundant information with much higher compute requirement we need to design the number of different abstraction layers and the layer numbers of abstraction carefully. If you choose the layers which are too early for object proposal and classification, it would be little help when we consider additional compute complexity.\nOur design choice is not different from the observation from ION [6] and HyperNet [4], which combines 1) the last layer and 2) two intermediate layers whose scales are 2x and 4x of the last layer, respectively. We choose the middle-sized layer as a reference scale (= 2x), and concatenate the 4x-scaled layer and the last layer with down-scaling (pooling) and up-scaling (linear interpolation), respectively."
+  }, {
+    "heading": "2.4 Deep network training",
+    "text": "It is widely accepted that as network goes deeper and deeper, the training of network becomes more troublesome. We solve this issue by adopting residual structures [1]. Unlike the original residual training idea, we add residual connections onto inception layers as well to stabilize the later part of our deep network architecture.\nWe also add Batch normalization [5] layers before all ReLU activation layers. Mini-batch sample statistics are used during pre-training, and moving-averaged statistics are used afterwards as fixed scale-and-shift parameters.\nLearning rate policy is also important to train network successfully. Our policy is to control the learning rate dynamically, based on plateau detection [1]. We measure the moving average of loss, and decide it to be on-plateau if its improvement is below a threshold during a certain period of iterations. Whenever the plateau is detected, the learning rate is decreased by a constant factor. In experiments, our learning rate policy gave a significant gain of accuracy."
+  }, {
+    "heading": "3 Faster R-CNN with our feature extraction network",
+    "text": "Table 1 shows the whole structure of PVANET. In the early stage (conv1 1, ..., conv3 4), C.ReLU is adapted to convolutional layers to reduce the computational cost of KxK conv by half. 1x1 conv layers are added before and after the KxK conv, in order to reduce the input size and then enlarge the representation capacity, respectively.\nThree intermediate outputs from conv3 4 (with down-scaling), conv4 4, and conv5 4 (with upscaling) are combined into the 512-channel multi-scale output features (convf), which are fed into the Faster R-CNN modules:\n• For computational efficiency, only the first 128 channels in convf are fed into the region proposal network (RPN). Our RPN is a sequence of “3x3 conv (384 channels) - 1x1 conv (25x(2+4) = 150 channels3)” layers to generate regions of interest (RoIs) from\n• R-CNN takes all 512 channels in convf. For each RoI, 6x6x512 tensor is generated by RoI pooling, and then passed through a sequence of fully-connected layers of “4096 - 4096 - (21+84)” output nodes.4"
+  }, {
+    "heading": "4 Experimental results",
+    "text": ""
+  }, {
+    "heading": "4.1 Training and testing",
+    "text": "PVANET was pre-trained with ILSVRC2012 training images for 1000-class image classification.5 All images were resized into 256x256, and 192x192 patches were randomly cropped and used as the network input. The learning rate was initially set to 0.1, and then decreased by a factor of 1/ √ 10 ≈ 0.3165 whenever a plateau is detected. Pre-training terminated if the learning rate drops below 1e− 4, which usually requires about 2M iterations. Then PVANET was trained with the union set of MS COCO6 trainval, VOC20077 trainval and VOC20128 trainval. Fine-tuning with VOC2007 trainval and VOC2012 trainval was also required afterwards, since the class definitions in MS COCO and VOC competitions are slightly different. Training images were resized randomly such that a shorter edge of an image to be between 416 and 864.\nFor PASCAL VOC evaluations, each input image was resized such that its shorter edge to be 640. All parameters related to Faster R-CNN were set as in the original work [8] except for the number of proposal boxes before non-maximum suppression (NMS) (= 12000) and the NMS threshold (= 0.4). All evaluations were done on Intel i7-6700K CPU with a single core and NVIDIA Titan X GPU."
+  }, {
+    "heading": "4.2 VOC2007",
+    "text": "Table 2 shows the accuracy of our models in different configurations.9 Thanks to Inception (Section 2.2) and multi-scale features (Section 2.3), our RPN generated initial proposals very accurately. Since the results imply that more than 200 proposals does not give notable benefits to detection accuracy, we fixed the number of proposals to 200 in the remaining experiments. We also measured the performance with bounding-box voting [10], while iterative regression was not applied.\n3RPN produces 2 predicted scores (foreground and background) and 4 predicted values of the bounding box for each anchor. Our RPN uses 25 anchors of 5 scales (3, 6, 9, 16, 25) and 5 aspect ratios (0.5, 0.667, 1.0, 1.5, 2.0).\n4For 20-class object detection, R-CNN produces 21 predicted scores (20 classes + 1 background) and 21x4 predicted values of 21 bounding boxes.\n5http://www.image-net.org/challenges/LSVRC/2012/ 6http://mscoco.org/dataset/ 7http://host.robots.ox.ac.uk/pascal/VOC/voc2007/ 8http://host.robots.ox.ac.uk/pascal/VOC/voc2012/ 9On Sep. 19, 2016, we updated the mAP numbers according to the latest version of the evaluation code in\npy-faster-rcnn.\nFaster R-CNN consists of fully-connected layers, which can be compressed easily without a significant drop of accuracy [11]. We compressed the fully-connected layers of “4096 - 4096” into to “512 - 4096 - 512 - 4096” by the truncated singular value decomposition (SVD), with some fine-tuning after that. The compressed network achieved 82.9% mAP (-0.9%) and ran in 31.3 FPS (+9.6 FPS)."
+  }, {
+    "heading": "4.3 VOC2012",
+    "text": "Table 3 summarizes comparisons between PVANET+ and some state-of-the-art networks [1, 8, 12] from the PASCAL VOC2012 leaderboard.10\nOur PVANET+ achieved 82.5% mAP, the 2nd place on the leaderboard, outperforming all other competitors except for “Faster R-CNN + ResNet-101”. However, the top-performer uses ResNet101 which is much heavier than PVANET, as well as several time-consuming techniques such as global contexts and multi-scale testing, leading to 40x (or more) slower than ours. In Table 3, we also compare mAP with respect to the computational cost. Among the networks performing over 80% mAP, PVANET+ is the only network running≤ 50ms. Taking its accuracy and computational cost into account, our PVANET+ is the most efficient network in the leaderboard."
+  }, {
+    "heading": "5 Conclusions",
+    "text": "In this paper, we showed that the current networks are highly redundant and we can design a thin and light network which is capable enough for complex vision tasks. Elaborate adoption and combination of recent technical innovations on deep learning makes us possible to re-design the feature extraction part of the Faster R-CNN framework to maximize the computational efficiency. Even though the proposed network is designed for object detection, we believe our design principle can be widely applicable to other tasks like face recognition and semantic analysis.\n10http://host.robots.ox.ac.uk:8080/leaderboard/displaylb.php? challengeid=11&compid=4\nOur network design is completely independent of network compression and quantization. All kinds of recent compression and quantization techniques are applicable to our network as well to further increase the actual performance in real applications. As an example, we showed that a simple technique like truncated SVD could achieve a notable improvement in the runtime performance based on our network."
+  }],
+  "year": 2016,
+  "references": [{
+    "title": "Deep residual learning for image recognition",
+    "authors": ["Kaiming He", "Xiangyu Zhang", "Shaoqing Ren", "Jian Sun"],
+    "venue": "In Proceedings of the IEEE International Conference on Computer Vision and Pattern Recognition",
+    "year": 2016
+  }, {
+    "title": "Understanding and improving convolutional neural networks via concatenated rectified linear units",
+    "authors": ["Wenling Shang", "Kihyuk Sohn", "Diogo Almeida", "Honglak Lee"],
+    "venue": "In Proceedings of the International Conference on Machine Learning (ICML),",
+    "year": 2016
+  }, {
+    "title": "Going deeper with convolutions",
+    "authors": ["Christian Szegedy", "Wei Liu", "Yangqing Jia", "Pierre Sermanet", "Scott Reed", "Dragomir Anguelov", "Dumitru Erhan", "Vincent Vanhoucke", "Andrew Rabinovich"],
+    "venue": "In Proceedings of the IEEE International Conference on Computer Vision and Pattern Recognition (CVPR),",
+    "year": 2015
+  }, {
+    "title": "HyperNet: Towards accurate region proposal generation and joint object detection",
+    "authors": ["Tao Kong", "Anbang Yao", "Yurong Chen", "Fuchun Sun"],
+    "venue": "In Proceedings of the IEEE International Conference on Computer Vision and Pattern Recognition (CVPR),",
+    "year": 2016
+  }, {
+    "title": "Batch normalization: Accelerating deep network training by reducing internal covariate shift",
+    "authors": ["Sergey Ioffe", "Christian Szegedy"],
+    "venue": "In Proceedings of the International Conference on Machine Learning (ICML),",
+    "year": 2015
+  }, {
+    "title": "Inside-outside net: Detecting objects in context with skip pooling and recurrent neural networks",
+    "authors": ["Sean Bell", "C. Lawrence Zitnick", "Kavita Bala", "Ross Girshick"],
+    "venue": "In Proceedings of the IEEE International Conference on Computer Vision and Pattern Recognition (CVPR),",
+    "year": 2016
+  }, {
+    "title": "Hypercolumns for object segmentation and fine-grained localization",
+    "authors": ["Bharath Hariharan", "Pablo Arbeláez", "Ross Girshick", "Jitendra Malik"],
+    "venue": "In Proceedings of the IEEE International Conference on Computer Vision and Pattern Recognition (CVPR),",
+    "year": 2015
+  }, {
+    "title": "Faster R-CNN: Towards real-time object detection with region proposal networks",
+    "authors": ["Shaoqing Ren", "Kaiming He", "Ross Girshick", "Jian Sun"],
+    "venue": "In Advances in Neural Information Processing Systems (NIPS),",
+    "year": 2015
+  }, {
+    "title": "Fast algorithms for convolutional neural networks",
+    "authors": ["Andrew Lavin", "Scott Gray"],
+    "venue": "arXiv preprint arXiv:1509.09308,",
+    "year": 2015
+  }, {
+    "title": "Object detection via a multi-region & semantic segmentationaware CNN model",
+    "authors": ["Spyros Gidaris", "Nikos Komodakis"],
+    "venue": "In Proceedings of the International Conference on Computer Vision (ICCV),",
+    "year": 2015
+  }, {
+    "title": "Fast R-CNN",
+    "authors": ["Ross Girshick"],
+    "venue": "In Proceedings of the International Conference on Computer Vision (ICCV),",
+    "year": 2015
+  }, {
+    "title": "R-fcn : Object detection via region-based fully convolutional networks",
+    "authors": ["Jifeng Dai", "Yi Li", "Kaiming He", "Jian Sun"],
+    "venue": "In Advances in Neural Information Processing Systems (NIPS),",
+    "year": 2016
+  }],
+  "id": "SP:d253425ab230cf0f3e29080f1e2be2ef879eb183",
+  "authors": [{
+    "name": "Kye-Hyeon Kim",
+    "affiliations": []
+  }, {
+    "name": "Sanghoon Hong",
+    "affiliations": []
+  }, {
+    "name": "Byungseok Roh",
+    "affiliations": []
+  }, {
+    "name": "Yeongjae Cheon",
+    "affiliations": []
+  }],
+  "abstractText": "This paper presents how we can achieve the state-of-the-art accuracy in multicategory object detection task while minimizing the computational cost by adapting and combining recent technical innovations. Following the common pipeline of “CNN feature extraction + region proposal + RoI classification”, we mainly redesign the feature extraction part, since region proposal part is not computationally expensive and classification part can be efficiently compressed with common techniques like truncated SVD. Our design principle is “less channels with more layers” and adoption of some building blocks including concatenated ReLU, Inception, and HyperNet. The designed network is deep and thin and trained with the help of batch normalization, residual connections, and learning rate scheduling based on plateau detection. We obtained solid results on well-known object detection benchmarks: 83.8% mAP (mean average precision) on VOC2007 and 82.5% mAP on VOC2012 (2nd place), while taking only 750ms/image on Intel i7-6700K CPU with a single core and 46ms/image on NVIDIA Titan X GPU. Theoretically, our network requires only 12.3% of the computational cost compared to ResNet-101, the winner on VOC2012.",
+  "title": "PVANET: Deep but Lightweight Neural Networks for Real-time Object Detection"
+}

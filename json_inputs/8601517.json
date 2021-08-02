@@ -1,0 +1,244 @@
+{
+  "sections": [{
+    "text": "Keywords: object localization, bounding box regression, non-maximum suppression"
+  }, {
+    "heading": "1 Introduction",
+    "text": "Object detection serves as a prerequisite for a broad set of downstream vision applications, such as instance segmentation [19, 20], human skeleton [27], face recognition [26] and high-level object-based reasoning [30]. Object detection combines both object classification and object localization. A majority of modern object detectors are based on two-stage frameworks [9, 8, 22, 16, 10], in which object detection is formulated as a multi-task learning problem: 1) distinguish foreground object proposals from background and assign them with proper class labels; 2) regress a set of coefficients which localize the object by maximizing intersection-over-union (IoU) or other metrics between detection results and the ground-truth. Finally, redundant bounding boxes (duplicated detections on the same object) are removed by a non-maximum suppression (NMS) procedure.\n∗ indicates equal contribution.\nClassification and localization are solved differently in such detection pipeline. Specifically, given a proposal, while the probability for each class label naturally acts as an “classification confidence” of the proposal, the bounding box regression module finds the optimal transformation for the proposal to best fit the groundtruth. However, the “localization confidence” is absent in the loop.\nThis brings about two drawbacks. (1) First, the suppression of duplicated detections is ignorant of the localization accuracy while the classification scores are typically used as the metric for ranking the proposals. In Figure 1(a), we show a set of cases where the detected bounding boxes with higher classification confidences contrarily have smaller overlaps with the corresponding ground-truth. Analog to Gresham’s saying that bad money drives out good, the misalignment between classification confidence and localization accuracy may lead to accurately localized bounding boxes being suppressed by less accurate ones in the NMS procedure. (2) Second, the absence of localization confidence makes the widely-\nadopted bounding box regression less interpretable. As an example, previous works [3] report the non-monotonicity of iterative bounding box regression. That is, bounding box regression may degenerate the localization of input bounding boxes if applied for multiple times (shown as Figure 1(b)).\nIn this paper we introduce IoU-Net, which predicts the IoU between detected bounding boxes and their corresponding ground-truth boxes, making the networks aware of the localization criterion analog to the classification module. This simple coefficient provides us with new solutions to the aforementioned problems:\n1. IoU is a natural criterion for localization accuracy. We can replace classification confidence with the predicted IoU as the ranking keyword in NMS. This technique, namely IoU-guided NMS, help to eliminate the suppression failure caused by the misleading classification confidences. 2. We present an optimization-based bounding box refinement procedure on par with the traditional regression-based methods. During the inference, the predicted IoU is used as the optimization objective, as well as an interpretable indicator of the localization confidence. The proposed Precise RoI Pooling layer enables us to solve the IoU optimization by gradient ascent. We show that compared with the regression-based method, the optimization-based bounding box refinement empirically provides a monotonic improvement on the localization accuracy. The method is fully compatible with and can be integrated into various CNN-based detectors [16, 3, 10]."
+  }, {
+    "heading": "2 Delving into object localization",
+    "text": "First of all, we explore two drawbacks in object localization: the misalignment between classification confidence and localization accuracy and the non-monotonic bounding box regression. A standard FPN [16] detector is trained on MS-COCO trainval35k as the baseline and tested on minival for the study."
+  }, {
+    "heading": "2.1 Misaligned classification and localization accuracy",
+    "text": "With the objective to remove duplicated bounding boxes, NMS has been an indispensable component in most object detectors since [4]. NMS works in an iterative manner. At each iteration, the bounding box with the maximum classification confidence is selected and its neighboring boxes are eliminated using a predefined overlapping threshold. In Soft-NMS [2] algorithm, box elimination is replaced by the decrement of confidence, leading to a higher recall. Recently, a set of learning-based algorithms have been proposed as alternatives to the parameterfree NMS and Soft-NMS. [24] calculates an overlap matrix of all bounding boxes and performs affinity propagation clustering to select exemplars of clusters as the final detection results. [11] proposes the GossipNet, a post-processing network trained for NMS based on bounding boxes and the classification confidence. [12] proposes an end-to-end network learning the relation between detected bounding boxes. However, these parameter-based methods require more computational resources which limits their real-world application.\nIn the widely-adopted NMS approach, the classification confidence is used for ranking bounding boxes, which can be problematic. We visualize the distribution of classification confidences of all detected bounding boxes before NMS, as shown in Figure 2(a). The x-axis is the IoU between the detected box and its matched ground-truth, while the y-axis denotes its classification confidence. The Pearson correlation coefficient indicates that the localization accuracy is not well correlated with the classification confidence.\nWe attribute this to the objective used by most of the CNN-based object detectors in distinguishing foreground (positive) samples from background (negative) samples. A detected bounding box boxdet is considered positive during training if its IoU with one of the ground-truth bounding box is greater than a threshold Ωtrain. This objective can be misaligned with the localization accuracy. Figure 1(a) shows cases where bounding boxes having higher classification confidence have poorer localization.\nRecall that in traditional NMS, when there exists duplicated detections for a single object, the bounding box with maximum classification confidence will be preserved. However, due to the misalignment, the bounding box with better localization will probably get suppressed during the NMS, leading to the poor localization of objects. Figure 3 quantitatively shows the number of positive bounding boxes after NMS. The bounding boxes are grouped by their IoU with the matched ground-truth. For multiple detections matched with the same ground-truth, only the one with the highest score is considered positive. Therefore, No-NMS could be considered as the upper-bound for the number of positive\nFig. 3: The number of positive bounding boxes after the NMS, grouped by their IoU with the matched groundtruth. In traditional NMS (blue bar), a significant portion of accurately localized bounding boxes get mistakenly suppressed due to the misalignment of classification confidence and localization accuracy, while IoU-guided NMS (yellow bar) preserves more accurately localized bounding boxes.\n(a) FPN (b) Cascade R-CNN\nFig. 4: Optimization-based v.s. Regression-based BBox refinement. (a) Comparison in FPN. When applying the regression iteratively, the AP of detection results firstly get improved but drops quickly in later iterations. (b) Camparison in Cascade R-CNN. Iteration 0, 1 and 2 represents the 1st, 2nd and 3rd regression stages in Cascade R-CNN. For iteration i ≥ 3, we refine the bounding boxes with the regressor of the third stage. After multiple iteration, AP slightly drops, while the optimization-based method further improves the AP by 0.8%.\nbounding boxes. We can see that the absence of localization confidence makes more than half of detected bounding boxes with IoU > 0.9 being suppressed in the traditional NMS procedure, which degrades the localization quality of the detection results."
+  }, {
+    "heading": "2.2 Non-monotonic bounding box regression",
+    "text": "In general, single object localization can be classified into two categories: bounding box-based methods and segment-based methods. The segment-based methods [19, 20, 13, 10] aim to generate a pixel-level segment for each instance but inevitably require additional segmentation annotation. This work focuses on the bounding box-based methods.\nSingle object localization is usually formulated as a bounding box regression task. The core idea is that a network directly learns to transform (i.e., scale or shift) a bounding box to its designated target. In [9, 8] linear regression or fully-connected layer is applied to refine the localization of object proposals generated by external pre-processing modules (e.g ., Selective Search [28] or EdgeBoxes [33]). Faster R-CNN [23] proposes region proposal network (RPN) in which only predefined anchors are used to train an end-to-end object detector. [14, 32] utilize anchor-free, fully-convolutional networks to handle object scale variation. Meanwhile, Repulsion Loss is proposed in [29] to robustly detect objects with crowd occlusion. Due to its effectiveness and simplicity, bounding box regression has become an essential component in most CNN-based detectors.\nA broad set of downstream applications such as tracking and recognition will benefit from accurately localized bounding boxes. This raises the demand for improving localization accuracy. In a series of object detectors [31, 7, 6, 21], refined boxes will be fed to the bounding box regressor again and go through the refinement for another time. This procedure is performed for several times, namely iterative bounding box regression. Faster R-CNN [23] first performs the bounding box regression twice to transform predefined anchors into final detected bounding boxes. [15] proposes a group recursive learning approach to iteratively refine detection results and minimize the offsets between object proposals and the ground-truth considering the global dependency among multiple proposals. G-CNN is proposed in [18] which starts with a multi-scale regular grid over the image and iteratively pushes the boxes in the grid towards the ground-truth. However, as reported in [3], applying bounding box regression more than twice brings no further improvement. [3] attribute this to the distribution mismatch in multi-step bounding box regression and address it by a resampling strategy in multi-stage bounding box regression.\nWe experimentally show the performance of iterative bounding box regression based on FPN and Cascade R-CNN frameworks. The Average Precision (AP) of the results after each iteration are shown as the blue curves in Figure 4(a) and Figure 4(b), respectively. The AP curves in Figure 4 show that the improvement on localization accuracy, as the number of iterations increase, is non-monotonic for iterative bounding box regression. The non-monotonicity, together with the noninterpretability, brings difficulties in applications. Besides, without localization confidence for detected bounding boxes, we can not have fine-grained control over the refinement, such as using an adaptive number of iterations for different bounding boxes."
+  }, {
+    "heading": "3 IoU-Net",
+    "text": "To quantitatively analyze the effectiveness of IoU prediction, we first present the methodology adopted for training an IoU predictor in Section 3.1. In Section 3.2 and Section 3.3, we show how to use IoU predictor for NMS and bounding box refinement, respectively. Finally in Section 3.4 we integrate the IoU predictor into existing object detectors such as FPN [16]."
+  }, {
+    "heading": "3.1 Learning to predict IoU",
+    "text": "Shown in Figure 5, the IoU predictor takes visual features from the FPN and estimates the localization accuracy (IoU) for each bounding box. We generate bounding boxes and labels for training the IoU-Net by augmenting the groundtruth, instead of taking proposals from RPNs. Specifically, for all ground-truth bounding boxes in the training set, we manually transform them with a set of randomized parameters, resulting in a candidate bounding box set. We then remove from this candidate set the bounding boxes having an IoU less than Ωtrain = 0.5 with the matched ground-truth. We uniformly sample training data from this candidate set w.r.t. the IoU. This data generation process empirically brings better performance and robustness to the IoU-Net. For each bounding box, the features are extracted from the output of FPN with the proposed Precise RoI Pooling layer (see Section 3.3). The features are then fed into a two-layer feedforward network for the IoU prediction. For a better performance, we use class-aware IoU predictors.\nThe IoU predictor is compatible with most existing RoI-based detectors. The accuracy of a standalone IoU predictor can be found in Figure 2. As the training procedure is independent of specific detectors, it is robust to the change of the input distributions (e.g ., when cooperates with different detectors). In later sections, we will further demonstrate how this module can be jointly optimized in a full detection pipeline (i.e., jointly with RPNs and R-CNN)."
+  }, {
+    "heading": "3.2 IoU-guided NMS",
+    "text": "We resolve the misalignment between classification confidence and localization accuracy with a novel IoU-guided NMS procedure, where the classification confi-\nAlgorithm 1 IoU-guided NMS. Classification confidence and localization confidence are disentangled in the algorithm. We use the localization confidence (the predicted IoU) to rank all detected bounding boxes, and update the classification confidence based on a clustering-like rule.\nInput: B = {b1, ..., bn}, S, I, Ωnms B is a set of detected bounding boxes. S and I are functions (neural networks) mapping bounding boxes to their classification confidence and IoU estimation (localization confidence) respectively. Ωnms is the NMS threshold. Output: D, the set of detected bounding boxes with classification scores. 1: D ← ∅ 2: while B 6= ∅ do 3: bm ← argmax I(bj) 4: B ← B \\ {bm} 5: s← S(bm) 6: for bj ∈ B do 7: if IoU(bm, bj) > Ωnms then 8: s← max(s,S(bj)) 9: B ← B \\ {bj} 10: end if 11: end for 12: D ← D ∪ {〈bm, s〉} 13: end while 14: return D\ndence and localization confidence (an estimation of the IoU) are disentangled. In short, we use the predicted IoU instead of the classification confidence as the ranking keyword for bounding boxes. Analog to the traditional NMS, the box having the highest IoU with a ground-truth will be selected to eliminate all other boxes having an overlap greater than a given threshold Ωnms. To determine the classification scores, when a box i eliminates box j, we update the classification confidence si of box i by si = max(si, sj). This procedure can also be interpreted as a confidence clustering: for a group of bounding boxes matching the same ground-truth, we take the most confident prediction for the class label. A psuedo-code for this algorithm can be found in Algorithm 1.\nIoU-guided NMS resolves the misalignment between classification confidence and localization accuracy. Quantitative results show that our method outperforms traditional NMS and other variants such as Soft-NMS [2]. Using IoU-guided NMS as the post-processor further pushes forward the performance of several state-of-the-art object detectors.\nAlgorithm 2 Optimization-based bounding box refinement\nInput: B = {b1, ..., bn}, F , T, λ, Ω1, Ω2 B is a set of detected bounding boxes, in the form of (x0, y0, x1, y1). F is the feature map of the input image. T is number of steps. λ is the step size, and Ω1 is an early-stop threshold and Ω2 < 0 is an localization degeneration tolerance. Function PrPool extracts the feature representation for a given bounding box and function IoU denotes the estimation of IoU by the IoU-Net. Output: The set of final detection bounding boxes. 1: A ← ∅ 2: for i = 1 to T do 3: for bj ∈ B and bj /∈ A do 4: grad← ∇bjIoU(PrPool(F , bj)) 5: PrevScore← IoU(PrPool(F , bj)) 6: bj ← bj + λ ∗ scale(grad, bj) 7: NewScore← IoU(PrPool(F , bj)) 8: if |PrevScore−NewScore| < Ω1 or NewScore− PrevScore < Ω2 then 9: A ← A∪ {bj} 10: end if 11: end for 12: end for 13: return B"
+  }, {
+    "heading": "3.3 Bounding box refinement as an optimization procedure",
+    "text": "The problem of bounding box refinement can formulated mathematically as finding the optimal c∗ s.t.:\nc∗ = argmin c crit(transform(boxdet, c), boxgt) , (1)\nwhere boxdet is the detected bounding box, boxgt is a (targeting) ground-truth bounding box and transform is a bounding box transformation function taking c as parameter and transform the given bounding box. crit is a criterion measuring the distance between two bounding boxes. In the original Fast R-CNN [5] framework, crit is chosen as an smooth-L1 distance of coordinates in log-scale, while in [32], crit is chosen as the − ln(IoU) between two bounding boxes.\nRegression-based algorithms directly estimate the optimal solution c∗ with a feed-forward neural network. However, iterative bounding box regression methods are vulnerable to the change in the input distribution [3] and may result in nonmonotonic localization improvement, as shown in Figure 4. To tackle these issues, we propose an optimization-based bounding box refinement method utilizing IoU-Net as a robust localization accuracy (IoU) estimator. Furthermore, IoU estimator can be used as an early-stop condition to implement iterative refinement with adaptive steps.\nIoU-Net directly estimates IoU(boxdet, boxgt). While the proposed Precise RoI Pooling layer enables the computation of the gradient of IoU w.r.t. bounding\n1. RoI Pooling 2. RoI Align 3. PrRoI Pooling\nbox coordinates§, we can directly use gradient ascent method to find the optimal solution to Equation 1. Shown in Algorithm 2, viewing the estimation of the IoU as an optimization objective, we iteratively refine the bounding box coordinates with the computed gradient and maximize the IoU between the detected bounding box and its matched ground-truth. Besides, the predicted IoU is an interpretable indicator of the localization confidence on each bounding box and helps explain the performed transformation.\nIn the implementation, shown in Algorithm 2 Line 6, we manually scale up the gradient w.r.t. the coordinates with the size of the bounding box on that axis (e.g ., we scale up ∇x1 with width(bj)). This is equivalent to perform the optimization in log-scaled coordinates (x/w, y/h, logw, log h) as in [5]. We also employ a one-step bounding box regression for an initialization of the coordinates.\nPrecise RoI Pooling. We introduce Precise RoI Pooling (PrRoI Pooling, for short) powering our bounding box refinement∗. It avoids any quantization of coordinates and has a continuous gradient on bounding box coordinates. Given the feature map F before RoI/PrRoI Pooling (e.g . from Conv4 in ResNet-50), let wi,j be the feature at one discrete location (i, j) on the feature map. Using bilinear interpolation, the discrete feature map can be considered continuous at any continuous coordinates (x, y):\nf(x, y) = ∑ i,j IC(x, y, i, j)× wi,j , (2)\nwhere IC(x, y, i, j) = max(0, 1− |x− i|)×max(0, 1− |y− j|) is the interpolation coefficient. Then denote a bin of a RoI as bin = {(x1, y1), (x2, y2)}, where (x1, y1) and (x2, y2) are the continuous coordinates of the top-left and bottom-right\n§We prefer Precise RoI-Pooling layer to RoI-Align layer [10] as Precise RoI-Pooling layer is continuously differentiable w.r.t. the coordinates while RoI-Align is not.\n∗The code is released at: https://github.com/vacancy/PreciseRoIPooling\npoints, respectively. We perform pooling (e.g., average pooling) given bin and feature map F by computing a two-order integral:\nPrPool(bin,F) =\n∫ y2 y1 ∫ x2 x1 f(x, y) dxdy\n(x2 − x1)× (y2 − y1) . (3)\nFor a better understanding, we visualize RoI Pooling, RoI Align [10] and our PrRoI Pooing in Figure 6: in the traditional RoI Pooling, the continuous coordinates need to be quantized first to calculate the sum of the activations in the bin; to eliminate the quantization error, in RoI Align, N = 4 continuous points are sampled in the bin, denoted as (ai, bi), and the pooling is performed over the sampled points. Contrary to RoI Align where N is pre-defined and not adaptive w.r.t. the size of the bin, the proposed PrRoI pooling directly compute the two-order integral based on the continuous feature map.\nMoreover, based on the formulation in Equation 3, PrPool(Bin,F) is differentiable w.r.t. the coordinates of bin. For example, the partial derivative of PrPool(B,F) w.r.t. x1 could be computed as:\n∂PrPool(bin,F)\n∂x1 =\nPrPool(bin,F)\nx2 − x1 −\n∫ y2 y1 f(x1, y) dy\n(x2 − x1)× (y2 − y1) . (4)\nThe partial derivative of PrPool(bin,F) w.r.t. other coordinates can be computed in the same manner. Since we avoids any quantization, PrPool is continuously differentiable."
+  }, {
+    "heading": "3.4 Joint training",
+    "text": "The IoU predictor can be integrated into standard FPN pipelines for end-to-end training and inference. For clarity, we denote backbone as the CNN architecture for image feature extraction and head as the modules applied to individual RoIs.\nShown in Figure 5, the IoU-Net uses ResNet-FPN [16] as the backbone, which has a top-down architecture to build a feature pyramid. FPN extracts features of RoIs from different levels of the feature pyramid according to their scale. The original RoI Pooling layer is replaced by the Precise RoI Pooling layer. As for the network head, the IoU predictor works in parallel with the R-CNN branch (including classification and bounding box regression) based on the same visual feature from the backbone.\nWe initialize weights from pre-trained ResNet models on ImageNet [25]. All new layers are initialized with a zero-mean Gaussian with standard deviation 0.01 or 0.001. We use smooth-L1 loss for training the IoU predictor. The training data for the IoU predictor is separately generated as described in Section 3.1 within images in a training batch. IoU labels are normalized s.t. the values are distributed over [−1, 1].\nInput images are resized to have 800px along the short axis and a maximum of 1200px along the long axis. The classification and regression branch take 512\nRoIs per image from RPNs. We use a batch size 16 for the training. The network is optimized for 160k iterations, with a learning rate of 0.01 which is decreased by a factor of 10 after 120k iterations. We also warm up the training by setting the learning rate to 0.004 for the first 10k iteration. We use a weight decay of 1e-4 and a momentum of 0.9.\nDuring inference, we first apply bounding box regression for the initial coordinates. To speed up the inference, we first apply IoU-guided NMS on all detected bounding boxes. 100 bounding boxes with highest classification confidence are further refined using the optimization-based algorithm. We set λ = 0.5 as the step size, Ω1 = 0.001 as the early-stop threshold, Ω2 = −0.01 as the localization degeneration tolerance and T = 5 as the number of iterations."
+  }, {
+    "heading": "4 Experiments",
+    "text": "We perform experiments on the 80-category MS-COCO detection dataset [17]. Following [1, 16], the models are trained on the union of 80k training images and 35k validation images (trainval35k) and evaluated on a set of 5k validation images (minival). To validate the proposed methods, in both Section 4.1 and 4.2, a standalone IoU-Net (without R-CNN modules) is trained separately with the object detectors. IoU-guided NMS and optimization-based bounding box refinement, powered by the IoU-Net, are applied to the detection results."
+  }, {
+    "heading": "4.1 IoU-guided NMS",
+    "text": "Table 1 summarizes the performance of different NMS methods. While Soft-NMS preserve more bounding boxes (there is no real “suppression”), IoU-guided NMS improves the results by improving the localization of the detected bounding boxes. As a result, IoU-guided NMS performs significantly better than the baselines on high IoU metrics (e.g ., AP90).\nWe delve deeper into the behavior of different NMS algorithms by analyzing their recalls at different IoU threshold. The raw detected bounding boxes are generated by a ResNet50-FPN without any NMS. As the requirement of localization accuracy increases, the performance gap between IoU-guided NMS and other methods goes larger. In particular, the recall at matching IoU Ωtest = 0.9 drops to 18.7% after traditional NMS, while the IoU-NMS reaches 28.9% and the No-NMS “upper bound” is 39.7%."
+  }, {
+    "heading": "4.2 Optimization-based bounding box refinement",
+    "text": "The proposed optimization-based bounding box refinement is compatible with most of the CNN-based object detectors [16, 3, 10], as shown in Table 2. Applying the bounding box refinement after the original pipelines with the standalone IoU-Net further improve the performance by localizing object more accurately. The refinement further improves AP90 by 2.8% and the overall AP by 0.8% even for Cascade R-CNN which has a three-stage bounding box regressor.\nFig. 7: Recall curves of different NMS methods at different IoU threshold for matching detected bounding boxes with the groundtruth. No-NMS (no box is suppressed) is provided as the upper bound of the recall. The proposed IoU-NMS has a higher recall and effectively narrows the gap to the upper-bound at high IoU threshold (e.g ., 0.9).\nMethod +Refinement AP AP50 AP60 AP70 AP80 AP90 FPN 36.4 58.0 53.1 44.9 31.2 9.8\nX 38.0 57.7 53.1 46.1 34.3 14.6\nCascade R-CNN 40.6 59.3 55.2 49.1 38.7 16.7\nX 41.4 59.3 55.3 49.6 39.4 19.5\nMask-RCNN 37.5 58.6 53.9 46.3 33.2 10.9\nX 39.2 57.9 53.6 47.4 36.5 16.4\nTable 2: The optimization-based bounding box refinement further improves the performance of several CNN-based object detectors."
+  }, {
+    "heading": "4.3 Joint training",
+    "text": "IoU-Net can be end-to-end optimized in parallel with object detection frameworks. We find that adding IoU predictor to the network helps the network to learn more discriminative features which improves the overall AP by 0.6 and 0.4 percent for ResNet50-FPN and ResNet101-FPN respectively. The IoU-guided NMS and bounding box refinement further push the performance forward. We achieve 40.6% AP with ResNet101-FPN compared to the baseline 38.5% (improved by\n2.1%). The inference speed is demonstrated in Table 3, showing that IoU-Net improves the detection performance with tolerable computation overhead.\nWe mainly attribute the inferior results on AP50 in Table 3 to the IoU estimation error. When the bounding boxes have a lower IoU with the groundtruth, they have a larger variance in appearance. Visualized in Figure 2(b), the IoU estimation becomes less accurate for boxes with lower IoU. This degenerates the performance of the downstream refinement and suppression. We empirically find that this problem can be partially solved by techniques such as sampling more bounding boxes with lower IoU during the training."
+  }, {
+    "heading": "5 Conclusion",
+    "text": "In this paper, a novel network architecture, namely IoU-Net, is proposed for accurate object localization. By learning to predict the IoU with matched groundtruth, IoU-Net acquires “localization confidence” for the detected bounding box. This empowers an IoU-guided NMS procedure where accurately localized bounding boxes are prevented from being suppressed. The proposed IoU-Net is intuitive and can be easily integrated into a broad set of detection models to improve their localization accuracy. Experimental results on MS-COCO demonstrate its effectiveness and potential in practical applications.\nThis paper points out the misalignment of classification and localization confidences in modern detection pipelines. We also formulate an novel optimization view on the problem of bounding box refinement, and the proposed solution surpasses the regression-based methods. We hope these novel viewpoints provide insights to future works on object detection, and beyond."
+  }],
+  "references": [{
+    "title": "Inside-outside net: Detecting objects in context with skip pooling and recurrent neural networks",
+    "authors": ["S. Bell", "C. Lawrence Zitnick", "K. Bala", "R. Girshick"],
+    "venue": "Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition. pp. 2874– 2883",
+    "year": 2016
+  }, {
+    "title": "Improving object detection with one line of code",
+    "authors": ["N. Bodla", "B. Singh", "R. Chellappa", "L.S. Davis"],
+    "venue": "arXiv preprint arXiv:1704.04503",
+    "year": 2017
+  }, {
+    "title": "Cascade r-cnn: Delving into high quality object detection",
+    "authors": ["Z. Cai", "N. Vasconcelos"],
+    "venue": "arXiv preprint arXiv:1712.00726",
+    "year": 2017
+  }, {
+    "title": "Histograms of oriented gradients for human detection",
+    "authors": ["N. Dalal", "B. Triggs"],
+    "venue": "Computer Vision and Pattern Recognition, 2005. CVPR 2005. IEEE Computer Society Conference on. vol. 1, pp. 886–893. IEEE",
+    "year": 2005
+  }, {
+    "title": "Fast feature pyramids for object detection",
+    "authors": ["P. Dollár", "R. Appel", "S. Belongie", "P. Perona"],
+    "venue": "IEEE Transactions on Pattern Analysis and Machine Intelligence 36(8), 1532–1545",
+    "year": 2014
+  }, {
+    "title": "Object detection via a multi-region and semantic segmentation-aware cnn model",
+    "authors": ["S. Gidaris", "N. Komodakis"],
+    "venue": "Proceedings of the IEEE International Conference on Computer Vision. pp. 1134–1142",
+    "year": 2015
+  }, {
+    "title": "Attend refine repeat: Active box proposal generation via in-out localization",
+    "authors": ["S. Gidaris", "N. Komodakis"],
+    "venue": "arXiv preprint arXiv:1606.04446",
+    "year": 2016
+  }, {
+    "title": "Fast r-cnn",
+    "authors": ["R. Girshick"],
+    "venue": "The IEEE International Conference on Computer Vision (ICCV)",
+    "year": 2015
+  }, {
+    "title": "Rich feature hierarchies for accurate object detection and semantic segmentation",
+    "authors": ["R. Girshick", "J. Donahue", "T. Darrell", "J. Malik"],
+    "venue": "The IEEE Conference on Computer Vision and Pattern Recognition (CVPR)",
+    "year": 2014
+  }, {
+    "title": "Mask r-cnn",
+    "authors": ["K. He", "G. Gkioxari", "P. Dollár", "R. Girshick"],
+    "venue": "The IEEE International Conference on Computer Vision (ICCV)",
+    "year": 2017
+  }, {
+    "title": "Learning non-maximum suppression",
+    "authors": ["J. Hosang", "R. Benenson", "B. Schiele"],
+    "venue": "arXiv preprint",
+    "year": 2017
+  }, {
+    "title": "Relation networks for object detection",
+    "authors": ["H. Hu", "J. Gu", "Z. Zhang", "J. Dai", "Y. Wei"],
+    "venue": "arXiv preprint arXiv:1711.11575",
+    "year": 2017
+  }, {
+    "title": "Fastmask: Segment multi-scale object candidates in one shot",
+    "authors": ["H. Hu", "S. Lan", "Y. Jiang", "Z. Cao", "F. Sha"],
+    "venue": "Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition. pp. 991–999",
+    "year": 2017
+  }, {
+    "title": "Densebox: Unifying landmark localization with end to end object detection",
+    "authors": ["L. Huang", "Y. Yang", "Y. Deng", "Y. Yu"],
+    "venue": "arXiv preprint arXiv:1509.04874",
+    "year": 2015
+  }, {
+    "title": "Multi-stage object detection with group recursive learning",
+    "authors": ["J. Li", "X. Liang", "J. Li", "Y. Wei", "T. Xu", "J. Feng", "S. Yan"],
+    "venue": "IEEE Transactions on Multimedia",
+    "year": 2017
+  }, {
+    "title": "Feature pyramid networks for object detection",
+    "authors": ["T.Y. Lin", "P. Dollár", "R. Girshick", "K. He", "B. Hariharan", "S. Belongie"],
+    "venue": "The IEEE Conference on Computer Vision and Pattern Recognition (CVPR)",
+    "year": 2017
+  }, {
+    "title": "Microsoft coco: Common objects in context",
+    "authors": ["T.Y. Lin", "M. Maire", "S. Belongie", "J. Hays", "P. Perona", "D. Ramanan", "P. Dollár", "C.L. Zitnick"],
+    "venue": "European conference on computer vision. pp. 740–755. Springer",
+    "year": 2014
+  }, {
+    "title": "G-cnn: an iterative grid based object detector",
+    "authors": ["M. Najibi", "M. Rastegari", "L.S. Davis"],
+    "venue": "Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition. pp. 2369–2377",
+    "year": 2016
+  }, {
+    "title": "Learning to segment object candidates",
+    "authors": ["P.O. Pinheiro", "R. Collobert", "P. Dollár"],
+    "venue": "Advances in Neural Information Processing Systems. pp. 1990–1998",
+    "year": 2015
+  }, {
+    "title": "Learning to refine object segments",
+    "authors": ["P.O. Pinheiro", "T.Y. Lin", "R. Collobert", "P. Dollár"],
+    "venue": "European Conference on Computer Vision. pp. 75–91. Springer",
+    "year": 2016
+  }, {
+    "title": "Refinenet: Iterative refinement for accurate object localization",
+    "authors": ["R.N. Rajaram", "E. Ohn-Bar", "M.M. Trivedi"],
+    "venue": "Intelligent Transportation Systems (ITSC), 2016 IEEE 19th International Conference on. pp. 1528–1533. IEEE",
+    "year": 2016
+  }, {
+    "title": "Faster r-cnn: Towards real-time object detection with region proposal networks",
+    "authors": ["S. Ren", "K. He", "R. Girshick", "J. Sun"],
+    "venue": "Advances in neural information processing systems. pp. 91–99",
+    "year": 2015
+  }, {
+    "title": "Faster r-cnn: Towards real-time object detection with region proposal networks",
+    "authors": ["S. Ren", "K. He", "R. Girshick", "J. Sun"],
+    "venue": "Advances in Neural Information Processing Systems",
+    "year": 2015
+  }, {
+    "title": "Non-maximum suppression for object detection by passing messages between windows",
+    "authors": ["R. Rothe", "M. Guillaumin", "L. Van Gool"],
+    "venue": "Asian Conference on Computer Vision. pp. 290–306. Springer",
+    "year": 2014
+  }, {
+    "title": "ImageNet Large Scale Visual Recognition Challenge",
+    "authors": ["O. Russakovsky", "J. Deng", "H. Su", "J. Krause", "S. Satheesh", "S. Ma", "Z. Huang", "A. Karpathy", "A. Khosla", "M. Bernstein", "A.C. Berg", "L. Fei-Fei"],
+    "venue": "International Journal of Computer Vision (IJCV) 115(3), 211–252",
+    "year": 2015
+  }, {
+    "title": "Deepface: Closing the gap to humanlevel performance in face verification",
+    "authors": ["Y. Taigman", "M. Yang", "M. Ranzato", "L. Wolf"],
+    "venue": "Proceedings of the IEEE conference on computer vision and pattern recognition. pp. 1701–1708",
+    "year": 2014
+  }, {
+    "title": "Deeppose: Human pose estimation via deep neural networks",
+    "authors": ["A. Toshev", "C. Szegedy"],
+    "venue": "Proceedings of the IEEE conference on computer vision and pattern recognition. pp. 1653–1660",
+    "year": 2014
+  }, {
+    "title": "Selective search for object recognition",
+    "authors": ["J.R. Uijlings", "K.E. Van De Sande", "T. Gevers", "A.W. Smeulders"],
+    "venue": "International journal of computer vision 104(2), 154–171",
+    "year": 2013
+  }, {
+    "title": "Repulsion loss: Detecting pedestrians in a crowd",
+    "authors": ["X. Wang", "T. Xiao", "Y. Jiang", "S. Shao", "J. Sun", "C. Shen"],
+    "venue": "arXiv preprint arXiv:1711.07752",
+    "year": 2017
+  }, {
+    "title": "Learning to see physics via visual de-animation",
+    "authors": ["J. Wu", "E. Lu", "P. Kohli", "W.T. Freeman", "J.B. Tenenbaum"],
+    "venue": "Advances in Neural Information Processing Systems",
+    "year": 2017
+  }, {
+    "title": "Craft objects from images",
+    "authors": ["B. Yang", "J. Yan", "Z. Lei", "S.Z. Li"],
+    "venue": "arXiv preprint arXiv:1604.03239",
+    "year": 2016
+  }, {
+    "title": "Unitbox: An advanced object detection network",
+    "authors": ["J. Yu", "Y. Jiang", "Z. Wang", "Z. Cao", "T. Huang"],
+    "venue": "Proceedings of the 2016 ACM on Multimedia Conference. pp. 516–520. ACM",
+    "year": 2016
+  }, {
+    "title": "Edge boxes: Locating object proposals from edges",
+    "authors": ["C.L. Zitnick", "P. Dollár"],
+    "venue": "European Conference on Computer Vision. pp. 391–405. Springer",
+    "year": 2014
+  }],
+  "id": "SP:a4ce9d54163c0733b9de17f87ae6fe6e8c69f0b4",
+  "authors": [{
+    "name": "Borui Jiang",
+    "affiliations": []
+  }, {
+    "name": "Ruixuan Luo",
+    "affiliations": []
+  }, {
+    "name": "Jiayuan Mao",
+    "affiliations": []
+  }, {
+    "name": "Tete Xiao",
+    "affiliations": []
+  }, {
+    "name": "Yuning Jiang",
+    "affiliations": []
+  }, {
+    "name": "B. Jiang",
+    "affiliations": []
+  }, {
+    "name": "R. Luo",
+    "affiliations": []
+  }, {
+    "name": "J. Mao",
+    "affiliations": []
+  }, {
+    "name": "T. Xiao",
+    "affiliations": []
+  }],
+  "abstractText": "Modern CNN-based object detectors rely on bounding box regression and non-maximum suppression to localize objects. While the probabilities for class labels naturally reflect classification confidence, localization confidence is absent. This makes properly localized bounding boxes degenerate during iterative regression or even suppressed during NMS. In the paper we propose IoU-Net learning to predict the IoU between each detected bounding box and the matched ground-truth. The network acquires this confidence of localization, which improves the NMS procedure by preserving accurately localized bounding boxes. Furthermore, an optimization-based bounding box refinement method is proposed, where the predicted IoU is formulated as the objective. Extensive experiments on the MS-COCO dataset show the effectiveness of IoU-Net, as well as its compatibility with and adaptivity to several state-of-the-art object detectors.",
+  "title": "Acquisition of Localization Confidence for Accurate Object Detection"
+}

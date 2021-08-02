@@ -1,0 +1,297 @@
+{
+  "sections": [{
+    "heading": "1 INTRODUCTION",
+    "text": "At the heart of every deep network lies a linear transformation followed by an activation function f(·). The activation function plays a major role in the success of training deep neural networks. Currently, the most successful and widely-used activation function is the Rectified Linear Unit (ReLU) (Hahnloser et al., 2000; Jarrett et al., 2009; Nair & Hinton, 2010), defined as f(x) = max(x, 0). The use of ReLUs was a breakthrough that enabled the fully supervised training of state-of-the-art deep networks (Krizhevsky et al., 2012). Deep networks with ReLUs are more easily optimized than networks with sigmoid or tanh units, because gradients are able to flow when the input to the ReLU function is positive. Thanks to its simplicity and effectiveness, ReLU has become the default activation function used across the deep learning community.\nWhile numerous activation functions have been proposed to replace ReLU (Maas et al., 2013; He et al., 2015; Clevert et al., 2015; Klambauer et al., 2017), none have managed to gain the widespread adoption that ReLU enjoys. Many practitioners have favored the simplicity and reliability of ReLU because the performance improvements of the other activation functions tend to be inconsistent across different models and datasets.\nThe activation functions proposed to replace ReLU were hand-designed to fit properties deemed to be important. However, the use of search techniques to automate the discovery of traditionally human-designed components has recently shown to be extremely effective (Zoph & Le, 2016; Bello et al., 2017; Zoph et al., 2017). For example, Zoph et al. (2017) used reinforcement learningbased search to find a replicable convolutional cell that outperforms human-designed architectures on ImageNet.\nIn this work, we use automated search techniques to discover novel activation functions. We focus on finding new scalar activation functions, which take in as input a scalar and output a scalar, because scalar activation functions can be used to replace the ReLU function without changing the network architecture. Using a combination of exhaustive and reinforcement learning-based search, we find a number of novel activation functions that show promising performance. To further validate the\n∗Work done as a member of the Google Brain Residency program (g.co/brainresidency).\nar X\niv :1\n71 0.\n05 94\n1v 2\n[ cs\n.N E\n] 2\n7 O\nct 2\n01 7\neffectiveness of using searches to discover scalar activation functions, we empirically evaluate the best discovered activation function. The best discovered activation function, which we call Swish, is f(x) = x · sigmoid(βx), where β is a constant or trainable parameter. Our extensive experiments show that Swish consistently matches or outperforms ReLU on deep networks applied to a variety of challenging domains such as image classification and machine translation. On ImageNet, replacing ReLUs with Swish units improves top-1 classification accuracy by 0.9% on Mobile NASNet-A (Zoph et al., 2017) and 0.6% on Inception-ResNet-v2 (Szegedy et al., 2017). These accuracy gains are significant given that one year of architectural tuning and enlarging yielded 1.3% accuracy improvement going from Inception V3 (Szegedy et al., 2016) to Inception-ResNet-v2 (Szegedy et al., 2017)."
+  }, {
+    "heading": "2 METHODS",
+    "text": "In order to utilize search techniques, a search space that contains promising candidate activation functions must be designed. An important challenge in designing search spaces is balancing the size and expressivity of the search space. An overly constrained search space will not contain novel activation functions, whereas a search space that is too large will be difficult to effectively search. To balance the two criteria, we design a simple search space inspired by the optimizer search space of Bello et al. (2017) that composes unary and binary functions to construct the activation function.\nAs shown in Figure 1, the activation function is constructed by repeatedly composing the the “core unit”, which is defined as b(u1(x1), u2(x2)). The core unit takes in two scalar inputs, passes each input independently through an unary function, and combines the two unary outputs with a binary function that outputs a scalar. Since our aim is to find scalar activation functions which transform a single scalar input into a single scalar output, the inputs of the unary functions are restricted to the layer preactivation x and the binary function outputs.\nGiven the search space, the goal of the search algorithm is to find effective choices for the unary and binary functions. The choice of the search algorithm depends on the size of the search space. If the search space is small, such as when using a single core unit, it is possible to exhaustively enumerate the entire search space. If the core unit is repeated multiple times, the search space will be extremely large (i.e., on the order of 1012 possibilities), making exhaustive search infeasible.\nFor large search spaces, we use an RNN controller (Zoph & Le, 2016), which is visualized in Figure 2. At each timestep, the controller predicts a single component of the activation function. The prediction is fed back to the controller in the next timestep, and this process is repeated until every component of the activation function is predicted. The predicted string is then used to construct the activation function.\nOnce a candidate activation function has been generated by the search algorithm, a “child network” with the candidate activation function is trained on some task, such as image classification on CIFAR-10. After training, the validation accuracy of the child network is recorded and used\nto update the search algorithm. In the case of exhaustive search, a list of the top performing activation functions ordered by validation accuracy is maintained. In the case of the RNN controller, the controller is trained with reinforcement learning to maximize the validation accuracy, where the validation accuracy serves as the reward. This training pushes the controller to generate activation functions that have high validation accuracies.\nSince evaluating a single activation function requires training a child network, the search is computationally expensive. To decrease the wall clock time required to conduct the search, a distributed training scheme is used to parallelize the training of each child network. In this scheme, the search algorithm proposes a batch of candidate activation functions which are added to a queue. Worker machines pull activation functions off the queue, train a child network, and report back the final validation accuracy of the corresponding activation function. The validation accuracies are aggregated and used to update the search algorithm."
+  }, {
+    "heading": "3 SEARCH FINDINGS",
+    "text": "We conduct all our searches with the ResNet-20 (He et al., 2016a) as the child network architecture, and train on CIFAR-10 (Krizhevsky & Hinton, 2009) for 10K steps. This constrained environment could potentially skew the results because the top performing activation functions might only perform well for small networks. However, we show in the experiments section that many of the discovered functions generalize to larger models. Exhaustive search is used for small search spaces, while an RNN controller is used for larger search spaces. The RNN controller is trained with Policy Proximal Optimization (Schulman et al., 2017), using the exponential moving average of rewards as a baseline to reduce variance. The full list unary and binary functions considered are as follows:\n• Unary functions: x, −x, |x|, x2, x3, √ x, βx, x+ β, log(|x|+ ), exp(x) sin(x), cos(x),\nsinh(x), cosh(x), tanh(x), sinh−1(x), tan−1(x), sinc(x), max(x, 0), min(x, 0), σ(x), log(1 + exp(x)), exp(−x2), erf(x), β\n• Binary functions: x1 + x2, x1 · x2, x1 − x2, x1x2+ , max(x1, x2), min(x1, x2), σ(x1) · x2, exp(−β(x1 − x2)2), exp(−β|x1 − x2|), βx1 + (1− β)x2\nwhere β indicates a per-channel trainable parameter and σ(x) = (1 + exp(−x))−1 is the sigmoid function. Different search spaces are created by varying the number of core units used to construct the activation function and varying the unary and binary functions available to the search algorithm.\nFigure 3 plots the top performing novel activation functions found by the searches. We highlight several noteworthy trends uncovered by the searches:\n• Complicated activation functions consistently underperform simpler activation functions, potentially due to an increased difficulty in optimization. The best performing activation functions can be represented by 1 or 2 core units.\n• A common structure shared by the top activation functions is the use of the raw preactivation x as input to the final binary function: b(x, g(x)). The ReLU function also follows this structure, where b(x1, x2) = max(x1, x2) and g(x) = 0.\n• The searches discovered activation functions that utilize periodic functions, such as sin and cos. The most common use of periodic functions is through addition or subtraction with the raw preactivation x (or a linearly scaled x). The use of periodic functions in activation functions has only been briefly explored in prior work (Parascandolo et al., 2016), so these discovered functions suggest a fruitful route for further research.\n• Functions that use division tend to perform poorly because the output explodes when the denominator is near 0. Division is successful only when functions in the denominator are either bounded away from 0, such as cosh(x), or approach 0 only when the numerator also approaches 0, producing an output of 1.\nSince the activation functions were found using a relatively small child network, their performance may not generalize when applied to bigger models. To test the robustness of the top performing novel activation functions to different architectures, we run additional experiments using the preactivation ResNet-164 (RN) (He et al., 2016b), Wide ResNet 28-10 (WRN) (Zagoruyko & Komodakis, 2016), and DenseNet 100-12 (DN) (Huang et al., 2017) models. We implement the 3 models in TensorFlow and replace the ReLU function with each of the top novel activation functions discovered by the searches. We use the same hyperparameters described in each work, such as optimizing using SGD with momentum, and follow previous works by reporting the median of 5 different runs.\nFunction RN WRN DN\nReLU [max(x, 0)] 93.8 95.3 94.8\nx · σ(βx) 94.5 95.5 94.9 max(x, σ(x)) 94.3 95.3 94.8 cos(x)− x 94.1 94.8 94.6 min(x, sin(x)) 94.0 95.1 94.4 (tan−1(x))2 − x 93.9 94.7 94.9 max(x, tanh(x)) 93.9 94.2 94.5 sinc(x) + x 91.5 92.1 92.0 x · (sinh−1(x))2 85.1 92.1 91.1\nTable 1: CIFAR-10 accuracy.\nFunction RN WRN DN\nReLU [max(x, 0)] 74.2 77.8 83.7\nx · σ(βx) 75.1 78.0 83.9 max(x, σ(x)) 74.8 78.6 84.2 cos(x)− x 75.2 76.6 81.8 min(x, sin(x)) 73.4 77.1 74.3 (tan−1(x))2 − x 75.2 76.7 83.1 max(x, tanh(x)) 74.8 76.0 78.6 sinc(x) + x 66.1 68.3 67.9 x · (sinh−1(x))2 52.8 70.6 68.1\nTable 2: CIFAR-100 accuracy.\nThe results are shown in Tables 1 and 2. Despite the changes in model architecture, six of the eight activation functions successfully generalize. Of these six activation functions, all match or outperform ReLU on ResNet-164. Furthermore, two of the discovered activation functions, x·σ(βx) and max(x, σ(x)), consistently match or outperform ReLU on all three models.\nWhile these results are promising, it is still unclear whether the discovered activation functions can successfully replace ReLU on challenging real world datasets. In order to validate the effectiveness of the searches, in the rest of this work we focus on empirically evaluating the activation function f(x) = x · σ(βx), which we call Swish. We choose to extensively evaluate Swish instead of max(x, σ(x)) because early experimentation showed better generalization for Swish. In the following sections, we analyze the properties of Swish and then conduct a thorough empirical evaluation comparing Swish, ReLU, and other candidate baseline activation functions on number of large models across a variety of tasks."
+  }, {
+    "heading": "4 SWISH",
+    "text": "To recap, Swish is defined as x · σ(βx), where σ(z) = (1 + exp(−z))−1 is the sigmoid function and β is either a constant or a trainable parameter. Figure 4 plots the graph of Swish for different values of β. If β = 1, Swish is equivalent to the Sigmoid-weighted Linear Unit (SiL) of Elfwing et al. (2017) that was proposed for reinforcement learning. If β = 0, Swish becomes the scaled linear function f(x) = x2 . As β → ∞, the sigmoid component approaches a 0-1 function, so Swish becomes like the ReLU function. This suggests that Swish can be loosely viewed as a smooth function which nonlinearly interpolates between the linear function and the ReLU function. The degree of interpolation can be controlled by the model if β is set as a trainable parameter.\n5 4 3 2 1 0 1 2 3 2\n1\n0\n1\n2\n3 Swish\nβ= 0. 1 β= 1. 0 β= 10. 0\nFigure 4: The Swish activation function. 6 4 2 0 2 4 6\n0.2\n0.0\n0.2\n0.4\n0.6\n0.8\n1.0\n1.2 Swish first derivatives\nβ= 0. 1 β= 1. 0 β= 10. 0\nFigure 5: First derivatives of Swish.\nLike ReLU, Swish is unbounded above and bounded below. Unlike ReLU, Swish is smooth and nonmonotonic. In fact, the non-monotonicity property of Swish distinguishes itself from most common activation functions. The derivative of Swish is\nf ′(x) = σ(βx) + βx · σ(βx)(1− σ(βx)) = σ(βx) + βx · σ(βx)− βx · σ(βx)2\n= βx · σ(x) + σ(βx)(1− βx · σ(βx)) = βf(x) + σ(βx)(1− βf(x))\nThe first derivative of Swish is shown in Figure 5 for different values of β. The scale of β controls how fast the first derivative asymptotes to 0 and 1. When β = 1, the derivative has magnitude less than 1 for inputs that are less than around 1.25. Thus, the success of Swish with β = 1 implies that the gradient preserving property of ReLU (i.e., having a derivative of 1 when x > 0) may no longer be a distinct advantage in modern architectures.\nThe most striking difference between Swish and ReLU is the non-monotonic “bump” of Swish when x < 0. As shown in Figure 6, a large percentage of preactivations fall inside the domain of the bump (−5 ≤ x ≤ 0), which indicates that the non-monotonic bump is an important aspect of Swish. The shape of the bump can be controlled by changing the β parameter. While fixing β = 1 is effective in practice, the experiments section shows that training β can further improve performance on some models. Figure 7 plots distribution of trained β values from a Mobile NASNet-A model (Zoph et al., 2017). The trained β values are spread out between 0 and 1.5 and have a peak at β ≈ 1, suggesting that the model takes advantage of the additional flexibility of trainable β parameters.\n0.5 0.0 0.5 1.0 1.5 2.0\nβ values after training\nFigure 7: Distribution of trained β values of Swish on Mobile NASNet-A.\nPractically, Swish can be implemented with a single line code change in most deep learning libraries, such as TensorFlow (Abadi et al., 2016) (e.g., x * tf.sigmoid(beta * x) or tf.nn.swish(x) if using a version of TensorFlow released after the submission of this work). As a cautionary note, if BatchNorm (Ioffe & Szegedy, 2015) is used, the scale parameter should be set. Some high level libraries turn off the scale parameter by default due to the ReLU function being piecewise linear, but this setting is incorrect for Swish. For training Swish networks, we found that slightly lowering the learning rate used to train ReLU networks works well."
+  }, {
+    "heading": "5 EXPERIMENTS WITH SWISH",
+    "text": "We benchmark Swish against ReLU and a number of recently proposed activation functions on challenging datasets, and find that Swish matches or exceeds the baselines on nearly all tasks. The following sections will describe our experimental settings and results in greater detail. As a summary, Table 3 shows Swish in comparison to each baseline activation function we considered (which are defined in the next section). The results in Table 3 are aggregated by comparing the performance of Swish to the performance of different activation functions applied to a variety of models, such as Inception ResNet-v2 (Szegedy et al., 2017) and Transformer (Vaswani et al., 2017), across multiple datasets, such as CIFAR, ImageNet, and English→German translation.1 The improvement of Swish over other activation functions is statistically significant under a one-sided paired sign test."
+  }, {
+    "heading": "5.1 EXPERIMENTAL SET UP",
+    "text": "We compare Swish against several additional baseline activation functions on a variety of models and datasets. Since many activation functions have been proposed, we choose the most common activation functions to compare against, and follow the guidelines laid out in each work:\n1To avoid skewing the comparison, each model type is compared just once. A model with multiple results is represented by the median of its results. Specifically, the models with aggregated results are (a) ResNet-164, Wide ResNet 28-10, and DenseNet 100-12 across the CIFAR-10 and CIFAR-100 results, (b) Mobile NASNet-A and Inception-ResNet-v2 across the 3 runs, and (c) WMT Transformer model across the 4 newstest results.\n• Leaky ReLU (LReLU) (Maas et al., 2013):\nf(x) = { x if x ≥ 0 αx if x < 0\nwhere α = 0.01. LReLU enables a small amount of information to flow when x < 0. • Parametric ReLU (PReLU) (He et al., 2015): The same form as LReLU but α is a learnable\nparameter. Each channel has a shared α which is initialized to 0.25. • Softplus (Nair & Hinton, 2010): f(x) = log(1 + exp(x)). Softplus is a smooth function\nwith properties similar to Swish, but is strictly positive and monotonic. It can be viewed as a smooth version of ReLU.\n• Exponential Linear Unit (ELU) (Clevert et al., 2015):\nf(x) = { x if x ≥ 0 α(exp(x)− 1) if x < 0\nwhere α = 1.0 • Scaled Exponential Linear Unit (SELU) (Klambauer et al., 2017):\nf(x) = λ { x if x ≥ 0 α(exp(x)− 1) if x < 0\nwith α ≈ 1.6733 and λ ≈ 1.0507. • Gaussian Error Linear Unit (GELU) (Hendrycks & Gimpel, 2016): f(x) = x ·Φ(x), where\nΦ(x) is the cumulative distribution function of the standard normal distribution. GELU is a nonmonotonic function that has a shape similar to Swish with β = 1.4.\nWe evaluate both Swish with a trainable β and Swish with a fixed β = 1 (which for simplicity we call Swish-1, but it is equivalent to the Sigmoid-weighted Linear Unit of Elfwing et al. (2017)). Note that our results may not be directly comparable to the results in the corresponding works due to differences in our training setup."
+  }, {
+    "heading": "5.2 CIFAR",
+    "text": "We first compare Swish to all the baseline activation functions on the CIFAR-10 and CIFAR-100 datasets (Krizhevsky & Hinton, 2009). We follow the same set up used when comparing the activation functions discovered by the search techniques, and compare the median of 5 runs with the preactivation ResNet-164 (He et al., 2016b), Wide ResNet 28-10 (WRN) (Zagoruyko & Komodakis, 2016), and DenseNet 100-12 (Huang et al., 2017) models.\nModel ResNet WRN DenseNet\nLReLU 94.2 95.6 94.7 PReLU 94.1 95.1 94.5 Softplus 94.6 94.9 94.7 ELU 94.1 94.1 94.4 SELU 93.0 93.2 93.9 GELU 94.3 95.5 94.8\nReLU 93.8 95.3 94.8\nSwish-1 94.7 95.5 94.8 Swish 94.5 95.5 94.8\nTable 4: CIFAR-10 accuracy.\nModel ResNet WRN DenseNet\nLReLU 74.2 78.0 83.3 PReLU 74.5 77.3 81.5 Softplus 76.0 78.4 83.7 ELU 75.0 76.0 80.6 SELU 73.2 74.3 80.8 GELU 74.7 78.0 83.8\nReLU 74.2 77.8 83.7\nSwish-1 75.1 78.5 83.8 Swish 75.1 78.0 83.9\nTable 5: CIFAR-100 accuracy.\nThe results in Tables 4 and 5 show how Swish and Swish-1 consistently matches or outperforms ReLU on every model for both CIFAR-10 and CIFAR-100. Swish also matches or exceeds the best baseline performance on almost every model. Importantly, the “best baseline” changes between different models, which demonstrates the stability of Swish to match these varying baselines. Softplus, which is smooth and approaches zero on one side, similar to Swish, also has strong performance."
+  }, {
+    "heading": "5.3 IMAGENET",
+    "text": "Next, we benchmark Swish against the baseline activation functions on the ImageNet 2012 classification dataset (Russakovsky et al., 2015). ImageNet is widely considered one of most important image classification datasets, consisting of a 1,000 classes and 1.28 million training images. We evaluate on the validation dataset, which has 50,000 images.\nWe compare all the activation functions on a variety of architectures designed for ImageNet: Inception-ResNet-v2, Inception-v4, Inception-v3 (Szegedy et al., 2017), MobileNet (Howard et al., 2017), and Mobile NASNet-A (Zoph et al., 2017). All these architectures were designed with ReLUs. We again replace the ReLU activation function with different activation functions and train for a fixed number of steps, determined by the convergence of the ReLU baseline. For each activation function, we try 3 different learning rates with RMSProp (Tieleman & Hinton, 2012) and pick the best.2 All networks are initialized with He initialization (He et al., 2015).3 To verify that the performance differences are reproducible, we run the Inception-ResNet-v2 and Mobile NASNet-A experiments 3 times with the best learning rate from the first experiment. We plot the learning curves for Mobile NASNet-A in Figure 8.\nModel Top-1 Acc. (%) Top-5 Acc. (%)\nLReLU 72.5 91.0 PReLU 74.2 91.9 Softplus 73.6 91.6 ELU 73.9 91.3 SELU 73.2 91.0 GELU 73.5 91.4\nReLU 72.0 90.8\nSwish-1 74.2 91.6 Swish 74.2 91.7\nTable 8: MobileNet on ImageNet.\nThe results in Tables 6-10 show strong performance for Swish. On Inception-ResNet-v2, Swish outperforms ReLU by a nontrivial 0.5%. Swish performs especially well on mobile sized models,\n2For some of the models with ELU, SELU, and PReLU, we train with an additional 3 learning rates (so a total of 6 learning rates) because the original 3 learning rates did not converge.\n3For SELU, we tried both He initialization and the initialization recommended in Klambauer et al. (2017), and choose the best result for each model separately.\nModel Top-1 Acc. (%) Top-5 Acc. (%)\nLReLU 78.4 94.1 PReLU 77.7 93.5 Softplus 78.7 94.4 ELU 77.9 93.7 SELU 76.7 92.8 GELU 77.7 93.9\nReLU 78.4 94.2\nSwish-1 78.7 94.2 Swish 78.7 94.0\nTable 9: Inception-v3 on ImageNet.\nModel Top-1 Acc. (%) Top-5 Acc. (%)\nLReLU 79.3 94.7 PReLU 79.3 94.4 Softplus 79.6 94.8 ELU 79.5 94.5 SELU 78.3 94.5 GELU 79.0 94.6\nReLU 79.2 94.6\nSwish-1 79.3 94.7 Swish 79.3 94.6\nTable 10: Inception-v4 on ImageNet.\nwith a 1.4% boost on Mobile NASNet-A and a 2.2% boost on MobileNet over ReLU. Swish also matches or exceeds the best performing baseline on most models, where again, the best performing baseline differs depending on the model. Softplus achieves accuracies comparable to Swish on the larger models, but performs worse on both mobile sized models. For Inception-v4, the gains from switching between activation functions is more limited, and Swish slightly underperforms Softplus and ELU. In general, the results suggest that switching to Swish improves performance with little additional tuning."
+  }, {
+    "heading": "5.4 MACHINE TRANSLATION",
+    "text": "We additionally benchmark Swish on the domain of machine translation. We train machine translation models on the standard WMT 2014 English→German dataset, which has 4.5 million training sentences, and evaluate on 4 different newstest sets using the standard BLEU metric. We use the attention based Transformer (Vaswani et al., 2017) model, which utilizes ReLUs in a 2-layered feedforward network between each attention layer. We train a 12 layer “Base Transformer” model with 2 different learning rates4 for 300K steps, but otherwise use the same hyperparameters as in the original work, such as using Adam (Kingma & Ba, 2015) to optimize.\nTable 11 shows that Swish outperforms or matches the other baselines on machine translation. Swish-1 does especially well on newstest2016, exceeding the next best performing baseline by 0.6 BLEU points. The worst performing baseline function is Softplus, demonstrating inconsistency in performance across differing domains. In contrast, Swish consistently performs well across multiple domains."
+  }, {
+    "heading": "6 RELATED WORK",
+    "text": "Swish was found using a variety of automated search techniques. Search techniques have been utilized in other works to discover convolutional and recurrent architectures (Zoph & Le, 2016;\n4We tried an additional learning rate for Softplus, but found it did not work well across all learning rates.\nZoph et al., 2017; Real et al., 2017; Cai et al., 2017; Zhong et al., 2017) and optimizers (Bello et al., 2017). The use of search techniques to discover traditionally hand-designed components is an instance of the recently revived subfield of meta-learning (Schmidhuber, 1987; Naik & Mammone, 1992; Thrun & Pratt, 2012). Meta-learning has been used to find initializations for one-shot learning (Finn et al., 2017; Ravi & Larochelle, 2016), adaptable reinforcement learning (Wang et al., 2016; Duan et al., 2016), and generating model parameters (Ha et al., 2016). Meta-learning is powerful because the flexibility derived from the minimal assumptions encoded leads to empirically effective solutions. We take advantage of this property in order to find scalar activation functions, such as Swish, that have strong empirical performance.\nWhile this work focuses on scalar activation functions, which transform one scalar to another scalar, there are many types of activation functions used in deep networks. Many-to-one functions, like max pooling, maxout (Goodfellow et al., 2013), and gating (Hochreiter & Schmidhuber, 1997; Srivastava et al., 2015; van den Oord et al., 2016; Dauphin et al., 2016; Wu et al., 2016; Miech et al., 2017), derive their power from combining multiple sources in a nonlinear way. One-to-many functions, like Concatenated ReLU (Shang et al., 2016), improve performance by applying multiple nonlinear functions to a single input. Finally, many-to-many functions, such as BatchNorm (Ioffe & Szegedy, 2015) and LayerNorm (Ba et al., 2016), induce powerful nonlinear relationships between their inputs.\nMost prior work has focused on proposing new activation functions (Maas et al., 2013; Agostinelli et al., 2014; He et al., 2015; Clevert et al., 2015; Hendrycks & Gimpel, 2016; Klambauer et al., 2017; Qiu & Cai, 2017; Zhou et al., 2017; Elfwing et al., 2017), but few studies, such as Xu et al. (2015), have systematically compared different activation functions. To the best of our knowledge, this is the first study to compare scalar activation functions across multiple challenging datasets.\nOur study shows that Swish consistently outperforms ReLU on deep models. The strong performance of Swish challenges conventional wisdom about ReLU. Hypotheses about the importance of the gradient preserving property of ReLU seem unnecessary when residual connections (He et al., 2016a) enable the optimization of very deep networks. A similar insight can be found in the fully attentional Transformer (Vaswani et al., 2017), where the intricately constructed LSTM cell (Hochreiter & Schmidhuber, 1997) is no longer necessary when constant-length attentional connections are used. Architectural improvements lessen the need for individual components to preserve gradients."
+  }, {
+    "heading": "7 CONCLUSION",
+    "text": "In this work, we utilized automatic search techniques to discover novel activation functions that have strong empirical performance. We then empirically validated the best discovered activation function, which we call Swish and is defined as f(x) = x · sigmoid(βx). Our experiments used models and hyperparameters that were designed for ReLU and just replaced the ReLU activation function with Swish; even this simple, suboptimal procedure resulted in Swish consistently outperforming ReLU and other activation functions. We expect additional gains to be made when these models and hyperparameters are specifically designed with Swish in mind. The simplicity of Swish and its similarity to ReLU means that replacing ReLUs in any network is just a simple one line code change."
+  }, {
+    "heading": "ACKNOWLEDGEMENTS",
+    "text": "We thank Esteban Real, Geoffrey Hinton, Irwan Bello, Jascha Sohl-Dickstein, Jon Shlens, Kathryn Rough, Mohammad Norouzi, Navdeep Jaitly, Niki Parmar, Sam Smith, Simon Kornblith, Vijay Vasudevan, and the Google Brain team for help with this project."
+  }],
+  "year": 2017,
+  "references": [{
+    "title": "Tensorflow: A system for large-scale machine learning",
+    "authors": ["Martı́n Abadi", "Paul Barham", "Jianmin Chen", "Zhifeng Chen", "Andy Davis", "Jeffrey Dean", "Matthieu Devin", "Sanjay Ghemawat", "Geoffrey Irving", "Michael Isard"],
+    "venue": "In USENIX Symposium on Operating Systems Design and Implementation,",
+    "year": 2016
+  }, {
+    "title": "Learning activation functions to improve deep neural networks",
+    "authors": ["Forest Agostinelli", "Matthew Hoffman", "Peter Sadowski", "Pierre Baldi"],
+    "venue": "arXiv preprint arXiv:1412.6830,",
+    "year": 2014
+  }, {
+    "title": "Neural optimizer search with reinforcement learning",
+    "authors": ["Irwan Bello", "Barret Zoph", "Vijay Vasudevan", "Quoc V Le"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2017
+  }, {
+    "title": "Reinforcement learning for architecture search by network transformation",
+    "authors": ["Han Cai", "Tianyao Chen", "Weinan Zhang", "Yong Yu", "Jun Wang"],
+    "venue": "arXiv preprint arXiv:1707.04873,",
+    "year": 2017
+  }, {
+    "title": "Fast and accurate deep network learning by exponential linear units (elus)",
+    "authors": ["Djork-Arné Clevert", "Thomas Unterthiner", "Sepp Hochreiter"],
+    "venue": "arXiv preprint arXiv:1511.07289,",
+    "year": 2015
+  }, {
+    "title": "Language modeling with gated convolutional networks",
+    "authors": ["Yann N Dauphin", "Angela Fan", "Michael Auli", "David Grangier"],
+    "venue": "arXiv preprint arXiv:1612.08083,",
+    "year": 2016
+  }, {
+    "title": "Rl2: Fast reinforcement learning via slow reinforcement learning",
+    "authors": ["Yan Duan", "John Schulman", "Xi Chen", "Peter L Bartlett", "Ilya Sutskever", "Pieter Abbeel"],
+    "venue": "arXiv preprint arXiv:1611.02779,",
+    "year": 2016
+  }, {
+    "title": "Sigmoid-weighted linear units for neural network function approximation in reinforcement learning",
+    "authors": ["Stefan Elfwing", "Eiji Uchibe", "Kenji Doya"],
+    "venue": "arXiv preprint arXiv:1702.03118,",
+    "year": 2017
+  }, {
+    "title": "Model-agnostic meta-learning for fast adaptation of deep networks",
+    "authors": ["Chelsea Finn", "Pieter Abbeel", "Sergey Levine"],
+    "venue": "arXiv preprint arXiv:1703.03400,",
+    "year": 2017
+  }, {
+    "title": "Digital selection and analogue amplification coexist in a cortex-inspired silicon",
+    "authors": ["Richard HR Hahnloser", "Rahul Sarpeshkar", "Misha A Mahowald", "Rodney J Douglas", "H Sebastian Seung"],
+    "venue": "circuit. Nature,",
+    "year": 2000
+  }, {
+    "title": "Delving deep into rectifiers: Surpassing humanlevel performance on imagenet classification",
+    "authors": ["Kaiming He", "Xiangyu Zhang", "Shaoqing Ren", "Jian Sun"],
+    "venue": "In Proceedings of the IEEE international conference on computer vision,",
+    "year": 2015
+  }, {
+    "title": "Deep residual learning for image recognition",
+    "authors": ["Kaiming He", "Xiangyu Zhang", "Shaoqing Ren", "Jian Sun"],
+    "venue": "In Proceedings of the IEEE conference on computer vision and pattern recognition,",
+    "year": 2016
+  }, {
+    "title": "Identity mappings in deep residual networks",
+    "authors": ["Kaiming He", "Xiangyu Zhang", "Shaoqing Ren", "Jian Sun"],
+    "venue": "In European Conference on Computer Vision,",
+    "year": 2016
+  }, {
+    "title": "Bridging nonlinearities and stochastic regularizers with gaussian error linear units",
+    "authors": ["Dan Hendrycks", "Kevin Gimpel"],
+    "venue": "arXiv preprint arXiv:1606.08415,",
+    "year": 2016
+  }, {
+    "title": "Long short-term memory",
+    "authors": ["Sepp Hochreiter", "Jürgen Schmidhuber"],
+    "venue": "Neural Computation,",
+    "year": 1997
+  }, {
+    "title": "Mobilenets: Efficient convolutional neural networks for mobile vision applications",
+    "authors": ["Andrew G Howard", "Menglong Zhu", "Bo Chen", "Dmitry Kalenichenko", "Weijun Wang", "Tobias Weyand", "Marco Andreetto", "Hartwig Adam"],
+    "venue": "arXiv preprint arXiv:1704.04861,",
+    "year": 2017
+  }, {
+    "title": "Densely connected convolutional networks",
+    "authors": ["Gao Huang", "Zhuang Liu", "Kilian Q Weinberger", "Laurens van der Maaten"],
+    "venue": "In Conference on Computer Vision and Pattern Recognition,",
+    "year": 2017
+  }, {
+    "title": "Batch normalization: Accelerating deep network training by reducing internal covariate shift",
+    "authors": ["Sergey Ioffe", "Christian Szegedy"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2015
+  }, {
+    "title": "What is the best multi-stage architecture for object recognition",
+    "authors": ["Kevin Jarrett", "Koray Kavukcuoglu", "Yann LeCun"],
+    "venue": "IEEE 12th International Conference on Computer Vision,",
+    "year": 2009
+  }, {
+    "title": "Adam: A method for stochastic optimization",
+    "authors": ["Diederik Kingma", "Jimmy Ba"],
+    "venue": "In International Conference on Learning Representations,",
+    "year": 2015
+  }, {
+    "title": "Self-normalizing neural networks",
+    "authors": ["Günter Klambauer", "Thomas Unterthiner", "Andreas Mayr", "Sepp Hochreiter"],
+    "venue": "arXiv preprint arXiv:1706.02515,",
+    "year": 2017
+  }, {
+    "title": "Learning multiple layers of features from tiny images",
+    "authors": ["Alex Krizhevsky", "Geoffrey Hinton"],
+    "venue": "Technical report,",
+    "year": 2009
+  }, {
+    "title": "Imagenet classification with deep convolutional neural networks",
+    "authors": ["Alex Krizhevsky", "Ilya Sutskever", "Geoffrey E Hinton"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2012
+  }, {
+    "title": "Rectifier nonlinearities improve neural network acoustic models",
+    "authors": ["Andrew L Maas", "Awni Y Hannun", "Andrew Y Ng"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2013
+  }, {
+    "title": "Learnable pooling with context gating for video classification",
+    "authors": ["Antoine Miech", "Ivan Laptev", "Josef Sivic"],
+    "venue": "arXiv preprint arXiv:1706.06905,",
+    "year": 2017
+  }, {
+    "title": "Meta-neural networks that learn by learning",
+    "authors": ["Devang K Naik", "RJ Mammone"],
+    "venue": "In Neural Networks,",
+    "year": 1992
+  }, {
+    "title": "Rectified linear units improve restricted boltzmann machines",
+    "authors": ["Vinod Nair", "Geoffrey E Hinton"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2010
+  }, {
+    "title": "Taming the waves: sine as activation function in deep neural networks. 2016",
+    "authors": ["Giambattista Parascandolo", "Heikki Huttunen", "Tuomas Virtanen"],
+    "year": 2016
+  }, {
+    "title": "Flexible rectified linear units for improving convolutional neural networks",
+    "authors": ["Suo Qiu", "Bolun Cai"],
+    "venue": "arXiv preprint arXiv:1706.08098,",
+    "year": 2017
+  }, {
+    "title": "Optimization as a model for few-shot learning",
+    "authors": ["Sachin Ravi", "Hugo Larochelle"],
+    "year": 2016
+  }, {
+    "title": "Large-scale evolution of image classifiers",
+    "authors": ["Esteban Real", "Sherry Moore", "Andrew Selle", "Saurabh Saxena", "Yutaka Leon Suematsu", "Quoc Le", "Alex Kurakin"],
+    "venue": "arXiv preprint arXiv:1703.01041,",
+    "year": 2017
+  }, {
+    "title": "Imagenet large scale visual recognition challenge",
+    "authors": ["Olga Russakovsky", "Jia Deng", "Hao Su", "Jonathan Krause", "Sanjeev Satheesh", "Sean Ma", "Zhiheng Huang", "Andrej Karpathy", "Aditya Khosla", "Michael Bernstein"],
+    "venue": "International Journal of Computer Vision,",
+    "year": 2015
+  }, {
+    "title": "Evolutionary principles in self-referential learning. On learning how to learn: The meta-meta-.",
+    "authors": ["Jurgen Schmidhuber"],
+    "venue": "hook.) Diploma thesis, Institut f. Informatik, Tech. Univ. Munich,",
+    "year": 1987
+  }, {
+    "title": "Proximal policy optimization algorithms",
+    "authors": ["John Schulman", "Filip Wolski", "Prafulla Dhariwal", "Alec Radford", "Oleg Klimov"],
+    "venue": "arXiv preprint arXiv:1707.06347,",
+    "year": 2017
+  }, {
+    "title": "Understanding and improving convolutional neural networks via concatenated rectified linear units",
+    "authors": ["Wenling Shang", "Kihyuk Sohn", "Diogo Almeida", "Honglak Lee"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2016
+  }, {
+    "title": "Rethinking the inception architecture for computer vision",
+    "authors": ["Christian Szegedy", "Vincent Vanhoucke", "Sergey Ioffe", "Jon Shlens", "Zbigniew Wojna"],
+    "venue": "In The IEEE Conference on Computer Vision and Pattern Recognition (CVPR),",
+    "year": 2016
+  }, {
+    "title": "Inception-v4, inception-resnet and the impact of residual connections on learning",
+    "authors": ["Christian Szegedy", "Sergey Ioffe", "Vincent Vanhoucke", "Alexander A Alemi"],
+    "venue": "In AAAI,",
+    "year": 2017
+  }, {
+    "title": "Learning to learn",
+    "authors": ["Sebastian Thrun", "Lorien Pratt"],
+    "venue": "Springer Science & Business Media,",
+    "year": 2012
+  }, {
+    "title": "Lecture 6.5-rmsprop: Divide the gradient by a running average of its recent magnitude",
+    "authors": ["Tijmen Tieleman", "Geoffrey Hinton"],
+    "venue": "COURSERA: Neural networks for machine learning,",
+    "year": 2012
+  }, {
+    "title": "Conditional image generation with pixelcnn decoders",
+    "authors": ["Aaron van den Oord", "Nal Kalchbrenner", "Lasse Espeholt", "Oriol Vinyals", "Alex Graves"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2016
+  }, {
+    "title": "Attention is all you need",
+    "authors": ["Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N Gomez", "Lukasz Kaiser", "Illia Polosukhin"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2017
+  }, {
+    "title": "Learning to reinforcement learn",
+    "authors": ["Jane X Wang", "Zeb Kurth-Nelson", "Dhruva Tirumala", "Hubert Soyer", "Joel Z Leibo", "Remi Munos", "Charles Blundell", "Dharshan Kumaran", "Matt Botvinick"],
+    "venue": "arXiv preprint arXiv:1611.05763,",
+    "year": 2016
+  }, {
+    "title": "On multiplicative integration with recurrent neural networks",
+    "authors": ["Yuhuai Wu", "Saizheng Zhang", "Ying Zhang", "Yoshua Bengio", "Ruslan R Salakhutdinov"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2016
+  }, {
+    "title": "Empirical evaluation of rectified activations in convolutional network",
+    "authors": ["Bing Xu", "Naiyan Wang", "Tianqi Chen", "Mu Li"],
+    "venue": "arXiv preprint arXiv:1505.00853,",
+    "year": 2015
+  }, {
+    "title": "Wide residual networks",
+    "authors": ["Sergey Zagoruyko", "Nikos Komodakis"],
+    "venue": "In British Machine Vision Conference,",
+    "year": 2016
+  }, {
+    "title": "Practical network blocks design with q-learning",
+    "authors": ["Zhao Zhong", "Junjie Yan", "Cheng-Lin Liu"],
+    "venue": "arXiv preprint arXiv:1708.05552,",
+    "year": 2017
+  }, {
+    "title": "Deep interest network for click-through rate prediction",
+    "authors": ["Guorui Zhou", "Chengru Song", "Xiaoqiang Zhu", "Xiao Ma", "Yanghui Yan", "Xingya Dai", "Han Zhu", "Junqi Jin", "Han Li", "Kun Gai"],
+    "venue": "arXiv preprint arXiv:1706.06978,",
+    "year": 2017
+  }, {
+    "title": "Neural architecture search with reinforcement learning",
+    "authors": ["Barret Zoph", "Quoc V Le"],
+    "venue": "In International Conference on Learning Representations,",
+    "year": 2016
+  }, {
+    "title": "Learning transferable architectures for scalable image recognition",
+    "authors": ["Barret Zoph", "Vijay Vasudevan", "Jonathon Shlens", "Quoc V Le"],
+    "venue": "arXiv preprint arXiv:1707.07012,",
+    "year": 2017
+  }],
+  "id": "SP:c8c4ab59ac29973a00df4e5c8df3773a3c59995a",
+  "authors": [{
+    "name": "Prajit Ramachandran",
+    "affiliations": []
+  }, {
+    "name": "Barret Zoph",
+    "affiliations": []
+  }, {
+    "name": "Quoc V. Le",
+    "affiliations": []
+  }],
+  "abstractText": "The choice of activation functions in deep networks has a significant effect on the training dynamics and task performance. Currently, the most successful and widely-used activation function is the Rectified Linear Unit (ReLU). Although various hand-designed alternatives to ReLU have been proposed, none have managed to replace it due to inconsistent gains. In this work, we propose to leverage automatic search techniques to discover new activation functions. Using a combination of exhaustive and reinforcement learning-based search, we discover multiple novel activation functions. We verify the effectiveness of the searches by conducting an empirical evaluation with the best discovered activation function. Our experiments show that the best discovered activation function, f(x) = x · sigmoid(βx), which we name Swish, tends to work better than ReLU on deeper models across a number of challenging datasets. For example, simply replacing ReLUs with Swish units improves top-1 classification accuracy on ImageNet by 0.9% for Mobile NASNet-A and 0.6% for Inception-ResNet-v2. The simplicity of Swish and its similarity to ReLU make it easy for practitioners to replace ReLUs with Swish units in any neural network.",
+  "title": "SEARCHING FOR ACTIVATION FUNCTIONS"
+}

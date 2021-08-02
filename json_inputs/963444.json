@@ -1,0 +1,165 @@
+{
+  "sections": [{
+    "heading": "1 Introduction",
+    "text": "Training neural networks requires setting several hyper-parameters to adequate values: number of hidden layers, number of neurons per hidden layer, learning rate, momentum, dropout rate, etc. Although tuning such hyper-parameters via parameter search has been recently investigated by Maclaurin et al. (2015), doing so remains extremely costly, which makes it imperative to develop more efficient techniques.\nOf the many hyper-parameters, those that determine the network’s architecture are among the hardest to tune, especially because changing them during training is more difficult than adjusting more dynamic parameters such as the learning rate or momentum. Typically, the architecture parameters are set once and for all before training begins. Thus, assigning them correctly is paramount: if the network is too small, it will not learn well; if it is too large, it may take significantly longer to train while running the risk of overfitting. Networks are therefore usually trained with more parameters than necessary, and pruned once the training is complete.\nThis paper introduces Divnet, a new technique for reducing the size of a network. Divnet decreases the amount of redundancy in a neural network (and hence its size) in two steps: first, it samples a diverse subset of neurons; then, it merges the remaining neurons with the ones previously selected.\nSpecifically, Divnet models neuronal diversity by placing a Determinantal Point Process (DPP) (Hough et al., 2006) over neurons in a layer, which is then used to select a subset of diverse neurons. Subsequently, Divnet “fuses” information from the dropped neurons into the selected ones through a reweighting procedure. Together, these steps reduce network size (and act as implicit regularization), without requiring any further training or significantly hurting performance. Divnet is fast and runs in time negligible compared to the network’s prior training time. Moreover, it is agnostic to other network parameters such as activation functions, number of hidden layers, and learning rates.\nar X\niv :1\n51 1.\n05 07\n7v 6\n[ cs\n.L G\n] 1\n8 A\npr 2\n01 7\nFor simplicity, we describe and analyze Divnet for feed-forward neural networks, however Divnet is not limited to this setting. Indeed, since Divnet operates on a layer fully connected to the following one in a network’s hierarchy, it applies equally well to other architectures with fully connected layers. For example, it can be applied without any further modification to Deep Belief Nets and to the fully-connected layers in Convolutional Neural Networks. As these layers are typically responsible for the large majority of the CNNs’ memory footprint (Yang et al., 2014), Divnet is particularly well suited for such networks.\nContributions. The key contributions of this paper are the following:\n– Introduction of DPPs as a flexible, powerful tool for modeling layerwise neuronal diversity (§2.1). Specifically, we present a practical method for creating DPPs over neurons, which enables diversity promoting sampling and thereby leads to smaller network sizes.\n– A simple but crucial “fusing” step that minimizes the adverse effects of removing neurons. Specifically, we introduce a reweighting procedure for a neuron’s connections that transfers the contributions of the pruned neurons to the ones that are retained (§2.2).\nThe combination of both ideas is called Divnet. We perform several experiments to validate Divnet and compare to previous neuron pruning approaches, which Divnet consistently outperforms. Notably, Divnet’s reweighting strategy benefits other pruning approaches.\nRelated work. Due to their large number of parameters, deep neural networks typically have a heavy memory footprint. Moreover, in many deep neural network models parameters show a significant amount of redundancy (Denil et al., 2013). Consequently, there has been significant interest in developing techniques for reducing a network’s size without penalizing its performance.\nA common approach to reducing the number of parameters is to remove connections between layers. In (LeCun et al., 1990; Hassibi et al., 1993), connections are deleted using information drawn from the Hessian of the network’s error function. Sainath et al. (2013) reduce the number of parameters by analyzing the weight matrices, and applying low-rank factorization to the final weight layer. Han et al. (2015) remove connections with weights smaller than a given threshold before retraining the network. These methods focus on deleting parameters whose removal influences the network the least, while Divnet seeks diversity and merges similar neurons; these methods can thus be used in conjunction with ours. Although methods such as (LeCun et al., 1990) that remove connections between layers may also delete neurons from the network by removing all of their outgoing or incoming connections, it is likely that the overall impact on the size of the network will be lesser than approaches such as Divnet that remove entire neurons: indeed, removing a neuron decreases the number of rows or columns of the weight matrices connecting the neuron’s layer to both the previous and following layers.\nConvolutional Neural Networks (LeCun et al., 1998) replace fully-connected layers with convolution and subsampling layers, which significantly decreases the number of parameters. However, as CNNs still maintain fully-connected layers, they also benefit from Divnet.\nCloser to our approach of reducing the number of hidden neurons is (He et al., 2014), which evaluates each hidden neuron’s importance and deletes neurons with the smaller importance scores. In (Srinivas and Babu, 2015), a neuron is pruned when its weights are similar to those of another neuron in its layer, leading to a weight update procedure that is somewhat similar in idea (albeit simpler) to our reweighting step: where (Srinivas and Babu, 2015) removes neurons with equal or similar weights, we consider the more complicated task of merging neurons that, as a group, perform redundant calculations based on their activations.\nOther recent approaches consider network compression without pruning: in (Hinton et al., 2015), a new, smaller network is trained on the outputs of the large network; Chen et al. (2015) use hashing to reduce the size of the weight matrices by forcing all connections within the same hash bucket to have the same weight. Courbariaux et al. (2014) and Gupta et al. (2015) show that networks can be trained and run using limited precision values to store the network parameters, thus reducing the overall memory footprint.\nWe emphasize that Divnet’s focus on neuronal diversity is orthogonal and complementary to prior network compression techniques. Consequently, Divnet can be combined, in most cases trivially, with previous approaches to memory footprint reduction."
+  }, {
+    "heading": "2 Diversity and redundancy reduction",
+    "text": "In this section we introduce our technique for modeling neuronal diversity more formally.\nLet T denote the training data, ` a layer of n` neurons, aij the activation of the i-th neuron on input tj , and vi = (ai1, . . . , ain`)\n> the activation vector of the i-th neuron obtained by feeding the training data through the network. To enforce diversity in layer `, we must determine which neurons are computing redundant information and remove them. Doing so requires finding a maximal subset of (linearly) independent activation vectors in a layer and retaining only the corresponding neurons. In practice, however, the number of items in the training set (or the number of batches) can be much larger than the number of neurons in a layer, so the activation vectors v1, . . . , vn` are likely linearly independent. Merely selecting by the maximal subset may thus lead to a trivial solution that selects all neurons.\nReducing redundancy therefore requires a more careful approach to sampling. We propose to select a subset of neurons whose activation patterns are diverse while contributing to the network’s overall computation (i.e., their activations are not saturated at 0). We achieve this diverse selection by formulating the neuron selection task as sampling from a Determinantal Point Process (DPP). We describe the details below."
+  }, {
+    "heading": "2.1 Neuronal diversity via Determinantal Point Processes",
+    "text": "DPPs are probability measures over subsets of a ground set of items. Originally introduced to model the repulsive behavior of fermions (Macchi, 1975), they have since been used fruitfully in machine-learning (Kulesza and Taskar, 2012). Interestingly, they have also been recently applied to modeling inter-neuron inhibitions in neural spiking behavior in the rat hippocampus (Snoek et al., 2013).\nDPPs present an elegant mathematical technique to model diversity: the probability mass associated to each subset is proportional to the determinant (hence the name) of a DPP kernel matrix. The determinant encodes negative associations between variables, and thus DPPs tend to assign higher probability mass to diverse subsets (corresponding to diverse submatrices of the DPP kernel). Formally, a ground set of N items Y = {1, . . . , N} and a probability P : 2Y → [0, 1] such that\nP(Y ) = det(LY ) det(L+ I) , (1)\nwhere L is a N -by-N positive definite matrix, form a DPP. L is called the DPP kernel ; here, LY indicates the |Y | × |Y | principal submatrix of L indexed by the elements of Y . The key ingredient that remains to be specified is the DPP kernel, which we now describe."
+  }, {
+    "heading": "2.1.1 Constructing the DPP kernel",
+    "text": "There are numerous potential choices for the DPP kernel. We found that experimentally a well-tuned Gaussian RBF kernel provided a good balance between simplicity and quality: for instance, it provides much better results that simple linear kernels (obtained via the outer product of the activation vectors) and is easier to use than more complex Gaussian RBF kernels with additional parameters. A more thorough evaluation of kernel choice is future work.\nRecall that layer ` has activations v1, . . . , vn` . Using these, we first create an n`× n` kernel L′ with bandwidth parameter β by setting L′ij = exp(−β‖vi − vj‖2) 1 ≤ i, j ≤ n`. (2) To ensure strict positive definiteness of the kernel matrix L′, we add a small diagonal perturbation εI to L′ (ε = 0.01). The choice of the bandwidth parameter could be done by\ncross-validation, but that would greatly increase the training cost. Therefore, we use the fixed choice β = 10/|T |, which was experimentally seen to work well. Finally, in order to limit rounding errors, we introduce a final scaling operation: suppose we wish to obtain a desired size, say k, of sampled subsets (in which case we are said to be using a k-DPP (Kulesza and Taskar, 2011)). To that end, we can scale the kernel L′ + εI by a factor γ, so that its expected sample size becomes k. For a DPP with kernel L, the expected sample size is given by (Kulesza and Taskar, 2012, Eq. 34):\nE[|Y |] = Tr(L(I + L)−1).\nTherefore, we scale the kernel to γ(L′ + εI) with γ such that\nγ = k n` − k · n` − k\n′\nk′ ,\nwhere k′ is the expected sample size for the kernel L′ + εI.\nFinally, generating and then sampling from L = γ(L′ + εI) has O(n3` + n2` |T |) cost. In our experiments, this sampling cost was negligible compared with the cost of training. For networks with very large hidden layers, one can avoiding the n3` cost by using more scalable sampling techniques (Li et al., 2015; Kang, 2013)."
+  }, {
+    "heading": "2.2 Fusing redundant neurons",
+    "text": "Simply excising the neurons that are not sampled by the DPP drastically alters the neuron inputs to the next layer. Intuitively, since activations of neurons marked redundant are not arbitrary, throwing them away is wasteful. Ideally we should preserve the total information of a given layer, which suggests that we should “fuse” the information from unselected neurons into the selected ones. We achieve this via a reweighting procedure as outlined below.\nWithout loss of generality, let neurons 1 through k be the ones sampled by the DPP and v1, . . . , vk their corresponding activation vectors. Let wij be the weights connecting the i-th neuron (1 ≤ i ≤ k) in the current layer to the j-th neuron in the next layer; let w̃ij = δij+wij denote the updated weights after merging the contributions from the removed neurons.\nWe seek to minimize the impact of removing n` − k neurons from layer `. To that end, we minimize the difference in inputs to neurons in the subsequent layer before ( ∑ i≤n` wijvi)\nand after ( ∑ i=1≤k w̃ijvi) DPP pruning. That is, we wish to solve for all neurons in the next layer (indexed by j, 1 ≤ j ≤ n`+1):\nmin w̃ij∈R ∥∥∥∥∑ki=1 w̃ijvi −∑n`i=1 wijvi ∥∥∥∥ 2 = min δij∈R ∥∥∥∥∑ki=1 δijvi −∑n`i=k+1 wijvi ∥∥∥∥ 2 . (3)\nEq. 3 is minimized when ∑ i≤k δijvi is the projection of ∑ i>k wijvi onto the linear space generated by {v1, . . . , vk}. Thus, to minimize Eq. 3, we obtain the coefficients αij that for j > k minimize ∥∥∥∥vj −∑ki=1 αijvi ∥∥∥∥ 2\nand then update the weights by setting\n∀i, 1 ≤ i ≤ k, w̃ij = wij + ∑n`\nr=k+1 αirwrj (4)\nUsing ordinary least squares to obtain α, the reweighting procedure runs in O(|T |n2` + n3`)."
+  }, {
+    "heading": "3 Experimental results",
+    "text": "To quantify the performance of our algorithm, we present below the results of experiments1 on common datasets for neural network evaluation: MNIST (LeCun and Cortes, 2010), MNIST ROT (Larochelle et al., 2007) and CIFAR-10 (Krizhevsky, 2009).\nAll networks were trained up until a certain training error threshold, using softmax activation on the output layer and sigmoids on other layers; see Table 1 for more details. In all following plots, error bars represent standard deviations."
+  }, {
+    "heading": "3.1 Pruning and reweighting analysis",
+    "text": "To validate our claims on the benefits of using DPPs and fusing neurons, we compare these steps separately and also simultaneously against random pruning, where a fixed number of neurons are chosen uniformly at random from a layer and then removed, with and without our fusing step. We present performance results on the test data; of course, both DPP selection and reweighting are based solely on information drawn from the training data.\nFigure 1 visualizes neuron activations in the first hidden layer of a network trained on the MNIST dataset. Each column in the plotted heat maps represents the activation of a neuron on instances of digits 0 through 9. Figure 1a shows the activations of the 50 neurons sampled using a k-DPP (k = 50) defined over the first hidden layer, whereas Figure 1b shows the activations of the first 50 neurons of the same layer. Figure 1b contains multiple similar columns: for example, there are 3 entirely green columns, corresponding to three neurons that saturate to 1 on each of the 10 instances. In contrast, the DPP samples neurons with diverse activations, and Figure 1a shows no similar redundancy.\nFigures 2 through 4 illustrate the impact of each step of Divnet separately. Figure 2 shows the impact of pruning on test error using DPP pruning and random pruning (in which a fixed number of neurons are selected uniformly at random and removed from the network). DPPpruned networks have consistently better training and test errors than networks pruned at random for the same final size. As expected, the more neurons are maintained, the less the error suffers from the pruning procedure; however, the pruning is in both cases destructive, and is seen to significantly increase the error rate.\nThis phenomenon can be mitigated by our reweighting procedure, as shown in Figure 3. By fusing and reweighting neurons after pruning, the training and test errors are considerably reduced, even when 90% of the layer’s neurons are removed. Pruning also reduces variability of the results: the standard deviation for the results of the reweighted networks is significantly smaller than for the non-reweighted networks, and may be thus seen as a way to regularize neural networks.\nFinally, Figure 4 illustrates the performance of Divnet (DPP pruning and reweighting) compared to random pruning with reweighting. Although Divnet’s performance is ultimately better, the reweighting procedure also dramatically benefits the networks that were pruned randomly.\nWe also ran these experiments on networks for shrinking the second layer while maintaining the first layer intact. The results are similar, and may be found in Appendix A. Notably, we found that the gap between Divnet and random pruning’s performances was much wider\n1Run in MATLAB, based on the code from DeepLearnToolBox (https://github.com/ rasmusbergpalm/DeepLearnToolbox) and Alex Kulesza’s code for DPPs (http://web.eecs.umich. edu/~kulesza/), on a Linux Mint system with 16GB of RAM and an i7-4710HQ CPU @ 2.50GHz.\nwhen pruning the last layer. We believe this is due to the connections to the output layer being learned much faster, thus letting a small, diverse subset of neurons (hence well suited to DPP sampling) in the last hidden layer take over the majority of the computational effort."
+  }, {
+    "heading": "3.2 Performance analysis",
+    "text": "Much attention has been given to reducing the size of neural networks in order to reduce memory consumption. When using neural nets locally on devices with limited memory, it is crucial that their memory footprint be as small as possible.\nNode importance-based pruning (henceforth “importance pruning”) is one of the most intuitive ways to cut down on network size. Introduced to deep networks by He et al. (2014), this method removes the neurons whose calculations impact the network the least. Among the three solutions to estimating a neuron’s importance discussed in He et al. (2014), the sum the output weights of each neuron (the ‘onorm’ function) provided the best results:\nonorm(ni) := 1\nn`+1\n∑n` j=1 |w`+1ij |.\nFigure 5 compares the test data error of the networks after being pruned using importance pruning that uses onorm as a measure of relevance against Divnet. Since importance pruning deletes neurons that contribute the least to the next layer’s computations, it performs well up to a certain point; however, when pruning a significant amount of neurons, this pruning procedure even removes neurons performing essential calculations, hurting the network’s performance significantly. However, since Divnet fuses redundant neurons, instead of merely deleting them its resulting network delivers much better performance even with very large amounts of pruning.\nIn order to illustrate numerically the impact of Divnet on network performance, Table 2 shows network training and test errors (between 0 and 1) under various compression rates obtained with Divnet, without additional retraining (that is, the pruned network is not retrained to re-optimize its weights)."
+  }, {
+    "heading": "3.3 Discussion and Remarks",
+    "text": "◦ In all experiments, sampling and reweighting ran several orders of magnitude faster than training; reweighting required significantly more time than sampling. If Divnet must be further sped up, a fraction of the training set can be used instead of the entire set, at the possible cost of subsequent network performance.\n◦ When using DPPs with a Gaussian RBF kernel, sampled neurons need not have linearly independent activation vectors: not only is the DPP sampling probabilistic, the kernel itself is not scale invariant. Indeed, for two collinear but unequal activation vectors, the corresponding coefficient in the kernel will not be 1 (or γ with the L← γL update).\n◦ In our work, we selected a subset of neurons by sampling once from the DPP. Alternatively, one could sample a fixed amount of times, using the subset with the highest likelihood (i.e., largest det(LY )), or greedily approximate the mode of the DPP distribution. ◦ Our reweighting procedure benefits competing pruning methods as well (see Figure 4). ◦ We also investigated DPP sampling for pruning concurrently with training iterations,\nhoping that this might allow us to detect superfluous neurons before convergence, and thus reduce training time. However, we observed that in this case DPP pruning, with or without reweighting, did not offer a significant advantage over random pruning. ◦ Consistently over all datasets and networks, the expected sample size from the kernel L′ was much smaller for the last hidden layer than for other layers. We hypothesize that this is caused by the connections to the output layer being learned faster than the others, allowing a small subset of neurons to take over the majority of the computational effort."
+  }, {
+    "heading": "4 Future work and conclusion",
+    "text": "Divnet leverages similarities between the behaviors of neurons in a layer to detect redundant parameters and merge them, thereby enforcing neuronal diversity within each hidden layer. Using Divnet, large, redundant networks can be shrunk to much smaller structures without impacting their performance and without requiring further training. We believe that the performance profile of Divnet will remain similar even when scaling to larger scale datasets and networks, and hope to include results on bigger problems (e.g., Imagenet (Russakovsky et al., 2015)) in the future.\nMany hyper-parameters can be tuned by a user as per need include: the number of remaining neurons per layer can be fixed manually; the precision of the reweighting and the sampling procedure can be tuned by choosing how many training instances are used to generate the DPP kernel and the reweighting coefficients, creating a trade-off between accuracy, memory management, and computational time. Although Divnet requires the user to select the size of the final network, we believe that a method where no parameter explicitly needs to be tuned is worth investigating. The fact that DPPs can be augmented to also reflect\ndifferent distributions over the sampled set sizes (Kulesza and Taskar, 2012, §5.1.1) might be leveraged to remove the burden of choosing the layer’s size from the user.\nImportantly, Divnet is agnostic to most parameters of the network, as it only requires knowledge of the activation vectors. Consequently, Divnet can be easily used jointly with other pruning/memory management methods to reduce size. Further, the reweighting procedure is agnostic to how the pruning is done, as shown in our experiments.\nFurthermore, the principles behind Divnet can theoretically also be leveraged in non fullyconnected settings. For example, the same diversifying approach may also be applicable to filters in CNNs: if a layer of the CNN is connected to a simple, feed-forward layer – such as the S4 layer in LeCun et al. (1998) – by viewing each filter’s activation values as an vector and applying Divnet on the resulting activation matrix, one may be able to remove entire filters from the network, thus significantly reducing CNN’s memory footprint.\nFinally, we believe that investigating DPP pruning with different kernels, such as kernels invariant to the scaling of the activation vectors, or even kernels learned from data, may provide insight into which interactions between neurons of a layer contain the information necessary for obtaining good representations and accurate classification. This marks an interesting line of future investigation, both for training and representation learning."
+  }, {
+    "heading": "Acknowledgments",
+    "text": "This work is partly supported by NSF grant: IIS-1409802."
+  }, {
+    "heading": "A Pruning the second layer",
+    "text": "B Influence of the β parameter on network size and error"
+  }, {
+    "heading": "C Comparison of Divnet to importance-based pruning and random pruning on the CIFAR-10 dataset",
+    "text": ""
+  }],
+  "year": 2017,
+  "references": [{
+    "title": "Compressing neural networks with the hashing",
+    "authors": ["W. Chen", "J.T. Wilson", "S. Tyree", "K.Q. Weinberger", "Y. Chen"],
+    "venue": "trick. CoRR,",
+    "year": 2015
+  }, {
+    "title": "Low precision arithmetic for deep learning",
+    "authors": ["M. Courbariaux", "Y. Bengio", "J. David"],
+    "venue": "CoRR, abs/1412.7024,",
+    "year": 2014
+  }, {
+    "title": "Predicting parameters in deep learning",
+    "authors": ["M. Denil", "B. Shakibi", "L. Dinh", "M. Ranzato", "N. de Freitas"],
+    "venue": "CoRR, abs/1306.0543,",
+    "year": 2013
+  }, {
+    "title": "Deep learning with limited numerical precision",
+    "authors": ["S. Gupta", "A. Agrawal", "K. Gopalakrishnan", "P. Narayanan"],
+    "venue": "CoRR, abs/1502.02551,",
+    "year": 2015
+  }, {
+    "title": "Learning both weights and connections for efficient neural networks",
+    "authors": ["S. Han", "J. Pool", "J. Tran", "W.J. Dally"],
+    "venue": "CoRR, abs/1506.02626,",
+    "year": 2015
+  }, {
+    "title": "Second order derivatives for network pruning: Optimal brain surgeon",
+    "authors": ["B. Hassibi", "D.G. Stork", "S.C.R. Com"],
+    "venue": "In Advances in Neural Information Processing Systems",
+    "year": 1993
+  }, {
+    "title": "Reshaping deep neural network for fast decoding by node-pruning",
+    "authors": ["T. He", "Y. Fan", "Y. Qian", "T. Tan", "K. Yu"],
+    "venue": "In Acoustics, Speech and Signal Processing (ICASSP),",
+    "year": 2014
+  }, {
+    "title": "Distilling the knowledge in a neural network",
+    "authors": ["G.E. Hinton", "O. Vinyals", "J. Dean"],
+    "venue": "CoRR, abs/1503.02531,",
+    "year": 2015
+  }, {
+    "title": "Determinantal processes and independence",
+    "authors": ["J.B. Hough", "M. Krishnapur", "Y. Peres", "B. Virág"],
+    "venue": "Probability Surveys,",
+    "year": 2006
+  }, {
+    "title": "Fast determinantal point process sampling with application to clustering",
+    "authors": ["B. Kang"],
+    "venue": "In Advances in Neural Information Processing Systems",
+    "year": 2013
+  }, {
+    "title": "Learning multiple layers of features from tiny images",
+    "authors": ["A. Krizhevsky"],
+    "venue": "Technical report,",
+    "year": 2009
+  }, {
+    "title": "k-DPPs: Fixed-size determinantal point processes",
+    "authors": ["A. Kulesza", "B. Taskar"],
+    "venue": "In Proceedings of the 28th International Conference on Machine Learning,",
+    "year": 2011
+  }, {
+    "title": "Determinantal point processes for machine learning",
+    "authors": ["A. Kulesza", "B. Taskar"],
+    "venue": "Foundations and Trends in Machine Learning,",
+    "year": 2012
+  }, {
+    "title": "An empirical evaluation of deep architectures on problems with many factors of variation",
+    "authors": ["H. Larochelle", "D. Erhan", "A. Courville", "J. Bergstra", "Y. Bengio"],
+    "venue": "In Proceedings of the 24th International Conference on Machine Learning,",
+    "year": 2007
+  }, {
+    "title": "Optimal brain damage",
+    "authors": ["Y. LeCun", "J.S. Denker", "S.A. Solla"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 1990
+  }, {
+    "title": "Gradient-based learning applied to document recognition",
+    "authors": ["Y. LeCun", "L. Bottou", "Y. Bengio", "P. Haffner"],
+    "venue": "In Proceedings of the IEEE,",
+    "year": 1998
+  }, {
+    "title": "Efficient sampling for k-determinantal point processes",
+    "authors": ["C. Li", "S. Jegelka", "S. Sra"],
+    "year": 2015
+  }, {
+    "title": "The coincidence approach to stochastic point processes",
+    "authors": ["O. Macchi"],
+    "venue": "Advances in Applied Probability,",
+    "year": 1975
+  }, {
+    "title": "Gradient-based hyperparameter optimization through reversible learning",
+    "authors": ["D. Maclaurin", "D. Duvenaud", "R.P. Adams"],
+    "venue": "In Proceedings of the 32nd International Conference on Machine Learning,",
+    "year": 2015
+  }, {
+    "title": "ImageNet Large Scale Visual Recognition Challenge",
+    "authors": ["O. Russakovsky", "J. Deng", "H. Su", "J. Krause", "S. Satheesh", "S. Ma", "Z. Huang", "A. Karpathy", "A. Khosla", "M. Bernstein", "A.C. Berg", "L. Fei-Fei"],
+    "venue": "International Journal of Computer Vision (IJCV),",
+    "year": 2015
+  }, {
+    "title": "Low-rank matrix factorization for deep neural network training with high-dimensional output targets",
+    "authors": ["T.N. Sainath", "B. Kingsbury", "V. Sindhwani", "E. Arisoy", "B. Ramabhadran"],
+    "venue": "In IEEE International Conference on Acoustics, Speech and Signal Processing,",
+    "year": 2013
+  }, {
+    "title": "A determinantal point process latent variable model for inhibition in neural spiking data",
+    "authors": ["J. Snoek", "R. Zemel", "R.P. Adams"],
+    "venue": "Advances in Neural Information Processing Systems",
+    "year": 2013
+  }, {
+    "title": "Data-free parameter pruning for deep neural networks",
+    "authors": ["S. Srinivas", "R.V. Babu"],
+    "venue": "CoRR, abs/1507.06149,",
+    "year": 2015
+  }],
+  "id": "SP:2dfef5635c8c44431ca3576081e6cfe6d65d4862",
+  "authors": [{
+    "name": "Zelda Mariet",
+    "affiliations": []
+  }],
+  "abstractText": "We introduce Divnet, a flexible technique for learning networks with diverse neurons. Divnet models neuronal diversity by placing a Determinantal Point Process (DPP) over neurons in a given layer. It uses this DPP to select a subset of diverse neurons and subsequently fuses the redundant neurons into the selected ones. Compared with previous approaches, Divnet offers a more principled, flexible technique for capturing neuronal diversity and thus implicitly enforcing regularization. This enables effective auto-tuning of network architecture and leads to smaller network sizes without hurting performance. Moreover, through its focus on diversity and neuron fusing, Divnet remains compatible with other procedures that seek to reduce memory footprints of networks. We present experimental results to corroborate our claims: for pruning neural networks, Divnet is seen to be notably superior to competing approaches.",
+  "title": "Diversity Networks: Neural Network Compression Using Deter- minantal Point Processes"
+}
