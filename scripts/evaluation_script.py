@@ -77,4 +77,7 @@ def evaluate(test_annotation_file, user_submission_file, phase_codename, **kwarg
 
 if __name__ == "__main__":
     # execute only if run as a script
-    evaluate('../annotations/test_annotations_testsplit.json', '../annotations/test_submission_testsplit.json')
+    # 1st arg: ground truth test file, 2nd arg: predicted test file summaries
+    evaluate('./annotations/my_test_ground_truth.json', \
+             './annotations/my_longsumm_test_SEC_news_pretrained_allenai_output.json', \
+             "test")
