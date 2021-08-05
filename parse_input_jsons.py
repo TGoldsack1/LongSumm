@@ -5,7 +5,7 @@ Author: Tomas Goldsack
 
 import os, json
 
-paper_json_dir = "./inputs/json/"
+paper_json_dir = "./json_inputs/"
 summaries_dir = "./abstractive_summaries/by_clusters/"
 
 # Load in as dictionaries
