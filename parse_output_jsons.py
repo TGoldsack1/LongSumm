@@ -14,9 +14,11 @@ input_json_dir = "./predicted_summaries/"
 
 #input_json_file = "simplified_my_longsumm_test_AIC_news_pretrained_allenai_output.json"
 #input_json_file = "simplified_my_longsumm_test_AIC_my_pretrained_allenai_output.json"
-input_json_file = "simplified_my_longsumm_test_SEC_my_pretrained_allenai_output.json"
-input_json_file = "simplified_my_longsumm_test_SEC_news_pretrained_allenai_output.json"
+# input_json_file = "simplified_my_longsumm_test_SEC_my_pretrained_allenai_output.json"
+# input_json_file = "simplified_my_longsumm_test_SEC_news_pretrained_allenai_output.json"
 
+input_json_file = "simplified_my_longsumm_test_SEC_news_pretrained_BART_output.jsonl"
+#input_json_file = "simplified_my_longsumm_test_AIC_news_pretrained_BART_output.jsonl"
 
 input_json_filepath = input_json_dir + input_json_file
 
@@ -31,7 +33,7 @@ input_json_lines = input_json_file_contents.readlines()
 input_json_file_contents.close()
 
 
-if "allenai" in input_json_file:
+if "allenai" in input_json_file or "BART" in input_json_file:
   
   output_dict_ground_truth = {}
   output_dict_simple_pred = {}
