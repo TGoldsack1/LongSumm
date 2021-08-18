@@ -3,7 +3,7 @@ Parses the json input files into different formats to be used a model inputs.
 Author: Tomas Goldsack
 '''
 
-import os, json
+import os, json, ast
 
 paper_json_dir = "./json_inputs/"
 summaries_dir = "./abstractive_summaries/by_clusters/"
