@@ -1,0 +1,301 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Zhang et al. (2017a) found that deep convolutional neural networks (CNNs) are capable of memorizing the entire data even with corrupted labels, where some or all true labels are replaced with random labels. It is a consensus that deeper CNNs usually lead to better performance. However, the ability of deep CNNs to overfit or memorize the corrupted labels can lead to very poor generalization performance (Zhang et al., 2017a). Recently, Neyshabur et al. (2017) and Arpit et al. (2017) proposed deep learning generalization theories to explain this interesting phenomenon.\nThis paper studies how to overcome the corrupted label for deep CNNs, so as to improve generalization performance\n1Google Inc., Mountain View, United States 2Stanford University, Stanford, United States. Correspondence to: Lu Jiang <lujiang@google.com>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\non the clean test data. Although learning models on weakly labeled data might not be novel, improving deep CNNs on corrupted labels is clearly an under-studied problem and worthy of exploration, as deep CNNs are more prone to overfitting and memorizing corrupted labels (Zhang et al., 2017a). To address this issue, we focus on training very deep CNNs from scratch, such as resnet-101 (He et al., 2016) or inception-resnet (Szegedy et al., 2017) which has a few hundred layers and orders-of-magnitude more parameters than the number of training samples. These networks can achieve the state-of-the-art result but perform poorly when trained on corrupted labels.\nInspired by the recent success of Curriculum Learning (CL), this paper tackles this problem using CL (Bengio et al., 2009), a learning paradigm inspired by the cognitive process of human and animals, in which a model is learned gradually using samples ordered in a meaningful sequence. A curriculum specifies a scheme under which training samples will be gradually learned. CL has successfully improved the performance on a variety of problems. In our problem, our intuition is that a curriculum, similar to its role in education, may provide meaningful supervision to help a student overcome corrupted labels. A reasonable curriculum can help the student focus on the samples whose labels have a high chance of being correct.\nHowever, for the deep CNNs, we need to address two limitations of the existing CL methodology. First, existing curriculums are usually predefined and remain fixed during training, ignoring the feedback from the student. The learning procedure of deep CNNs is quite complicated, and may not be accurately modeled by the predefined curriculum. Second, the alternating minimization, commonly used in CL and self-paced learning (Kumar et al., 2010) requires alternative variable updates, which is difficult for training very deep CNNs via mini-batch stochastic gradient descent.\nTo this end, we propose a method to learn the curriculum from data by a network called MentorNet. MentorNet learns a data-driven curriculum to supervise the base deep CNN, namely StudentNet. MentorNet can be learned to approximate an existing predefined curriculum or discover new data-driven curriculums from data. The learned data-driven curriculum can be updated a few times taking into account of\nthe StudentNet’s feedback. Whenever MentorNet is learned or updated, we fix its parameter and use it together with StudentNet to minimize the learning objective, where MentorNet controls the timing and attention to learn each sample. At the test time, StudentNet makes predictions alone without MentorNet.\nThe proposed method improves existing curriculum learning in two aspects. First, our curriculum is learned from data rather than predefined by human experts. It takes into account of the feedback from StudentNet and can be dynamically adjusted during training. Intuitively, this resembles a “collaborative” learning paradigm, where the curriculum is determined by the teacher and student together. Second, in our algorithm, the learning objective is jointly minimized using MentorNet and StudentNet via mini-batch stochastic gradient descent. Therefore, the algorithm can be conveniently parallelized to train deep CNNs on big data. We show the convergence and empirically verify it on largescale benchmarks.\nWe verify our method on four benchmarks. Results show that it can significantly improve the performance of deep CNNs trained on both controlled and real-world corrupted training data. Notably, to the best of our knowledge, it achieves the best-published result on WebVision (Li et al., 2017a), a large benchmark containing 2.2 million images of real-world noisy labels. To summarize, the contribution of this paper is threefold:\n• We propose a novel method to learn data-driven curriculums for deep CNNs trained on corrupted labels.\n• We discuss an algorithm to perform curriculum learning for deep networks via mini-batch stochastic gradient descent. • We verify our method on 4 benchmarks and achieve the best-published result on the WebVision benchmark."
+  }, {
+    "heading": "2. Preliminary on Curriculum Learning",
+    "text": "We formulate our problem based on the model in (Kumar et al., 2010) and (Jiang et al., 2015). Consider a classification problem with the training set D = {(x1,y1), · · · , (xn,yn)}, where xi denotes the ith observed sample and yi ∈ {0, 1}m is the noisy label vector over m classes. Let gs(xi,w) denote the discriminative function of a neural network called StudentNet, parameterized by w ∈ Rd. Further, let L(yi, gs(xi,w)), a mdimensional column vector, denote the loss over m classes. Introduce the latent weight variable, v ∈ Rn×m, and optimize the objective:\nmin w∈Rd,v∈[0,1]n×m\nF(w,v) =\n1\nn n∑ i=1 vTi L(yi,gs(xi,w)) +G(v;λ) + θ‖w‖22 (1)\nwhere ‖·‖2 is the l2 norm for weight decay, and data augmentation and dropout are subsumed inside gs. vi ∈ [0, 1]m×1 is a vector to represent the latent weight variable for the i-th sample. The functionG defines a curriculum, parameterized by λ. This paper focuses on the one-hot label. For notation convenience, denote the loss L(yi,gs(xi,w)) = `i, vi as a scalar vi, and yi as an integer yi ∈ [1,m].\nIn the existing literature, alternating minimization (Csiszar, 1984), or its related variants, is commonly employed to minimize the training objective, e.g. in (Kumar et al., 2010; Ma et al., 2017a; Jiang et al., 2014). This is an algorithmic paradigm where w and v are alternatively minimized, one at a time while the other is held fixed. When v is fixed, the weighted loss is typically minimized by stochastic gradient descent. When w is fixed, we compute vk = arg minv F(vk−1,wk) using the most recently updated wk at epoch k. For example, Kumar et al. (2010) employed G(v) = −λ‖v‖1. When w is fixed, the optimal v can be easily derived by:\nv∗i = 1(`i ≤ λ),∀i ∈ [1, n], (2) where 1 is the indicator function. Eq. (2) intuitively explains the predefined curriculum in (Kumar et al., 2010), known as self-paced learning. First, when updating v with a fixed w, a sample of smaller loss than the threshold λ is treated as an “easy” sample, and will be selected in training (v∗i = 1). Otherwise, it will not be selected (v∗i = 0). Second, when updating w with a fixed v, the classifier is trained only on the selected “easy” samples. The hyperparameter λ controls the learning pace and corresponds to the “age” of the model. When λ is small, only samples of small loss will be considered. As λ grows, more samples of larger loss will be gradually added to train a more “mature” model.\nAs shown, the function G specifies a curriculum, i.e., a sequence of samples with their corresponding weights to be used in training. When w is fixed, its optimal solution, e.g. Eq. (2), computes the time-varying weight that controls the timing and attention to learn every sample. Recent studies discovered multiple predefined curriculums and verified them in many real-world applications, e.g., in (Fan et al., 2017; Ma et al., 2017a; Sangineto et al., 2016; Fan et al., 2017; Chang et al., 2017).\nThis paper studies learning curriculum from data. In the rest of this paper, Section 3 presents an approach to learn data-driven curriculum by MentorNet. Section 4 discusses an algorithm to optimize Eq. (1) using MentorNet and StudentNet together via mini-batch training."
+  }, {
+    "heading": "3. Learning Curriculum from Data",
+    "text": "Existing curriculums are either predetermined as an analytic expression of G or a function to compute sample weights. Such predefined curriculums cannot be adjusted accordingly, taking into account of the feedback from the student. This\nsection discusses a new way to learn data-driven curriculum by a neural network, called MentorNet. The MentorNet gm is learned to compute time-varying weights for each training sample. Let Θ denote the parameters in gm. Given a fixed w, our goal is to learn an Θ∗ to compute the weight:\ngm(zi; Θ ∗) = arg min vi∈[0,1] F(w,v),∀i ∈ [1, n] (3)\nwhere zi = φ(xi, yi,w) indicates the input feature to MentorNet about the i-th sample."
+  }, {
+    "heading": "3.1. Learning Curriculum",
+    "text": "MentorNet can be learned to 1) approximate existing curriculums or 2) discover new curriculums from data.\nLearning to approximate predefined curriculums. Our first task is to learn a MentorNet to approximate a predefined curriculum. To do so, we minimize the objective in Eq. (1):\narg min Θ ∑ (xi,yi)∈D gm(zi; Θ)`i +G(gm(zi; Θ);λ) (4)\nEq. (4) applies for both convex and non-convex G. This paper employs the following predefined curriculum. It is derived from (Jiang et al., 2015) and works well in our experiments. As will be discussed later, it is also related to robust non-convex penalties.\nG(v;λ) = n∑ i=1 1 2 λ2v 2 i − (λ1 + λ2)vi, (5)\nwhere λ1, λ2 ≥ 0 are hyper-parameters. As G is convex, there exists a closed-form solution for the optimal value of Eq. (3). Given a fixed w, define Fw(v) = ∑n i=1 f(vi):\nf(vi) = vi`i + 1\n2 λ2v\n2 i − (λ1 + λ2)vi (6)\nThe minima are obtained at ∇vFw(v) = 0, and can be decoupled by setting ∂f/∂vi = 0. We then have:\ngm(zi; Θ ∗) = { 1(`i ≤ λ1) λ2 = 0 min(max(0, 1− `i−λ1λ2 ), 1) λ2 6= 0 ,\n(7) where Θ∗ is the optimal MentorNet parameter obtained by SGD. The closed-form solution in Eq. (7) gives some intuitions about the curriculum. When λ2 = 0, it is similar to self-paced learning (Kumar et al., 2010) i.e. only “easy” samples of `i < λ1 will be selected in training (gm(zi; Θ∗) = 1). When λ2 6= 0, samples of loss `i ≥ λ2 +λ1 will not be selected in training. These samples represent the “hard” samples of greater loss. Otherwise, samples will be weighted linearly w.r.t. 1− (`i − λ1)/λ2. As in (Kumar et al., 2010), the hyper-parameters λ1 and λ2 control the learning pace.\nLearning data-driven curriculums. Our next task is to learn a curriculum solely derived from labeled data. To this end, Θ is learned on another dataset D′ =\n{(φ(xi, yi,w), v∗i )}, where (xi, yi) is sampled from D and |D′| |D|. v∗i is a given annotation and we assume it approximates the optimal weight, i.e., v∗i ' arg minvi∈[0,1] F(v,w). In this paper, we assign binary labels to v∗i , where v ∗ i = 1 iff yi is a correct label. As v∗i is binary, Θ is learned by minimizing the cross-entropy loss between v∗i and g(zi; Θ). Intuitively, this process is similar to a mock test for the teacher (MentorNet) to learn to update her teaching strategy (curriculum). The student (StudentNet) provides features φ(·, ·,w) for the mock test using the latest model w. The teacher can learn an updated curriculum from the data to better supervise the latest student model. The learned curriculum is jointly determined by the teacher and student together.\nThe information on the correct label may not always be available on the target dataset D. In this case, we learn the curriculum on a different small dataset where the correct labels are available. Intuitively, it resembles first learning a teaching strategy with the student on one topic and transfer the strategy on a similar topic. Empirically, Section 5.1 substantiates that the learned curriculum on a small subset of CIFAR-10 can be applied to the target CIFAR-100 dataset.\nA burn-in period is introduced before learning Θ. In the first 20% training epoch of the StudentNet, MentorNet is initialized and fixed as gm(zi; Θ∗) = ri, where ri ∼ Bernoulli(p) is the Bernoulli random variable. This is equivalent to randomly dropping out p% training samples. We found that the burn-in process helps StudentNet stabilize the prediction and focus on learning simple and common patterns.\nMentorNet architecture. We found that MentorNet can have a simple architecture. Appendix D shows that even MentorNet based on the two-layer perceptron can reasonably approximate the existing curriculum in the literature. Nevertheless, we use a MentorNet architecture shown in Fig. 1, which works reasonably well compared to classical network architectures. It takes the input of a mini-batch of samples, and outputs their corresponding sample weights. The feature zi = φ(xi, yi,w) includes the loss, loss difference to the moving average, label and epoch percentage. `pt maintains an exponential moving average on the p-th percentile of the loss in each mini-batch. For a sample, its loss ` and loss difference ` − `pt over the last few epochs can be encoded by a bidirectional LSTM network to capture the prediction variance (Chang et al., 2017). We verify the LSTM encoder in the experiments in Appendix D. For simplicity, we set the step size of the LSTM to 1 in Section 5.1 and only consider the loss and the loss difference of the current epoch.\nThe label and the training epoch percentage are encoded by two separate embedding layers. The epoch percentage is represented as an integer between 0 and 99. It is used to indicate the StudentNet’s training progress, where 0 rep-\nresents the first and 99 represents the last training epoch. The concatenated outputs from the LSTM and the embedding layers are fed into two fully-connected layers fc1, fc2, where fc2 uses the sigmoid activation to ensure the output weights bounded between 0 and 1. The last layer in Fig. 1 is a probabilistic sampling layer, and is used to implement the sample dropout in the burn-in process on the already learned MentorNet."
+  }, {
+    "heading": "3.2. Discussions",
+    "text": "MentorNet is a general framework for both predefined and data-driven curriculum learning, where various curriculums can be learned by the same MentorNet structure with different parameters. This framework is conceptually general and practically flexible as we can switch curriculums by attaching different MentorNets without modifying the pipeline. Therefore, we also learn MentorNets for predefined curriculums. For predefined curriculums where G is unknown, we directly minimize the error between the MentorNet’s outputs and desired weights. For example, the desired weight for focal loss (Lin et al., 2017b) is computed by:\nv∗i = [1− exp{−`i}]γ , (8) where γ is a hyperparameter for smoothing the distribution.\nThis paper tackles the problem of overcoming corrupted labels. It is interesting to analyze why the learned curriculum can improve the generalization performance. It turns out that StudentNet, when jointly learned with MentorNet, may optimize an underlying robust objective and the objective is also related to the robust M-estimator (Huber, 2011).\nTo show this, let v∗(λ, x) represent the optimal weight function for a loss variable x, and we define:\nv∗(λ, x) = argminv∈[0,1] vx+G(v, λ). (9)\nAs gm is an approximator to Eq. (9), its property can then be analyzed by the function v∗(λ, x). Meng et al.(2015) investigated the insights of self-paced objective function, and proved that the optimization of SPL algorithm is intrinsically equivalent to minimizing a robust loss function. They showed that given a fixed λ and a decreasing v∗(λ, x) with respect to x, the underlying objective of Eq. (1) can be\nobtained by:\nFλ(w) = 1\nn n∑ i=1 ∫ `i 0 v∗(λ, x)dx, (10)\nBased on it, the underlying learning objective of the curriculum in Eq. (5) can then be derived. Remark 1. When λ1, λ2 are fixed and λ2 6= 0, the underlying objective function of the curriculum in Eq. (5) is calculated from:\nFλ(w)= 1\nn n∑ i=1  `i `i ≤ λ1 (λ2 + 2λ1)/2 `i ≥ λ2 + λ1 θ`i−`2i /(2λ2)− (θ−1)2λ2 2 otherwise\n(11) where θ = (λ2 + λ1)/λ2. When θ = 1 it is equivalent to the minimax concave penalty (Zhang, 2010).\nAs shown in Eq. (11), the underlying objective has a form of Fλ(w) = ∑ i ρ(`i)/n, where ρ is the penalty function in M-estimator (Candes et al., 2008). Particularly, when θ = 1, ρ(`) is equivalent to the minimax concave plus penalty (Zhang, 2010), a popular non-convex robust loss. The result indicates the learned MentorNet that approximates our predefined curriculum in Eq. (5) leads to an underlying robust objective of the StudentNet.\nFor the data-driven curriculum, if the learned MentorNet satisfies certain conditions, we have: Proposition 1. Suppose (x, y) denotes a training sample and its corrupted label. For simplicity, let the MentorNet input φ(x, y,w) = ` be the loss computed by the StudentNet model parameter w. The MentorNet gm(`; Θ) = v, where v is the sample weight. If gm decreases with respect to `, then there exists an underlying robust objective F :\nF (w) = 1\nn n∑ i=1 ρ(`i),\nwhere ρ(`i) = ∫ `i\n0 gm(x; Θ)dx. In the special cases, ρ(`)\ndegenerates to the robust M-estimator: Huber (Huber et al., 1964) and the log-sum penalty (Candes et al., 2008).\nThe proposition indicates that there exist some learned MentorNets that are related to the robust M-estimator. On noisy\ndata, the effect of the robust objective is evident, i.e., preventing StudentNet from being dominated by corrupted labels. Fig. 2 visualizes curves of the sample loss ` = yi−gs(xi,w) and the learning objective for the Huber loss (Huber et al., 1964), log-sum penalty (Candes et al., 2008), self-paced (Kumar et al., 2010), and our learned data-driven curriculum. We use the best learned curriculum Θ∗ on CIFAR-10 in our experiments and plot |gm(φ(x, y,w); Θ∗) × `| since the G in the objective function is unknown. As shown, all curves are robust to great loss to different extents. The corrupted labels in our problem are harmful. As the sample loss grows bigger beyond some value, MentorNet starts to sharply decrease the sample’s weight. The subtlety of learned curriculum is difficult to be predefined by the analytic expression. Proposition 1 does not guarantee there is an underlying robust objective for every learned MentorNet. Instead, it shows MentorNet’s capability of learning such robust objective."
+  }, {
+    "heading": "4. The Algorithm",
+    "text": "The alternating minimization algorithm (Csiszar, 1984) used in related work is intractable for deep CNNs, especially on big datasets, for two important reasons. First, in the subroutine of minimizing w when fixing v, stochastic gradient descent often takes many steps before converging. This means that it can take a long time before moving past this single sub-step. However, such computation is often wasteful, particularly in the initial part of training, because, when v is far away from the optimal point, there is not much gain in finding the exact optimal w corresponding to this v. Second, the subroutine of minimizing v when fixing w is often difficult, because the fixed vector v may not only consume a considerable amount of the memory but also hinder the parallel training on multiple machines. Therefore, optimizing the objective with deep CNNs requires some thought on the algorithmic level.\nTo minimize Eq. (1), we propose an algorithm called SPADE (Scholastic gradient PArtial DEscent). The algorithm optimizes the StudentNet model parameter w jointly with a given MentorNet. It provides a simple and elegant way to minimize w and v stochastically over mini-batches. As a general approach, it can also take an input of G. Let Ξt = {(xj , yj)}bj=1 denotes a mini-batch of b samples, fetched uniformly at random and vtΞ = [v t 1, ..., v t b] represent the sample weights in Ξt. The MentorNet computes:\nvtΞ =gm(φ(Ξt,w t−1))=arg min vΞ F(wt−1,vt−1), (12)\nwhere φ is the feature extraction function defined in Eq. (3). Θ denotes the learned MentorNet discussed in Section 3.1.\nAs shown in Algorithm 1, for w, a stochastic gradient is computed (via a mini-batch) and applied (Step 12), where αt is the learning rate. For the latent weight variables v, gradient descent is only applied to a small subset thereof\nparameters corresponding only to the mini-batch (Step 9 or 11). The partial gradient update on weight parameters is performed when G is used (Step 9). Otherwise, we directly apply the weights computed by the learned MentorNet (Step 11). In both cases, the weights are computed on-the-fly within a mini-batch and thus do not need to be fixed. As a result, the algorithm can be conveniently parallelized across multiple machines.\nAlgorithm 1 SPADE for minimizing Eq. (1) Input :Dataset D, a predefined G or a learned gm(·; Θ) Output :The model parameter w of StudentNet.\n1 Initialize w0,v0, t = 0 2 while Not Converged do 3 Fetch a mini-batch Ξt uniformly at random 4 For every (xi, yi) in Ξt compute φ(xi, yi,wt) 5 if update curriculum then 6 Θ← Θ∗, where Θ∗ is learned in Sec. 3.1 7 end 8 if G is used then 9 vtΞ ← vt−1Ξ − αt∇vF(w\nt−1,vt−1)|Ξt 10 end 11 else vtΞ ← gm(φ(Ξt,wt−1); Θ) ; 12 wt ← wt−1 − αt∇wF(wt−1,vt)|Ξt 13 t← t+ 1 14 end 15 return wt\nThe curriculum can change during training. MentorNet is updated a few times in Algorithm 1. In Step 6, the MentorNet parameter Θ is updated to adapt to the most recent model parameters of StudentNet. In experiments, we update Θ twice after the learning rate is changed. Each time, a datadriven curriculum is learned from the data generated by the most recent w using the method discussed in Section 3.1. The update is consistent with existing curriculum learning methodology (Bengio et al., 2009; Kumar et al., 2010) and the difference here is that for each update, the curriculum is learned rather than specified by human experts.\nUnder standard assumptions, Theorem 1 shows that the algorithm stabilizes and converges to a stationary point (convergence to global/local minima cannot be guaranteed unless in specially structured non-convex objectives (Chen et al., 2018; Zhou et al., 2017b;a)). The proof is in Appendix B. The theorem is a characterization of stability of the model parameters w. For the weight parameters v, as it is restricted in a compact set, convergence to a stationary point is not always guaranteed. As the model parameters is more important, we only provide a detailed characterization of the model parameter.\nTheorem 1. Let the objective F(w,v) defined in Eq. (1) be differentiable, L(·) be Lipschitz continuous in w and ∇vG(·) be Lipschitz continuous in v. Let wt,vt be iterates from Algorithm 1 and ∑∞ t=0 αt = ∞, ∑∞ t=0 α 2 t < ∞ . Then, limt→∞ E[‖∇wF(wt,vt)‖22] = 0. For the manually designed curriculums, it may be unclear\nwhere or even whether such predefined curriculum would converge via mini-batch training. Theorem 1 shows that the learned curriculum can converge and produce a stable StudentNet model. The algorithm can be used to replace the alternating minimization method in related work."
+  }, {
+    "heading": "5. Experiments",
+    "text": "This section empirically verifies the proposed method on four benchmarks of controlled corrupted labels in Section 5.1 and real-world noisy labels in Section 5.2."
+  }, {
+    "heading": "5.1. Experiments on controlled corrupted labels",
+    "text": "This section validates MentorNet on the controlled corrupted label. We follow a common setting in (Zhang et al., 2017a) to train deep CNNs, where the label of each image is independently changed to a uniform random class with probability p, where p is noise fraction and is set to 0.2, 0.4 and 0.8. The labels of validation data remain clean for evaluation.\nDataset and StudentNet: We use the same benchmarks in (Zhang et al., 2017a): CIFAR-10, CIFAR-100 and ImageNet. CIFAR-10 and CIFAR-100 (Krizhevsky & Hinton, 2009) consist of 32 × 32 color images arranged in 10 and 100 classes. Both datasets contain 50,000 training and 10,000 validation images. ImageNet ILSVRC2012 (Deng et al., 2009) contain about 1.2 million training and 50k validation images, split into 1,000 classes. Each image is resized to 299x299 with 3 color channels.\nWe employ 3 recent deep CNNs as our StudentNets: inception (Szegedy et al., 2016), resnet-101 (He et al., 2016) with wide filters (Zagoruyko & Komodakis, 2016) and inceptionresnet v2 (Szegedy et al., 2017). Table 1 shows their #model parameters, training, and validation accuracy when we train them on the clean training data (noise= 0). As shown, they achieve reasonable accuracy on each task.\nBaselines: MentorNet is compared against the following baselines: FullMode is the standard StudentNet trained using l2 weight decay, dropout (Srivastava et al., 2014) and data augmentation (Krizhevsky et al., 2012). The hyperparameters are set to the best ones found on the clean training data. Unless specified otherwise, for a fair comparison, the StudentNet with the same hyperparameters is used in all baseline and our model. Forgetting was introduced in (Arpit et al., 2017), in which the dropout parameter is searched in the range of (0.2-0.9). Self-paced (Kumar et al., 2010) and Focal Loss (Lin et al., 2017b) represent well-known predefined curriculums in the literature. We\nimplemented Reed (2014) and Goldberger (Goldberger & Ben-Reuven, 2017) as the recent weakly-supervised learning methods. The above baseline methods are a mixture of the curriculum learning and the recent methods dealing with corrupted labels.\nOur Model: MentorNet PD is the network learned using our predefined curriculum in Eq. (5) using no additional clean labels. MentorNet DD is the learned data-driven curriculum. It is trained on 5,000 images of true labels, randomly sampled from the CIFAR-10 training set. The same data are used to learn MentorNet DD on CIFAR-100. Note CIFAR-10 and CIFAR-100 are two different datasets that have not only different classes but also the different number of classes. Therefore, it is fair to compare MentorNet DD with other methods using no true labels on CIFAR-100. Algorithm 1 is used to optimize the StudentNet. The decay factor in computing the loss moving average is set to 0.95. The loss percentile in the moving average is set by the cross-validation. As mentioned, a burn-in process is used in the first 20% training epoch for both MentorNet DD and MentorNet PD. More details are discussed in Appendix E.\nWe first show the comparison to the baseline method on CIFAR-10 and CIFAR-100 in Table 2. On both datasets, each method is verified with two StudentNets (resnet-101 and inception) under the noise fraction of 0.2, 0.4, and 0.8. As we see on both datasets, MentorNet improves FullModel across different noise fractions, and the learned data-driven curriculum (MentorNet DD) achieves the best results. The improvement is more significant for the deeper CNN model resnet-101. For example, on the CIFAR-10 of 40% noise, MentorNet DD (with resnet-101) yields an absolute 20% gain over FullModel. After inspecting the result, we found that it may be because Mentor DD learns a more appropriate curriculum to give high weights to samples of correct labels. As a result, it helps the StudentNet focus on samples of correct labels. The results indicate that the learned MentorNet can improve the generalization performance of recent deep CNNs, and outperform the predefined curriculums (Self-paced and Focal Loss).\nFig. 3 plots the training and test error on the clean validation data, under a representative setting: resnet-101 on CIFAR100 of 40% noise, where the x-axis denotes the training iteration. The y-axis is the validation error on the clean validation in Fig. 3(a) and the mini-batch training error on corrupted labels in Fig. 3(b). For MentorNet, the training error is computed by ∑ i vi`i. The figure shows two insights. First, the training error of MentorNet approaches zero. This empirically verifies the convergence of the model. Second, MentorNet can overcome the overfitting to the corrupted label. While the training error is decreasing, the test error does not increase in Fig. 3(a). It suggests that the learned curriculum is beneficial for StudentNet. The sharp change\nTable 2. Comparison of validation accuracy on CIFAR-10 and CIFAR-100 under different noise fractions.\nResnet-101 StudentNet Inception StudentNet\nCIFAR-100 CIFAR-10 CIFAR-100 CIFAR-10 Method 0.2 0.4 0.8 0.2 0.4 0.8 0.2 0.4 0.8 0.2 0.4 0.8 FullModel 0.60 0.45 0.08 0.82 0.69 0.18 0.43 0.38 0.15 0.76 0.73 0.42 Forgetting 0.61 0.44 0.16 0.78 0.63 0.35 0.42 0.37 0.17 0.76 0.71 0.44 Self-paced 0.70 0.55 0.13 0.89 0.85 0.28 0.44 0.38 0.14 0.80 0.74 0.33 Focal Loss 0.59 0.44 0.09 0.79 0.65 0.28 0.43 0.38 0.15 0.77 0.74 0.40 Reed Soft 0.62 0.46 0.08 0.81 0.63 0.18 0.42 0.39 0.12 0.78 0.73 0.39 MentorNet PD 0.72 0.56 0.14 0.91 0.77 0.33 0.44 0.39 0.16 0.79 0.74 0.44 MentorNet DD 0.73 0.68 0.35 0.92 0.89 0.49 0.46 0.41 0.20 0.79 0.76 0.46\nround the 20k iteration in Fig. 3 is due to the learning rate change. Besides, our result is consistent with (Zhang et al., 2017a) that deep CNNS is able to get 0 training error on the corrupted training data. Forgetting (the dashed curve) is the only one that does not converge within 30k steps. As indicated in (Arpit et al., 2017), it is because forgetting reduces the speed at which DNNs memorize. As suggested in (Zhang et al., 2017b), a not converged model might yield a better result, e.g., stop the model at 20K in Fig. 3. However, as it is hard to predetermine the time for early stopping, our focus is comparing the converged model.\nFig. 4 illustrates the best learned data-driven curriculum in our experiments, where the z-axis denotes the weights computed by gm; the y and x axes denote the sample loss and the loss difference to the moving average, where λ is the loss moving average. Two observations can be found in Fig. 4. First, the learned curriculum changes during the training of the StudentNet. Fig. 4 (a) and (b) are MentorNet learned at different epochs. As shown, (a) assigns greater weights to samples of big loss more aggressively. Second, the learned curriculums in Fig. 4 generally satisfy the condition in Proposition 1, i.e., the weight generally decreases with the loss. It suggests that joint learning of StudentNet and MentorNet optimizes an underlying robust objective.\nTable 3 compares to recent published results under the set-\nw eight\nw eight\n(a) epoch percentage=21 (b) epoch percentage=76\nFigure 4. The data-driven curriculums learned by MentorNet with the resnet-101 at epoch 21 in (a) and 76 in (b).\nting: CIFAR of 40% noise fraction. We cite the number in (Azadi et al., 2016), and implement other methods using the same resnet-101 StudentNet. The results show that our result is comparable and even better than the state-of-the-art.\nTo verify MentorNet for large-scale training, we apply our method on the ImageNet ILSVRC12 (Deng et al., 2009) benchmark to improve the inception-resnet v2 (Szegedy et al., 2017) model. We train the model on the ImageNet of 40% noise. Inspired by (Zhang et al., 2017a), we start with an inception-resnet (NoReg) with no regularization (NoReg) and add weight decay, dropout, and data augmentation to the model. Table 4 shows the comparison. As shown, MentorNet improves the performance of both the inception-resnet without regularization (NoReg) and with full regularization (FullModel). It also outperforms the forgetting baseline (dropout keep probability = 0.2). The results suggest that MentorNet can improve deep CNNs on the large-scale training on corrupted labels."
+  }, {
+    "heading": "5.2. Experiments on real-world noisy labels",
+    "text": "To verify MentorNet on real-world noisy labels, we conduct experiments on the large WebVision benchmark (Li et al., 2017a). It contains 2.4 million images of real-world noisy labels, crawled from the web using the 1,000 concepts in ImageNet ILSVRC12. We download the resized images from\nthe official website1. The inception-resenet v2 (Szegedy et al., 2017) is used as our StudentNet, trained using a distributed asynchronized momentum optimizer on 50 GPUs. Since the dataset is very big, for quick experiments, we compare baseline methods using the Google image subset on the first 50 classes. We use Mini to denote this subset and Entire for the entire WebVision. All the models are evaluated on the clean ILSVRC12 and WebVision validation set.\nTable 5 lists the comparison result. As we see, the proposed MentorNet significantly improves baseline methods on real-world noisy labels. The method marked by the start indicates it uses a pre-trained ImageNet model to obtain additional 30k labels for 118 classes. Following the same protocol, MentorNet* is trained using the additional labels. The results show that our method outperforms the baseline methods on real-world noisy labels. To the best of our knowledge, it achieves the best-published result on the WebVision (Li et al., 2017a) benchmark."
+  }, {
+    "heading": "6. Related Work",
+    "text": "Curriculum learning (CL), proposed by Bengio et al. (2009), is a learning paradigm in which a model is learned by gradually including from easy to complex samples in training so as to increase the learning entropy (Bengio et al., 2009). From the human behavioral perspective, Khan et al. (2011) have shown that CL is consistent with the principle of human teaching. CL has been empirically verified in a variety of problems, such as computer vision (Supancic & Ramanan, 2013; Chen & Gupta, 2015), natural language\n1https://www.vision.ee.ethz.ch/webvision/download.html\nprocessing (Turian et al., 2010), multitask learning (Graves et al., 2017). A common CL approach is to predefine a curriculum. For example, Kumar et al. (2010) proposed a curriculum called self-paced learning which favors training samples of smaller loss. After that, many predefined curriculums were proposed, e.g., in (Supancic & Ramanan, 2013; Jiang et al., 2014; 2015; Sangineto et al., 2016; Chang et al., 2017; Ma et al., 2017a;b). For example, Jiang et al. (2014) introduced a curriculum of using easy and diverse samples. Fan et al. (2017) proposed to use predefined sample weighting schemes as an implicit way to define a curriculum. Previous work has shown that predefined curriculums are useful in overcoming noisy labels (Chen & Gupta, 2015; Liang et al., 2016; Lin et al., 2017a). In parallel to CL, the sample weighting schemes were also studied in (Lin et al., 2017a; Wang et al., 2017; Fan et al., 2018; Dehghani et al., 2018). Compared to the existing work, our paper presents a new way of learning data-driven curriculums for deep networks trained on corrupted labels.\nOur work is related to the weakly-supervised learning methods. Among recent contributions, Reed et al. (2014) developed a robust loss to model “prediction consistency”. Menon et al. (2015) used class-probability estimation to study the corruption process. Sukhbaatar et al. (2014) proposed a noise transformation to estimate the noise distribution. The transformation matrix needs to be periodically updated and is non-trivial to learn. To address the issue, Goldberger et al. (2017) proposed to add an additional softmax layer end-to-end with the base model. Azadi et al. (2016) tackled this problem by a regularizer called AIR. This method was shown to be effective but it relied on additional clean labels to train the representation. More recently, methods utilized additional labels for label cleaning (Veit et al., 2017), knowledge distillation (Li et al., 2017b) or semi-supervised learning (Vahdat, 2017; Dehghani et al., 2017). Different from previous work, we focus on learning curriculum to train very deep CNNs on corrupted labels from scratch. In addition, clean labels are not always needed for our method. In Section 5.1, the MentorNet is learned on a small subset of CIFAR-10 and applied to CIFAR-100"
+  }, {
+    "heading": "7. Conclusions",
+    "text": "In this paper, we presented a novel method for training deep CNNs on corrupted labels. Our work was built on curriculum learning and advanced the methodology by proposing to learn data-driven curriculum via a neural network called MentorNet. We proposed an algorithm for jointly optimizing deep CNNs with MentorNet on large-scale data. We conducted comprehensive experiments on datasets of controlled and real-world noise. Our empirical results showed that generalization performance of deep CNNs trained on corrupted labels can be effectively improved by the learned data-driven curriculum."
+  }, {
+    "heading": "Acknowledgements",
+    "text": "The authors would like to thank anonymous reviewers for helpful comments and Deyu Meng, Sergey Ioffe, and Chong Wang for meaningful discussions and kind support."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "A closer look at memorization in deep networks",
+    "authors": ["D. Arpit", "S. Jastrzkebski", "N. Ballas", "D. Krueger", "E. Bengio", "M.S. Kanwal", "T. Maharaj", "A. Fischer", "A. Courville", "Y Bengio"],
+    "year": 2017
+  }, {
+    "title": "Auxiliary image regularization for deep cnns with noisy labels",
+    "authors": ["S. Azadi", "J. Feng", "S. Jegelka", "T. Darrell"],
+    "year": 2016
+  }, {
+    "title": "Enhancing sparsity by reweighted l1 minimization",
+    "authors": ["E.J. Candes", "M.B. Wakin", "S.P. Boyd"],
+    "venue": "Journal of Fourier analysis and applications,",
+    "year": 2008
+  }, {
+    "title": "Active bias: Training a more accurate neural network by emphasizing high variance samples",
+    "authors": ["Chang", "H.-S", "E. Learned-Miller", "A. McCallum"],
+    "year": 2017
+  }, {
+    "title": "Webly supervised learning of convolutional networks",
+    "authors": ["X. Chen", "A. Gupta"],
+    "venue": "In ICCV,",
+    "year": 2015
+  }, {
+    "title": "Gradient descent with random initialization: Fast global convergence for nonconvex phase retrieval",
+    "authors": ["Y. Chen", "Y. Chi", "J. Fan", "C. Ma"],
+    "venue": "arXiv preprint arXiv:1803.07726,",
+    "year": 2018
+  }, {
+    "title": "Information geometry and alternating minimization procedures",
+    "authors": ["I. Csiszar"],
+    "venue": "Statistics and decisions,",
+    "year": 1984
+  }, {
+    "title": "Avoiding your teacher’s mistakes: Training neural networks with controlled weak supervision",
+    "authors": ["M. Dehghani", "A. Severyn", "S. Rothe", "J. Kamps"],
+    "venue": "arXiv preprint arXiv:1711.00313,",
+    "year": 2017
+  }, {
+    "title": "Imagenet: A large-scale hierarchical image database",
+    "authors": ["J. Deng", "W. Dong", "R. Socher", "Li", "L.-J", "K. Li", "L. Fei-Fei"],
+    "venue": "In CVPR,",
+    "year": 2009
+  }, {
+    "title": "Self-paced learning: An implicit regularization perspective",
+    "authors": ["Y. Fan", "R. He", "J. Liang", "Hu", "B.-G"],
+    "venue": "In AAAI,",
+    "year": 2017
+  }, {
+    "title": "Learning to teach",
+    "authors": ["Y. Fan", "F. Tian", "T. Qin", "Li", "X.-Y", "Liu", "T.-Y"],
+    "venue": "In ICLR,",
+    "year": 2018
+  }, {
+    "title": "Training deep neuralnetworks using a noise adaptation layer",
+    "authors": ["J. Goldberger", "E. Ben-Reuven"],
+    "venue": "In ICLR,",
+    "year": 2017
+  }, {
+    "title": "Automated curriculum learning for neural networks",
+    "authors": ["A. Graves", "M.G. Bellemare", "J. Menick", "R. Munos", "K. Kavukcuoglu"],
+    "venue": "In ICML,",
+    "year": 2017
+  }, {
+    "title": "Deep residual learning for image recognition",
+    "authors": ["K. He", "X. Zhang", "S. Ren", "J. Sun"],
+    "year": 2016
+  }, {
+    "title": "Robust statistics",
+    "authors": ["P.J. Huber"],
+    "venue": "In International Encyclopedia of Statistical Science,",
+    "year": 2011
+  }, {
+    "title": "Robust estimation of a location parameter",
+    "authors": ["Huber", "P. J"],
+    "venue": "The Annals of Mathematical Statistics,",
+    "year": 1964
+  }, {
+    "title": "Self-paced learning with diversity",
+    "authors": ["L. Jiang", "D. Meng", "Yu", "S.-I", "Z. Lan", "S. Shan", "A. Hauptmann"],
+    "venue": "In NIPS,",
+    "year": 2014
+  }, {
+    "title": "Self-paced curriculum learning",
+    "authors": ["L. Jiang", "D. Meng", "Q. Zhao", "S. Shan", "A.G. Hauptmann"],
+    "venue": "In AAAI,",
+    "year": 2015
+  }, {
+    "title": "How do humans teach: On curriculum learning and teaching dimension",
+    "authors": ["F. Khan", "B. Mutlu", "X. Zhu"],
+    "venue": "In NIPS,",
+    "year": 2011
+  }, {
+    "title": "Learning multiple layers of features from tiny images",
+    "authors": ["A. Krizhevsky", "G. Hinton"],
+    "year": 2009
+  }, {
+    "title": "Imagenet classification with deep convolutional neural networks",
+    "authors": ["A. Krizhevsky", "I. Sutskever", "G.E. Hinton"],
+    "venue": "In NIPS,",
+    "year": 2012
+  }, {
+    "title": "Self-paced learning for latent variable models",
+    "authors": ["M.P. Kumar", "B. Packer", "D. Koller"],
+    "venue": "In NIPS,",
+    "year": 2010
+  }, {
+    "title": "Cleannet: Transfer learning for scalable image classifier training with label noise",
+    "authors": ["Lee", "K.-H", "X. He", "L. Zhang", "L. Yang"],
+    "venue": "arXiv preprint arXiv:1711.07131,",
+    "year": 2017
+  }, {
+    "title": "Webvision database: Visual learning and understanding from web data",
+    "authors": ["W. Li", "L. Wang", "E. Agustsson", "L. Van Gool"],
+    "venue": "arXiv preprint arXiv:1708.02862,",
+    "year": 2017
+  }, {
+    "title": "Learning from noisy labels with distillation",
+    "authors": ["Y. Li", "J. Yang", "Y. Song", "L. Cao", "J. Li", "J. Luo"],
+    "venue": "In ICCV,",
+    "year": 2017
+  }, {
+    "title": "Learning to detect concepts from webly-labeled video data",
+    "authors": ["J. Liang", "L. Jiang", "D. Meng", "A.G. Hauptmann"],
+    "venue": "In IJCAI,",
+    "year": 2016
+  }, {
+    "title": "Active self-paced learning for cost-effective and progressive face identification",
+    "authors": ["L. Lin", "K. Wang", "D. Meng", "W. Zuo", "L. Zhang"],
+    "year": 2017
+  }, {
+    "title": "Focal loss for dense object detection",
+    "authors": ["Lin", "T.-Y", "P. Goyal", "R. Girshick", "K. He", "P. Dollár"],
+    "year": 2017
+  }, {
+    "title": "Self-paced co-training",
+    "authors": ["F. Ma", "D. Meng", "Q. Xie", "Z. Li", "X. Dong"],
+    "venue": "In ICML,",
+    "year": 2017
+  }, {
+    "title": "On convergence property of implicit self-paced objective",
+    "authors": ["Z. Ma", "S. Liu", "D. Meng"],
+    "venue": "arXiv preprint arXiv:1703.09923,",
+    "year": 2017
+  }, {
+    "title": "What objective does self-paced learning indeed optimize",
+    "authors": ["D. Meng", "Q. Zhao", "L. Jiang"],
+    "venue": "arXiv preprint arXiv:1511.06049,",
+    "year": 2015
+  }, {
+    "title": "Learning from corrupted binary labels via classprobability estimation",
+    "authors": ["A. Menon", "B. Van Rooyen", "C.S. Ong", "B. Williamson"],
+    "venue": "In ICML,",
+    "year": 2015
+  }, {
+    "title": "Exploring generalization in deep learning",
+    "authors": ["B. Neyshabur", "S. Bhojanapalli", "D. McAllester", "N. Srebro"],
+    "venue": "In NIPS,",
+    "year": 2017
+  }, {
+    "title": "Training deep neural networks on noisy labels with bootstrapping",
+    "authors": ["S. Reed", "H. Lee", "D. Anguelov", "C. Szegedy", "D. Erhan", "A. Rabinovich"],
+    "venue": "arXiv preprint arXiv:1412.6596,",
+    "year": 2014
+  }, {
+    "title": "Self paced deep learning for weakly supervised object detection",
+    "authors": ["E. Sangineto", "M. Nabi", "D. Culibrk", "N. Sebe"],
+    "venue": "arXiv preprint arXiv:1605.07651,",
+    "year": 2016
+  }, {
+    "title": "Dropout: a simple way to prevent neural networks from overfitting",
+    "authors": ["N. Srivastava", "G.E. Hinton", "A. Krizhevsky", "I. Sutskever", "R. Salakhutdinov"],
+    "venue": "Journal of machine learning research,",
+    "year": 1929
+  }, {
+    "title": "Training convolutional networks with noisy labels",
+    "authors": ["S. Sukhbaatar", "J. Bruna", "M. Paluri", "L. Bourdev", "R. Fergus"],
+    "venue": "arXiv preprint arXiv:1406.2080,",
+    "year": 2014
+  }, {
+    "title": "Self-paced learning for long-term tracking",
+    "authors": ["J.S. Supancic", "D. Ramanan"],
+    "venue": "In CVPR,",
+    "year": 2013
+  }, {
+    "title": "Rethinking the inception architecture for computer vision",
+    "authors": ["C. Szegedy", "V. Vanhoucke", "S. Ioffe", "J. Shlens", "Z. Wojna"],
+    "year": 2016
+  }, {
+    "title": "Inception-v4, inception-resnet and the impact of residual connections on learning",
+    "authors": ["C. Szegedy", "S. Ioffe", "V. Vanhoucke", "A.A. Alemi"],
+    "venue": "In AAAI,",
+    "year": 2017
+  }, {
+    "title": "Word representations: a simple and general method for semi-supervised learning",
+    "authors": ["J. Turian", "L. Ratinov", "Y. Bengio"],
+    "venue": "In ACL,",
+    "year": 2010
+  }, {
+    "title": "Toward robustness against label noise in training deep discriminative neural networks",
+    "authors": ["A. Vahdat"],
+    "venue": "In NIPS,",
+    "year": 2017
+  }, {
+    "title": "Learning from noisy large-scale datasets with minimal supervision",
+    "authors": ["A. Veit", "N. Alldrin", "G. Chechik", "I. Krasin", "A. Gupta", "S. Belongie"],
+    "year": 2017
+  }, {
+    "title": "Robust probabilistic modeling with bayesian data reweighting",
+    "authors": ["Y. Wang", "A. Kucukelbir", "D.M. Blei"],
+    "venue": "In ICML,",
+    "year": 2017
+  }, {
+    "title": "Wide residual networks",
+    "authors": ["S. Zagoruyko", "N. Komodakis"],
+    "venue": "In BMVC,",
+    "year": 2016
+  }, {
+    "title": "Understanding deep learning requires rethinking generalization",
+    "authors": ["C. Zhang", "S. Bengio", "M. Hardt", "B. Recht", "O. Vinyals"],
+    "venue": "In ICLR,",
+    "year": 2017
+  }, {
+    "title": "Nearly unbiased variable selection under minimax concave penalty",
+    "authors": ["Zhang", "C.-H"],
+    "venue": "The Annals of Statistics,",
+    "year": 2010
+  }, {
+    "title": "mixup: Beyond empirical risk minimization",
+    "authors": ["H. Zhang", "M. Cisse", "Y.N. Dauphin", "D. Lopez-Paz"],
+    "venue": "arXiv preprint arXiv:1710.09412,",
+    "year": 2017
+  }, {
+    "title": "Mirror descent in non-convex stochastic programming",
+    "authors": ["Z. Zhou", "P. Mertikopoulos", "N. Bambos", "S. Boyd", "P. Glynn"],
+    "venue": "arXiv preprint arXiv:1706.05681,",
+    "year": 2017
+  }, {
+    "title": "Stochastic mirror descent in variationally coherent optimization problems",
+    "authors": ["Z. Zhou", "P. Mertikopoulos", "N. Bambos", "S. Boyd", "P.W. Glynn"],
+    "venue": "In NIPS,",
+    "year": 2017
+  }],
+  "id": "SP:3e228b71c01009e6cba3819aab34c6f53b0b599c",
+  "authors": [{
+    "name": "Lu Jiang",
+    "affiliations": []
+  }, {
+    "name": "Zhengyuan Zhou",
+    "affiliations": []
+  }, {
+    "name": "Thomas Leung",
+    "affiliations": []
+  }, {
+    "name": "Li-Jia Li",
+    "affiliations": []
+  }, {
+    "name": "Li Fei-Fei",
+    "affiliations": []
+  }],
+  "abstractText": "Recent deep networks are capable of memorizing the entire data even when the labels are completely random. To overcome the overfitting on corrupted labels, we propose a novel technique of learning another neural network, called MentorNet, to supervise the training of the base deep networks, namely, StudentNet. During training, MentorNet provides a curriculum (sample weighting scheme) for StudentNet to focus on the sample the label of which is probably correct. Unlike the existing curriculum that is usually predefined by human experts, MentorNet learns a data-driven curriculum dynamically with StudentNet. Experimental results demonstrate that our approach can significantly improve the generalization performance of deep networks trained on corrupted training data. Notably, to the best of our knowledge, we achieve the best-published result on WebVision, a large benchmark containing 2.2 million images of real-world noisy labels.",
+  "title": "MentorNet: Learning Data-Driven Curriculum for Very Deep Neural Networks on Corrupted Labels"
+}

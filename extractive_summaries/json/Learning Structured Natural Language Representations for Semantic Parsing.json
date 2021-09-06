@@ -1,0 +1,326 @@
+{
+  "sections": [{
+    "text": "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics, pages 44–55 Vancouver, Canada, July 30 - August 4, 2017. c©2017 Association for Computational Linguistics\nhttps://doi.org/10.18653/v1/P17-1005"
+  }, {
+    "heading": "1 Introduction",
+    "text": "Semantic parsing is the task of mapping natural language utterances to machine interpretable meaning representations. Despite differences in the choice of meaning representation and model structure, most existing work conceptualizes semantic parsing following two main approaches. Under the first approach, an utterance is parsed and grounded to a meaning representation directly via learning a task-specific grammar (Zelle and Mooney, 1996; Zettlemoyer and Collins, 2005; Wong and Mooney, 2006; Kwiatkowksi et al., 2010; Liang et al., 2011; Berant et al., 2013; Flanigan et al., 2014; Pasupat and Liang, 2015; Groschwitz et al., 2015). Under the second approach, the utterance is first parsed to an intermediate task-independent representation tied to a syntactic parser and then mapped to a grounded\n1Our code is available at https://github.com/ cheng6076/scanner.\nrepresentation (Kwiatkowski et al., 2013; Reddy et al., 2016, 2014; Krishnamurthy and Mitchell, 2015; Gardner and Krishnamurthy, 2017). A merit of the two-stage approach is that it creates reusable intermediate interpretations, which potentially enables the handling of unseen words and knowledge transfer across domains (Bender et al., 2015).\nThe successful application of encoder-decoder models (Bahdanau et al., 2015; Sutskever et al., 2014) to a variety of NLP tasks has provided strong impetus to treat semantic parsing as a sequence transduction problem where an utterance is mapped to a target meaning representation in string format (Dong and Lapata, 2016; Jia and Liang, 2016; Kočiský et al., 2016). Such models still fall under the first approach, however, in contrast to previous work (Zelle and Mooney, 1996; Zettlemoyer and Collins, 2005; Liang et al., 2011) they reduce the need for domain-specific assumptions, grammar learning, and more generally extensive feature engineering. But this modeling flexibility comes at a cost since it is no longer possible to interpret how meaning composition is performed. Such knowledge plays a critical role in understand modeling limitations so as to build better semantic parsers. Moreover, without any taskspecific prior knowledge, the learning problem is fairly unconstrained, both in terms of the possible derivations to consider and in terms of the target output which can be ill-formed (e.g., with extra or missing brackets).\nIn this work, we propose a neural semantic parser that alleviates the aforementioned problems. Our model falls under the second class of approaches where utterances are first mapped to an intermediate representation containing natural language predicates. However, rather than using an external parser (Reddy et al., 2014, 2016) or manually specified CCG grammars (Kwiatkowski et al., 2013), we induce intermediate representations in the form of predicate-argument structures\n44\nfrom data. This is achieved with a transition-based approach which by design yields recursive semantic structures, avoiding the problem of generating ill-formed meaning representations. Compared to most existing semantic parsers which employ a CKY style bottom-up parsing strategy (Krishnamurthy and Mitchell, 2012; Cai and Yates, 2013; Berant et al., 2013; Berant and Liang, 2014), the transition-based approach we proposed does not require feature decomposition over structures and thereby enables the exploration of rich, non-local features. The output of the transition system is then grounded (e.g., to a knowledge base) with a neural mapping model under the assumption that grounded and ungrounded structures are isomorphic.2 As a result, we obtain a neural model that jointly learns to parse natural language semantics and induce a lexicon that helps grounding.\nThe whole network is trained end-to-end on natural language utterances paired with annotated logical forms or their denotations. We conduct experiments on four datasets, including GEOQUERY (which has logical forms; Zelle and Mooney 1996), SPADES (Bisk et al., 2016), WEBQUESTIONS (Berant et al., 2013), and GRAPHQUESTIONS (Su et al., 2016) (which have denotations). Our semantic parser achieves the state of the art on SPADES and GRAPHQUESTIONS, while obtaining competitive results on GEOQUERY and WEBQUESTIONS. A side-product of our modeling framework is that the induced intermediate representations can contribute to rationalizing neural predictions (Lei et al., 2016). Specifically, they can shed light on the kinds of representations (especially predicates) useful for semantic parsing. Evaluation of the induced predicate-argument relations against syntax-based ones reveals that they are interpretable and meaningful compared to heuristic baselines, but they sometimes deviate from linguistic conventions."
+  }, {
+    "heading": "2 Preliminaries",
+    "text": "Problem Formulation Let K denote a knowledge base or more generally a reasoning system, and x an utterance paired with a grounded meaning representationG or its denotation y. Our problem is to learn a semantic parser that maps x to G via an intermediate ungrounded representation U . When G is executed against K, it outputs denota-\n2We discuss the merits and limitations of this assumption in Section 5\ntion y.\nGrounded Meaning Representation We represent grounded meaning representations in FunQL (Kate et al., 2005) amongst many other alternatives such as lambda calculus (Zettlemoyer and Collins, 2005), λ-DCS (Liang, 2013) or graph queries (Holzschuher and Peinl, 2013; Harris et al., 2013). FunQL is a variable-free query language, where each predicate is treated as a function symbol that modifies an argument list. For example, the FunQL representation for the utterance which states do not border texas is:\nanswer(exclude(state(all), next to(texas)))\nwhere next to is a domain-specific binary predicate that takes one argument (i.e., the entity texas) and returns a set of entities (e.g., the states bordering Texas) as its denotation. all is a special predicate that returns a collection of entities. exclude is a predicate that returns the difference between two input sets.\nAn advantage of FunQL is that the resulting s-expression encodes semantic compositionality and derivation of the logical forms. This property makes FunQL logical forms convenient to be predicted with recurrent neural networks (Vinyals et al., 2015; Choe and Charniak, 2016; Dyer et al., 2016). However, FunQL is less expressive than lambda calculus, partially due to the elimination of variables. A more compact logical formulation which our method also applies to is λ-DCS (Liang, 2013). In the absence of anaphora and composite binary predicates, conversion algorithms exist between FunQL and λ-DCS. However, we leave this to future work.\nUngrounded Meaning Representation We also use FunQL to express ungrounded meaning representations. The latter consist primarily of natural language predicates and domain-general predicates. Assuming for simplicity that domaingeneral predicates share the same vocabulary\nin ungrounded and grounded representations, the ungrounded representation for the example utterance is:\nanswer(exclude(states(all), border(texas)))\nwhere states and border are natural language predicates. In this work we consider five types of domain-general predicates illustrated in Table 1. Notice that domain-general predicates are often implicit, or represent extra-sentential knowledge. For example, the predicate all in the above utterance represents all states in the domain which are not mentioned in the utterance but are critical for working out the utterance denotation. Finally, note that for certain domain-general predicates, it also makes sense to extract natural language rationales (e.g., not is indicative for exclude). But we do not find this helpful in experiments.\nIn this work we constrain ungrounded representations to be structurally isomorphic to grounded ones. In order to derive the target logical forms, all we have to do is replacing predicates in the ungrounded representations with symbols in the knowledge base."
+  }, {
+    "heading": "3 Modeling",
+    "text": "In this section, we discuss our neural model which maps utterances to target logical forms. The semantic parsing task is decomposed in two stages: we first explain how an utterance is converted to an intermediate representation (Section 3.1), and then describe how it is grounded to a knowledge base (Section 3.2)."
+  }, {
+    "heading": "3.1 Generating Ungrounded Representations",
+    "text": "At this stage, utterances are mapped to intermediate representations with a transition-based algorithm. In general, the transition system generates the representation by following a derivation tree (which contains a set of applied rules) and some canonical generation order (e.g., depth-first). For FunQL, a simple solution exists since the representation itself encodes the derivation. Consider again answer(exclude(states(all), border(texas))) which is tree structured. Each predicate (e.g., border) can be visualized as a non-terminal node of the tree and each entity (e.g., texas) as a terminal. The predicate all is a special case which acts as a terminal directly. We can generate the tree with a top-down, depth first transition system reminiscent of recurrent neural network grammars (RNNGs; Dyer et al. 2016). Similar to RNNG, our\nalgorithm uses a buffer to store input tokens in the utterance and a stack to store partially completed trees. A major difference in our semantic parsing scenario is that tokens in the buffer are not fetched in a sequential order or removed from the buffer. This is because the lexical alignment between an utterance and its semantic representation is hidden. Moreover, some predicates cannot be clearly anchored to a token span. Therefore, we allow the generation algorithm to pick tokens and combine logical forms in arbitrary orders, conditioning on the entire set of sentential features. Alternative solutions in the traditional semantic parsing literature include a floating chart parser (Pasupat and Liang, 2015) which allows to construct logical predicates out of thin air.\nOur transition system defines three actions, namely NT, TER, and RED, explained below.\nNT(X) generates a Non-Terminal predicate. This predicate is either a natural language expression such as border, or one of the domain-general predicates exemplified in Table 1 (e.g., exclude). The type of predicate is determined by the placeholder X and once generated, it is pushed onto the stack and represented as a non-terminal followed by an open bracket (e.g., ‘border(’). The open bracket will be closed by a reduce operation.\nTER(X) generates a TERminal entity or the special predicate all. Note that the terminal choice does not include variable (e.g., $0, $1), since FunQL is a variable-free language which sufficiently captures the semantics of the datasets we work with. The framework could be extended to generate directly acyclic graphs by incorporating variables with additional transition actions for handling variable mentions and co-reference.\nRED stands for REDuce and is used for subtree completion. It recursively pops elements from the stack until an open non-terminal node is encountered. The non-terminal is popped as well, after which a composite term representing the entire subtree, e.g., border(texas), is pushed back to the stack. If a RED action results in having no more open non-terminals left on the stack, the transition system terminates. Table 2 shows the transition actions used to generate our running example.\nThe model generates the ungrounded representation U conditioned on utterance x by recursively calling one of the above three actions. Note that U is defined by a sequence of actions (denoted\nby a) and a sequence of term choices (denoted by u) as shown in Table 2. The conditional probability p(U |x) is factorized over time steps as:\np(U |x) = p(a, u|x)\n=\nT∏\nt=1\np(at|a<t, x)p(ut|a<t, x)I(at 6=RED) (1)\nwhere I is an indicator function. To predict the actions of the transition system, we encode the input buffer with a bidirectional LSTM (Hochreiter and Schmidhuber, 1997) and the output stack with a stack-LSTM (Dyer et al., 2015). At each time step, the model uses the representation of the transition system et to predict an action:\np(at|a<t, x) ∝ exp(Wa · et) (2)\nwhere et is the concatenation of the buffer representation bt and the stack representation st. While the stack representation st is easy to retrieve as the top state of the stack-LSTM, obtaining the buffer representation bt is more involved. This is because we do not have an explicit buffer representation due to the non-projectivity of semantic parsing. We therefore compute at each time step an adaptively weighted representation of bt (Bahdanau et al., 2015) conditioned on the stack representation st. This buffer representation is then concatenated with the stack representation to form the system representation et.\nWhen the predicted action is either NT or TER, an ungrounded term ut (either a predicate or an\nentity) needs to be chosen from the candidate list depending on the specific placeholder X. To select a domain-general term, we use the same representation of the transition system et to compute a probability distribution over candidate terms:\np(uGENERALt |a<t, x) ∝ exp(Wp · et) (3)\nTo choose a natural language term, we directly compute a probability distribution of all natural language terms (in the buffer) conditioned on the stack representation st and select the most relevant term (Jia and Liang, 2016):\np(uNLt |a<t, x) ∝ exp(st) (4)\nWhen the predicted action is RED, the completed subtree is composed into a single representation on the stack. For the choice of composition function, we use a single-layer neural network as in Dyer et al. (2015), which takes as input the concatenated representation of the predicate and argument of the subtree."
+  }, {
+    "heading": "3.2 Generating Grounded Representations",
+    "text": "Since we constrain the network to learn ungrounded structures that are isomorphic to the target meaning representation, converting ungrounded representations to grounded ones becomes a simple lexical mapping problem. For simplicity, hereafter we do not differentiate natural language and domain-general predicates.\nTo map an ungrounded term ut to a grounded term gt, we compute the conditional probability\nof gt given ut with a bi-linear neural network: p(gt|ut) ∝ exp ~ut ·Wug · ~gt> (5) where ~ut is the contextual representation of the ungrounded term given by the bidirectional LSTM, ~gt is the grounded term embedding, and Wug is the weight matrix.\nThe above grounding step can be interpreted as learning a lexicon: the model exclusively relies on the intermediate representation U to predict the target meaning representation G without taking into account any additional features based on the utterance. In practice, U may provide sufficient contextual background for closed domain semantic parsing where an ungrounded predicate often maps to a single grounded predicate, but is a relatively impoverished representation for parsing large open-domain knowledge bases like Freebase. In this case, we additionally rely on a discriminative reranker which ranks the grounded representations derived from ungrounded representations (see Section 3.4)."
+  }, {
+    "heading": "3.3 Training Objective",
+    "text": "When the target meaning representation is available, we directly compare it against our predictions and back-propagate. When only denotations are available, we compare surrogate meaning representations against our predictions (Reddy et al., 2014). Surrogate representations are those with the correct denotations. When there exist multiple surrogate representations,3 we select one randomly and back-propagate. The global effect of the above update rule is close to maximizing the marginal likelihood of denotations, which differs from recent work on weakly-supervised semantic parsing based on reinforcement learning (Neelakantan et al., 2017).\nConsider utterance x with ungrounded meaning representation U , and grounded meaning representation G. Both U and G are defined with a sequence of transition actions (same for U and G) and a sequence of terms (different for U and G). Recall that a = [a1, · · · , an] denotes the transition action sequence defining U and G; let u = [u1, · · · , uk] denote the ungrounded terms (e.g., predicates), and g = [g1, · · · , gk] the grounded terms. We aim to maximize the likelihood of the grounded meaning representation p(G|x) over all training examples. This\n3The average Freebase surrogate representations obtained with highest denotation match (F1) is 1.4.\nlikelihood can be decomposed into the likelihood of the grounded action sequence p(a|x) and the grounded term sequence p(g|x), which we optimize separately.\nFor the grounded action sequence (which by design is the same as the ungrounded action sequence and therefore the output of the transition system), we can directly maximize the log likelihood log p(a|x) for all examples:\nLa = ∑\nx∈T log p(a|x) =\n∑\nx∈T\nn∑\nt=1\nlog p(at|x) (6)\nwhere T denotes examples in the training data. For the grounded term sequence g, since the intermediate ungrounded terms are latent, we maximize the expected log likelihood of the grounded terms ∑ u [p(u|x) log p(g|u, x)] for all examples, which is a lower bound of the log likelihood log p(g|x): Lg = ∑\nx∈T\n∑\nu\n[p(u|x) log p(g|u, x)]\n= ∑\nx∈T\n∑\nu\n[ p(u|x) k∑\nt=1\nlog p(gt|ut) ] (7)\nThe final objective is the combination of La and Lg, denoted as LG = La + Lg. We optimize this objective with the method described in Lei et al. (2016)."
+  }, {
+    "heading": "3.4 Reranker",
+    "text": "As discussed above, for open domain semantic parsing, solely relying on the ungrounded representation would result in an impoverished model lacking sentential context useful for disambiguation decisions. For all Freebase experiments, we followed previous work (Berant et al., 2013; Berant and Liang, 2014; Reddy et al., 2014) in additionally training a discriminative ranker to re-rank grounded representations globally.\nThe discriminative ranker is a maximumentropy model (Berant et al., 2013). The objective is to maximize the log likelihood of the correct answer y given x by summing over all grounded candidates G with denotation y (i.e.,[[G]]K = y):\nLy = ∑\n(x,y)∈T log\n∑\n[[G]]K=y\np(G|x) (8)\np(G|x) ∝ exp{f(G, x)} (9) where f(G, x) is a feature function that maps pair (G, x) into a feature vector. We give details on the features we used in Section 4.2."
+  }, {
+    "heading": "4 Experiments",
+    "text": "In this section, we verify empirically that our semantic parser derives useful meaning representations. We give details on the evaluation datasets and baselines used for comparison. We also describe implementation details and the features used in the discriminative ranker."
+  }, {
+    "heading": "4.1 Datasets",
+    "text": "We evaluated our model on the following datasets which cover different domains, and use different types of training data, i.e., pairs of natural language utterances and grounded meanings or question-answer pairs.\nGEOQUERY (Zelle and Mooney, 1996) contains 880 questions and database queries about US geography. The utterances are compositional, but the language is simple and vocabulary size small. The majority of questions include at most one entity. SPADES (Bisk et al., 2016) contains 93,319 questions derived from CLUEWEB09 (Gabrilovich et al., 2013) sentences. Specifically, the questions were created by randomly removing an entity, thus producing sentence-denotation pairs (Reddy et al., 2014). The sentences include two or more entities and although they are not very compositional, they constitute a large-scale dataset for neural network training. WEBQUESTIONS (Berant et al., 2013) contains 5,810 question-answer pairs. Similar to SPADES, it is based on Freebase and the questions are not very compositional. However, they are real questions asked by people on the Web. Finally, GRAPHQUESTIONS (Su et al., 2016) contains 5,166 question-answer pairs which were created by showing 500 Freebase graph queries to Amazon Mechanical Turk workers and asking them to paraphrase them into natural language."
+  }, {
+    "heading": "4.2 Implementation Details",
+    "text": "Amongst the four datasets described above, GEOQUERY has annotated logical forms which we directly use for training. For the other three datasets, we treat surrogate meaning representations which lead to the correct answer as gold standard. The surrogates were selected from a subset of candidate Freebase graphs, which were obtained by entity linking. Entity mentions in SPADES have been automatically annotated with Freebase entities (Gabrilovich et al., 2013). For WEBQUESTIONS and GRAPHQUESTIONS, we follow the procedure described in Reddy et al. (2016). We identify po-\ntential entity spans using seven handcrafted partof-speech patterns and associate them with Freebase entities obtained from the Freebase/KG API.4 We use a structured perceptron trained on the entities found in WEBQUESTIONS and GRAPHQUESTIONS to select the top 10 non-overlapping entity disambiguation possibilities. We treat each possibility as a candidate input utterance, and use the perceptron score as a feature in the discriminative reranker, thus leaving the final disambiguation to the semantic parser.\nApart from the entity score, the discriminative ranker uses the following basic features. The first feature is the likelihood score of a grounded representation aggregating all intermediate representations. The second set of features include the embedding similarity between the relation and the utterance, as well as the similarity between the relation and the question words. The last set of features includes the answer type as indicated by the last word in the Freebase relation (Xu et al., 2016).\nWe used the Adam optimizer for training with an initial learning rate of 0.001, two momentum parameters [0.99, 0.999], and batch size 1. The dimensions of the word embeddings, LSTM states, entity embeddings and relation embeddings are [50, 100, 100, 100]. The word embeddings were initialized with Glove embeddings (Pennington et al., 2014). All other embeddings were randomly initialized."
+  }, {
+    "heading": "4.3 Results",
+    "text": "Experimental results on the four datasets are summarized in Tables 3–6. We present comparisons of our system which we call SCANNER (as a shorthand for SymboliC meANiNg rEpResentation) against a variety of models previously described in the literature.\nGEOQUERY results are shown in Table 5. The first block contains symbolic systems, whereas neural models are presented in the second block. We report accuracy which is defined as the proportion of the utterance that are correctly parsed to their gold standard logical forms. All previous neural systems (Dong and Lapata, 2016; Jia and Liang, 2016) treat semantic parsing as a sequence transduction problem and use LSTMs to directly map utterances to logical forms. SCANNER yields performance improvements over these\n4http://developers.google.com/ freebase/\nsystems when using comparable data sources for training. Jia and Liang (2016) achieve better results with synthetic data that expands GEOQUERY; we could adopt their approach to improve model performance, however, we leave this to future work.\nTable 6 reports SCANNER’s performance on SPADES. For all Freebase related datasets we use average F1 (Berant et al., 2013) as our evaluation metric. Previous work on this dataset has used a semantic parsing framework similar to ours where natural language is converted to an intermediate syntactic representation and then grounded to Freebase. Specifically, Bisk et al. (2016) evaluate the effectiveness of four different CCG parsers on the semantic parsing task when varying the amount of supervision required. As can be seen, SCANNER outperforms all CCG variants (from unsupervised to fully supervised) without having access to any manually annotated derivations or lexicons. For fair comparison, we also built a neural baseline that encodes an utterance with a recurrent neural network and then predicts a grounded meaning representation directly (Ture and Jojic, 2016; Yih et al., 2016). Again, we observe that SCANNER outperforms this baseline.\nResults on WEBQUESTIONS are summarized in Table 3. SCANNER obtains performance on par with the best symbolic systems (see the first block in the table). It is important to note that Bast and Haussmann (2015) develop a question answering system, which contrary to ours can-\nnot produce meaning representations whereas Berant and Liang (2015) propose a sophisticated agenda-based parser which is trained borrowing ideas from imitation learning. SCANNER is conceptually similar to Reddy et al. (2016) who also learn a semantic parser via intermediate representations which they generate based on the output of a dependency parser. SCANNER performs competitively despite not having access to any linguistically-informed syntactic structures. The second block in Table 3 reports the results of several neural systems. Xu et al. (2016) represent the state of the art on WEBQUESTIONS. Their system uses Wikipedia to prune out erroneous candidate answers extracted from Freebase. Our model would also benefit from a similar post-processing step. As in previous experiments, SCANNER outperforms the neural baseline, too.\nFinally, Table 4 presents our results on GRAPHQUESTIONS. We report F1 for SCANNER, the neural baseline model, and three symbolic systems presented in Su et al. (2016). SCANNER achieves a new state of the art on this dataset with a gain of 4.23 F1 points over the best previously reported model."
+  }, {
+    "heading": "4.4 Analysis of Intermediate Representations",
+    "text": "Since a central feature of our parser is that it learns intermediate representations with natural language predicates, we conducted additional experiments in order to inspect their quality. For GEOQUERY\nwhich contains only 280 test examples, we manually annotated intermediate representations for the test instances and evaluated the learned representations against them. The experimental setup aims to shows how humans can participate in improving the semantic parser with feedback at the intermediate stage. In terms of evaluation, we use three metrics shown in Table 7. The first row shows the percentage of exact matches between the predicted representations and the human annotations. The second row refers to the percentage of structure matches, where the predicted representations have the same structure as the human annotations, but may not use the same lexical terms. Among structurally correct predictions, we additionally compute how many tokens are correct, as shown in the third row. As can be seen, the induced meaning representations overlap to a large extent with the human gold standard.\nWe also evaluated the intermediate representations created by SCANNER on the other three (Freebase) datasets. Since creating a manual gold standard for these large datasets is time-consuming, we compared the induced representations against the output of a syntactic parser. Specifically, we converted the questions to event-argument structures with EASYCCG (Lewis and Steedman, 2014), a high coverage and high accuracy CCG parser. EASYCCG extracts predicate-argument structures with a labeled F-score of 83.37%. For further comparison, we built a simple baseline which identifies predicates based on the output of the Stanford POStagger (Manning et al., 2014) following the ordering VBD VBN VB VBP VBZ MD.\nAs shown in Table 8, on SPADES and WEBQUESTIONS, the predicates learned by our model match the output of EASYCCG more closely than the heuristic baseline. But for GRAPHQUESTIONS which contains more compositional questions, the mismatch is higher. However, since the key idea of our model is to capture salient meaning for the task at hand rather than strictly obey syntax, we would not expect the\npredicates induced by our system to entirely agree with those produced by the syntactic parser. To further analyze how the learned predicates differ from syntax-based ones, we grouped utterances in SPADES into four types of linguistic constructions: coordination (conj), control and raising (control), prepositional phrase attachment (pp), and subordinate clauses (subord). Table 8 also shows the breakdown of matching scores per linguistic construction, with the number of utterances in each type. In Table 9, we provide examples of predicates identified by SCANNER, indicating whether they agree or not with the output of EASYCCG. As a reminder, the task in SPADES is to predict the entity masked by a blank symbol ( ).\nAs can be seen in Table 8, the matching score is relatively high for utterances involving coordination and prepositional phrase attachments. The model will often identify informative predicates (e.g., nouns) which do not necessarily agree with linguistic intuition. For example, in the utterance wilhelm maybach and his son started maybach in 1909 (see Table 9), SCANNER identifies the predicateargument structure son(wilhelm maybach) rather than started(wilhelm maybach). We also observed that the model struggles with control and subordinate constructions. It has difficulty distinguishing control from raising predicates as exemplified in the utterance ceo john thain agreed to leave from Table 9, where it identifies the raising predicate agreed. For subordinate clauses, SCANNER tends to take shortcuts identifying as predicates words closest to the blank symbol."
+  }, {
+    "heading": "5 Discussion",
+    "text": "We presented a neural semantic parser which converts natural language utterances to grounded meaning representations via intermediate predicate-argument structures. Our model\nessentially jointly learns how to parse natural language semantics and the lexicons that help grounding. Compared to previous neural semantic parsers, our model is more interpretable as the intermediate structures are useful for inspecting what the model has learned and whether it matches linguistic intuition.\nAn assumption our model imposes is that ungrounded and grounded representations are structurally isomorphic. An advantage of this assumption is that tokens in the ungrounded and grounded representations are strictly aligned. This allows the neural network to focus on parsing and lexical mapping, sidestepping the challenging structure mapping problem which would result in a larger search space and higher variance. On the negative side, the structural isomorphism assumption restricts the expressiveness of the model, especially since one of the main benefits of adopting a two-stage parser is the potential of capturing domain-independent semantic information via the intermediate representation. While it would be challenging to handle drastically non-isomorphic structures in the current model, it is possible to perform local structure matching, i.e., when the mapping between natural language and domainspecific predicates is many-to-one or one-to-many.\nFor instance, Freebase does not contain a relation representing daughter, using instead two relations representing female and child. Previous work (Kwiatkowski et al., 2013) models such cases by introducing collapsing (for many-to-one mapping) and expansion (for one-to-many mapping) operators. Within our current framework, these two types of structural mismatches can be handled with semi-Markov assumptions (Sarawagi and Cohen, 2005; Kong et al., 2016) in the parsing (i.e., predicate selection) and the grounding steps, respectively. Aside from relaxing strict isomorphism, we would also like to perform crossdomain semantic parsing where the first stage of the semantic parser is shared across domains.\nAcknowledgments We would like to thank three anonymous reviewers, members of the Edinburgh ILCC and the IBM Watson, and Abulhair Saparov for feedback. The support of the European Research Council under award number 681760 “Translating Multiple Modalities into Text” is gratefully acknowledged."
+  }],
+  "year": 2017,
+  "references": [{
+    "title": "Neural machine translation by jointly",
+    "authors": ["Dzmitry Bahdanau", "Kyunghyun Cho", "Yoshua Bengio"],
+    "year": 2015
+  }, {
+    "title": "More accurate question answering on Freebase",
+    "authors": ["Hannah Bast", "Elmar Haussmann."],
+    "venue": "Proceedings of the 24th ACM International on Conference on Information and Knowledge Management. ACM, pages 1431–1440.",
+    "year": 2015
+  }, {
+    "title": "Layers of interpretation: On grammar and compositionality",
+    "authors": ["Emily M Bender", "Dan Flickinger", "Stephan Oepen", "Woodley Packard", "Ann Copestake."],
+    "venue": "Proceedings of the 11th International Conference on Computational Semantics. London, UK,",
+    "year": 2015
+  }, {
+    "title": "Semantic parsing on Freebase from question-answer pairs",
+    "authors": ["Jonathan Berant", "Andrew Chou", "Roy Frostig", "Percy Liang."],
+    "venue": "Proceedings of the 2013 Conference on Empirical Methods in Natural Language Processing. Seattle, Washington, pages 1533–",
+    "year": 2013
+  }, {
+    "title": "Semantic parsing via paraphrasing",
+    "authors": ["Jonathan Berant", "Percy Liang."],
+    "venue": "Proceedings of the 52nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers). Baltimore, Maryland, pages 1415–1425.",
+    "year": 2014
+  }, {
+    "title": "Imitation learning of agenda-based semantic parsers",
+    "authors": ["Jonathan Berant", "Percy Liang."],
+    "venue": "Transactions of the Association for Computational Linguistics 3:545–558.",
+    "year": 2015
+  }, {
+    "title": "Evaluating induced CCG parsers on grounded semantic parsing",
+    "authors": ["Yonatan Bisk", "Siva Reddy", "John Blitzer", "Julia Hockenmaier", "Mark Steedman."],
+    "venue": "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing. Austin,",
+    "year": 2016
+  }, {
+    "title": "Question answering with subgraph embeddings",
+    "authors": ["Antoine Bordes", "Sumit Chopra", "Jason Weston."],
+    "venue": "Proceedings of the 2014 Conference on Empirical Methods in Natural Language Processing (EMNLP). Doha, Qatar, pages 615–620.",
+    "year": 2014
+  }, {
+    "title": "Large-scale semantic parsing via schema matching and lexicon extension",
+    "authors": ["Qingqing Cai", "Alexander Yates."],
+    "venue": "Proceedings of the 51st Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers). Sofia, Bulgaria, pages",
+    "year": 2013
+  }, {
+    "title": "Parsing as language modeling",
+    "authors": ["Do Kook Choe", "Eugene Charniak."],
+    "venue": "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing. Austin, Texas, pages 2331–2336.",
+    "year": 2016
+  }, {
+    "title": "Language to logical form with neural attention",
+    "authors": ["Li Dong", "Mirella Lapata."],
+    "venue": "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers). Berlin, Germany, pages 33–43.",
+    "year": 2016
+  }, {
+    "title": "Question answering over Freebase with multicolumn convolutional neural networks",
+    "authors": ["Li Dong", "Furu Wei", "Ming Zhou", "Ke Xu."],
+    "venue": "Proceedings of the 53rd Annual Meeting of the Association for Computational Linguistics and the 7th Interna-",
+    "year": 2015
+  }, {
+    "title": "Transitionbased dependency parsing with stack long shortterm memory",
+    "authors": ["Chris Dyer", "Miguel Ballesteros", "Wang Ling", "Austin Matthews", "Noah A. Smith."],
+    "venue": "Proceedings of the 53rd Annual Meeting of the Association for Computational Lin-",
+    "year": 2015
+  }, {
+    "title": "Recurrent neural network grammars",
+    "authors": ["Chris Dyer", "Adhiguna Kuncoro", "Miguel Ballesteros", "Noah A. Smith."],
+    "venue": "Proceedings of the 2016 Conference of the North American Chapter of the Association for Computational Linguistics: Human Lan-",
+    "year": 2016
+  }, {
+    "title": "A discriminative graph-based parser for the abstract meaning representation",
+    "authors": ["Jeffrey Flanigan", "Sam Thomson", "Jaime Carbonell", "Chris Dyer", "Noah A. Smith."],
+    "venue": "Proceedings of the 52nd Annual Meeting of the Association for Computational Lin-",
+    "year": 2014
+  }, {
+    "title": "FACC1: Freebase annotation of ClueWeb corpora, version 1 (release date 2013-06-26, format version 1, correction level",
+    "authors": ["Evgeniy Gabrilovich", "Michael Ringgaard", "Amarnag Subramanya"],
+    "year": 2013
+  }, {
+    "title": "OpenVocabulary Semantic Parsing with both Distributional Statistics and Formal Knowledge",
+    "authors": ["Matt Gardner", "Jayant Krishnamurthy."],
+    "venue": "Proceedings of the 31st AAAI Conference on Artificial Intelligence. San Francisco, California, pages 3195–",
+    "year": 2017
+  }, {
+    "title": "Graph parsing with s-graph grammars",
+    "authors": ["Jonas Groschwitz", "Alexander Koller", "Christoph Teichmann."],
+    "venue": "Proceedings of the 53rd Annual Meeting of the Association for Computational Linguistics and the 7th International Joint Conference on Natu-",
+    "year": 2015
+  }, {
+    "title": "SPARQL 1.1 query language. W3C recommendation",
+    "authors": ["Steve Harris", "Andy Seaborne", "Eric Prud’hommeaux"],
+    "year": 2013
+  }, {
+    "title": "Long short-term memory",
+    "authors": ["Sepp Hochreiter", "Jürgen Schmidhuber."],
+    "venue": "Neural computation 9(8):1735–1780.",
+    "year": 1997
+  }, {
+    "title": "Performance of graph query languages: comparison",
+    "authors": ["Florian Holzschuher", "René Peinl"],
+    "year": 2013
+  }, {
+    "title": "Data recombination for neural semantic parsing",
+    "authors": ["Robin Jia", "Percy Liang."],
+    "venue": "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers). Berlin, Germany, pages 12–22.",
+    "year": 2016
+  }, {
+    "title": "Learning to Transform Natural to Formal Languages",
+    "authors": ["Rohit J. Kate", "Yuk Wah Wong", "Raymond J. Mooney."],
+    "venue": "Proceedings for the 20th National Conference on Artificial Intelligence. Pittsburgh, Pennsylvania, pages 1062–1068.",
+    "year": 2005
+  }, {
+    "title": "Segmental recurrent neural networks",
+    "authors": ["Lingpeng Kong", "Chris Dyer", "Noah A Smith."],
+    "venue": "Proceedings of ICLR 2016. San Juan, Puerto Rico.",
+    "year": 2016
+  }, {
+    "title": "Semantic parsing with semi-supervised sequential autoencoders",
+    "authors": ["Tomáš Kočiský", "Gábor Melis", "Edward Grefenstette", "Chris Dyer", "Wang Ling", "Phil Blunsom", "Karl Moritz Hermann."],
+    "venue": "Proceedings of the 2016 Conference on Empirical Meth-",
+    "year": 2016
+  }, {
+    "title": "Weakly supervised training of semantic parsers",
+    "authors": ["Jayant Krishnamurthy", "Tom Mitchell."],
+    "venue": "Proceedings of the 2012 Joint Conference on Empirical Methods in Natural Language Processing and Computational Natural Language Learning. Jeju Is-",
+    "year": 2012
+  }, {
+    "title": "Learning a Compositional Semantics for Freebase with an Open Predicate Vocabulary",
+    "authors": ["Jayant Krishnamurthy", "Tom M. Mitchell."],
+    "venue": "Transactions of the Association for Computational Linguistics 3:257–270.",
+    "year": 2015
+  }, {
+    "title": "Inducing probabilistic CCG grammars from logical form with higherorder unification",
+    "authors": ["Tom Kwiatkowksi", "Luke Zettlemoyer", "Sharon Goldwater", "Mark Steedman."],
+    "venue": "Proceedings of the 2010 Conference on Empirical Methods in Natural Language",
+    "year": 2010
+  }, {
+    "title": "Scaling Semantic Parsers with On-the-Fly Ontology Matching",
+    "authors": ["Tom Kwiatkowski", "Eunsol Choi", "Yoav Artzi", "Luke Zettlemoyer."],
+    "venue": "Proceedings of Empirical Methods on Natural Language Processing. pages 1545–1556.",
+    "year": 2013
+  }, {
+    "title": "Lexical generalization in CCG grammar induction for semantic parsing",
+    "authors": ["Tom Kwiatkowski", "Luke Zettlemoyer", "Sharon Goldwater", "Mark Steedman."],
+    "venue": "Proceedings of the 2011 Conference on Empirical Methods in Natural Language Processing.",
+    "year": 2011
+  }, {
+    "title": "Rationalizing neural predictions",
+    "authors": ["Tao Lei", "Regina Barzilay", "Tommi Jaakkola."],
+    "venue": "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing. Austin, Texas, pages 107– 117.",
+    "year": 2016
+  }, {
+    "title": "A* CCG parsing with a supertag-factored model",
+    "authors": ["Mike Lewis", "Mark Steedman."],
+    "venue": "Proceedings of the 2014 Conference on Empirical Methods in Natural Language Processing (EMNLP). Doha, Qatar, pages 990–1000.",
+    "year": 2014
+  }, {
+    "title": "Lambda dependency-based compositional semantics",
+    "authors": ["Percy Liang."],
+    "venue": "arXiv preprint arXiv:1309.4408 .",
+    "year": 2013
+  }, {
+    "title": "Learning dependency-based compositional semantics",
+    "authors": ["Percy Liang", "Michael Jordan", "Dan Klein."],
+    "venue": "Proceedings of the 49th Annual Meeting of the Association for Computational Linguistics: Human Language Technologies. Portland, Oregon,",
+    "year": 2011
+  }, {
+    "title": "The stanford corenlp natural language processing toolkit",
+    "authors": ["Christopher Manning", "Mihai Surdeanu", "John Bauer", "Jenny Finkel", "Steven Bethard", "David McClosky."],
+    "venue": "Proceedings of 52nd Annual Meeting of the Association for Computational Lin-",
+    "year": 2014
+  }, {
+    "title": "Learning a natural language interface with neural programmer",
+    "authors": ["Arvind Neelakantan", "Quoc V Le", "Martin Abadi", "Andrew McCallum", "Dario Amodei."],
+    "venue": "Proceedings of ICLR 2017. Toulon, France.",
+    "year": 2017
+  }, {
+    "title": "Compositional semantic parsing on semi-structured tables",
+    "authors": ["Panupong Pasupat", "Percy Liang."],
+    "venue": "Proceedings of the 53rd Annual Meeting of the Association for Computational Linguistics and the 7th International Joint Conference on Natural Lan-",
+    "year": 2015
+  }, {
+    "title": "Glove: Global vectors for word representation",
+    "authors": ["Jeffrey Pennington", "Richard Socher", "Christopher Manning."],
+    "venue": "Proceedings of the 2014 Conference on Empirical Methods in Natural Language Processing (EMNLP). Doha, Qatar, pages 1532–",
+    "year": 2014
+  }, {
+    "title": "Large-scale semantic parsing without questionanswer pairs",
+    "authors": ["Siva Reddy", "Mirella Lapata", "Mark Steedman."],
+    "venue": "Transactions of the Association for Computational Linguistics 2:377–392.",
+    "year": 2014
+  }, {
+    "title": "Transforming dependency structures to logical forms for semantic parsing",
+    "authors": ["Siva Reddy", "Oscar Täckström", "Michael Collins", "Tom Kwiatkowski", "Dipanjan Das", "Mark Steedman", "Mirella Lapata."],
+    "venue": "Transactions of the Association for Computational",
+    "year": 2016
+  }, {
+    "title": "Semimarkov conditional random fields for information extraction",
+    "authors": ["Sunita Sarawagi", "William W Cohen."],
+    "venue": "Advances in Neural Information Processing Systems 17, MIT Press, pages 1185–1192.",
+    "year": 2005
+  }, {
+    "title": "On generating characteristic-rich question sets",
+    "authors": ["Yu Su", "Huan Sun", "Brian Sadler", "Mudhakar Srivatsa", "Izzeddin Gur", "Zenghui Yan", "Xifeng Yan"],
+    "year": 2016
+  }, {
+    "title": "Sequence to sequence learning with neural networks",
+    "authors": ["Ilya Sutskever", "Oriol Vinyals", "Quoc V Le."],
+    "venue": "Advances in Neural Information Processing Systems 27, MIT Press, pages 3104–3112.",
+    "year": 2014
+  }, {
+    "title": "Simple and effective question answering with recurrent neural networks",
+    "authors": ["Ferhan Ture", "Oliver Jojic."],
+    "venue": "arXiv preprint arXiv:1606.05029 .",
+    "year": 2016
+  }, {
+    "title": "Grammar as a foreign language",
+    "authors": ["Oriol Vinyals", "Łukasz Kaiser", "Terry Koo", "Slav Petrov", "Ilya Sutskever", "Geoffrey Hinton."],
+    "venue": "Advances in Neural Information Processing Systems 28. MIT Press, pages 2773–2781.",
+    "year": 2015
+  }, {
+    "title": "Learning for semantic parsing with statistical machine translation",
+    "authors": ["Yuk Wah Wong", "Raymond Mooney."],
+    "venue": "Proceedings of the Human Language Technology Conference of the NAACL, Main Conference. New York City, USA, pages 439–446.",
+    "year": 2006
+  }, {
+    "title": "Question answering on Freebase via relation extraction and textual evidence",
+    "authors": ["Kun Xu", "Siva Reddy", "Yansong Feng", "Songfang Huang", "Dongyan Zhao."],
+    "venue": "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Vol-",
+    "year": 2016
+  }, {
+    "title": "Information extraction over structured data: Question answering with Freebase",
+    "authors": ["Xuchen Yao", "Benjamin Van Durme."],
+    "venue": "Proceedings of the 52nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers). Balti-",
+    "year": 2014
+  }, {
+    "title": "Semantic parsing via staged query graph generation: Question answering with knowledge base",
+    "authors": ["Wen-tau Yih", "Ming-Wei Chang", "Xiaodong He", "Jianfeng Gao."],
+    "venue": "Proceedings of the 53rd Annual Meeting of the Association for Computational Lin-",
+    "year": 2015
+  }, {
+    "title": "The value of semantic parse labeling for knowledge base question answering",
+    "authors": ["Wen-tau Yih", "Matthew Richardson", "Chris Meek", "MingWei Chang", "Jina Suh."],
+    "venue": "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics",
+    "year": 2016
+  }, {
+    "title": "Learning to Parse Database Queries Using Inductive Logic Programming",
+    "authors": ["John M. Zelle", "Raymond J. Mooney."],
+    "venue": "Proceedings of the 13th National Conference on Artificial Intelligence. Portland, Oregon, pages 1050–1055.",
+    "year": 1996
+  }, {
+    "title": "Online learning of relaxed CCG grammars for parsing",
+    "authors": ["Luke Zettlemoyer", "Michael Collins"],
+    "year": 2007
+  }, {
+    "title": "Learning to Map Sentences to Logical Form: Structured Classification with Probabilistic Categorial Grammars",
+    "authors": ["Luke S. Zettlemoyer", "Michael Collins."],
+    "venue": "Proceedings of 21st Conference in Uncertainilty in Artificial Intelligence. Edinburgh,",
+    "year": 2005
+  }, {
+    "title": "Type-driven incremental semantic parsing with polymorphism",
+    "authors": ["Kai Zhao", "Liang Huang."],
+    "venue": "Proceedings of the 2015 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies.",
+    "year": 2015
+  }],
+  "id": "SP:56e91361303338ef881057ff123bf2d43ded133c",
+  "authors": [{
+    "name": "Jianpeng Cheng",
+    "affiliations": []
+  }, {
+    "name": "Siva Reddy",
+    "affiliations": []
+  }, {
+    "name": "Vijay Saraswat",
+    "affiliations": []
+  }, {
+    "name": "Mirella Lapata",
+    "affiliations": []
+  }],
+  "abstractText": "We introduce a neural semantic parser which is interpretable and scalable. Our model converts natural language utterances to intermediate, domain-general natural language representations in the form of predicate-argument structures, which are induced with a transition system and subsequently mapped to target domains. The semantic parser is trained end-to-end using annotated logical forms or their denotations. We achieve the state of the art on SPADES and GRAPHQUESTIONS and obtain competitive results on GEOQUERY and WEBQUESTIONS. The induced predicate-argument structures shed light on the types of representations useful for semantic parsing and how these are different from linguistically motivated ones.1",
+  "title": "Learning Structured Natural Language Representations for Semantic Parsing"
+}

@@ -1,0 +1,297 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Hierarchical priors that favor sparsity have been a central development in modern statistics and machine learning, and find widespread use for variable selection in biology, engineering, and economics. Among the most widely used and successful approaches for inference of sparse models has been L1 regularization, which, after introduction in the context of linear models with the LASSO (Tibshirani, 1996), has become the standard tool for both directed and undirected models alike (Murphy, 2012).\nDespite its success, however, L1 is a pragmatic compromise. As the closest convex approximation of the idealized\n1Harvard Medical School, Boston, Massachusetts. Correspondence to: John Ingraham <ingraham@fas.harvard.edu>, Debora Marks <debbie@hms.harvard.edu>.\nProceedings of the 34 th International Conference on Machine Learning, Sydney, Australia, PMLR 70, 2017. Copyright 2017 by the author(s).\nL0 norm, L1 regularization cannot model the hypothesis of sparsity as well as some Bayesian alternatives (Tipping, 2001). Two Bayesian approaches stand out as more accurate models of sparsity than L1. The first, the spike and slab (Mitchell & Beauchamp, 1988), introduces discrete latent variables that directly model the presence or absence of each parameter. This discrete approach is the most direct and accurate representation of a sparsity hypothesis (Mohamed et al., 2012), but the discrete latent space that it imposes is often computationally intractable for models where Bayesian inference is difficult.\nThe second approach to Bayesian sparsity uses the scale mixtures of normals (Andrews & Mallows, 1974), a family of distributions that arise from integrating a zero meanGaussian over an unknown variance as\np(θ) = ∫ ∞ 0 1√ 2πσ exp { − θ 2 2σ2 } p(σ)dσ. (1)\nScale-mixtures of normals can approximate the discrete spike and slab prior by mixing both large and small values of the variance σ2. The implicit prior of L1 regularization, the Laplacian, is a member of the scale mixture family that results from an exponentially distributed variance σ2. Thus, mixing densities p(σ2) with subexponential tails and more mass near the origin more accurately model sparsity than L1 and are the basis for approaches often referred to as “Sparse Bayesian Learning” (Tipping, 2001). Both the Student-t of Automatic Relevance Determination (ARD) (MacKay et al., 1994) and the Horseshoe prior (Carvalho et al., 2010) incorporate these properties.\nApplying these favorable, Bayesian approaches to sparsity has been particularly challenging for discrete, undirected models like Boltzmann Machines. Undirected models possess a representational advantage of capturing ‘collective phenomena’ with no directions of causality, but their likelihoods require an intractable normalizing constant (Murray & Ghahramani, 2004). For a fully observed Boltzmann Machine with x ∈ {0, 1}D the distribution1 is\np(x|J) = 1 Z(J) exp ∑ i<j Jijxixj  , (2) 1We exclude biases for simplicity.\nwhere the partition function Z(J) depends on the couplings. Whenever a new set of couplings J are considered during inference, the partition function Z(J) and corresponding density p(x|J) must be reevaluated. This requirement for an an intractable calculation embedded within already-intractable nonconjugate inference has led some to term Bayesian learning of undirected graphical models “doubly intractable” (Murray et al., 2006). When all 2( D 2) patterns of discrete spike and slab sparsity are added on top of this, we might call this problem “triply intractable” (Figure 1). Triple-intractability does not mean that this problem is impossible, but it will typically require expensive approaches based on MCMC-within-MCMC (Chen & Welling, 2012).\nHere we present an alternative to MCMC-based approaches for learning undirected models with sparse priors based on stochastic variational inference (Hoffman et al., 2013). We combine three ideas: (i) stochastic gradient variational Bayes (Kingma & Welling, 2014; Rezende et al., 2014; Titsias & Lázaro-Gredilla, 2014)2, (ii) persistent Markov chains (Younes, 1989), and (iii) a noncentered parameterization of scale-mixture priors, to inherit the benefits of hierarchical Bayesian sparsity in an efficient variational framework. We make the following contributions:\n• We extend stochastic variational inference to undirected models with intractable normalizing constants by developing a learning algorithm based on persistent Markov chains, which we call Persistent Varia-\n2This is also a type of noncentered parameterization, but of the variational distribution rather than the posterior.\ntional Inference (PVI) (Section 2).\n• We introduce a reparameterization approach for variational inference under sparsity-inducing scale-mixture priors (e.g. the Laplacian, ARD, and the Horseshoe) that significantly improves approximation quality by capturing scale uncertainty (Section 3). When combined with Gaussian stochastic variational inference, we call this Fadeout.\n• We demonstrate how a Bayesian approach for learning sparse undirected graphical models with PVI and Fadeout yields significantly improved inferences of both synthetic and real applications in physics and biology (Section 4)."
+  }, {
+    "heading": "2. Persistent Variational Inference",
+    "text": "Background: Learning in undirected models Undirected graphical models, also known as Markov Random Fields, can be written in log-linear form as\np(x|θ) = 1 Z(θ) exp { k∑ i=1 θifi(x) } , (3)\nwhere i indexes a set of k features {fi(x)}ki=1 and the partition function Z(θ) = ∑ x exp { ∑ i θifi(x)} normalizes the distribution (Koller & Friedman, 2009). Maximum Likelihood inference selects parameters θ that maximize the probability of dataD = {x(1), . . . ,x(N)} by ascending the gradient of the (averaged) log likelihood\n∂\n∂θi\n1\nN log p(D|θ) = ED [fi(x)]− Ep(x|θ) [fi(x)] . (4)\nThe first term in the gradient is a data-dependent average of feature fi(x) over D, while the second term is a dataindependent average of feature fi(x) over the model distribution that often requires sampling (Murphy, 2012)3.\nBayesian learning for undirected models is confounded by the partition function Z(θ). Given the dataD, a prior p(θ), and the log potentials H[x|θ] = − ∑ i θifi(x) , the posterior distribution of the parameters is\np(θ|D) = p(θ) ∏ i e −H[x(i)|θ]/Z(θ)∫\np(θ′) ∏ i e −H[x(i)|θ′]/Z(θ′)dθ′ , (5)\nwhich contains an intractable partition function Z(θ) within the already-intractable evidence term. As a result, most algorithms for Bayesian learning of undirected models require either doubly-intractable MCMC and/or approximations of the likelihood p(x|θ).\n3Depending on the details of the MCMC and the community these approaches are known as Boltzmann Learning, Stochastic Maximum Likelihood, or Persistent Contrastive Divergence (Tieleman, 2008)."
+  }, {
+    "heading": "A tractable estimator for∇ELBO of undirected models",
+    "text": "Here we consider how to approximate the intractable posterior in (5) without approximating the partition function Z(θ) or the likelihood p(x|θ) by using variational inference. Variational inference recasts inference with p(θ|D) as an optimization problem of finding a variational distribution q(θ|φ) that is closest to p(θ|D) as measured by KL divergence (Jordan et al., 1999). This can be accomplished by maximizing the Evidence Lower BOund\nL(φ) , Eq [log p(D,θ)− log q(θ|φ)] ≤ log p(D). (6)\nFor scalability, we would like to optimize the ELBO with methods that can leverage Monte Carlo estimators of the gradient ∇φL(φ). One possible strategy for this would be would be to develop an estimator based on the score function (Ranganath et al., 2014) with a Monte-Carlo approximation of\n∇φL = Eq [ ∇φ log q(θ|φ) log\np(D,θ) q(θ|φ)\n] . (7)\nNaively substituting the likelihood (3) in the score function estimator (7) nests the intractable log partition function logZ(θ) within the average over q(θ|φ), making this an untenable (and extremely high variance) approach to inference with undirected models.\nWe can avoid the need for a score-function estimator with the ‘reparameterization trick’ (Kingma & Welling, 2014;\nRezende et al., 2014; Titsias & Lázaro-Gredilla, 2014) that has been incredibly useful for directed models. Consider a variational approximation q(θ|φ) = ∏ i q(θi|µi, si) that is a fully factorized (mean field) Gaussian with means µ and log standard deviations s. The ELBO expectations under q(θ|φ) can be rewritten as expectations wrt an independent noise source ∼ N (0, I) where4 θ( ) = µ+exp {s} . Then the gradients are\n∇µL = E [∇θ log p(D,θ( ))] , (8) ∇sL = E [∇θ log p(D,θ( )) (θ( )− µ)] + 1. (9)\nBecause these expectations require only the gradient of the likelihood ∇θ log p(D|θ), the gradient for the undirected model (4) can be substituted to form a nested expectation for ∇φL(φ). This can then be used as a Monte Carlo gradient estimator by sampling ∼ N (0, I),x ∼ p(x|θ( )).\nPersistent gradient estimation In Stochastic Maximum Likelihood estimation for undirected models, the intractable gradients of (4) are estimated by sampling p(x|θ). Although sampling-based approaches are slow, they can be made considerably more efficient by running a set of Markov chains in parallel with state that persists between iterations (Younes, 1989). Persistent state maintains the Markov chains near their equilibrium distributions, which means that they can quickly re-equilibrate after perturbations to the parameters θ during learning.\n4The operator is an element-wise product.\nWe propose variational inference in undirected models based on persistent gradient estimation of ∇θ log p(D|θ) and refer to this as Persistent Variational Inference (PVI) (Algorithm in Appendix). Following the notation of PCDn (Tieleman, 2008), PVI-n refers to using n sweeps of Gibbs sampling with persistent Markov chains between iterations. This approach is generally compatible with any estimators of∇ELBO that are based on the gradient of the log likelihood, several examples of which are explained in (Kingma & Welling, 2014; Rezende et al., 2014; Titsias & Lázaro-Gredilla, 2014).\nBehavior of the solution for Gaussian q When the variational approximation is a fully factorized Gaussian q(θ|µ,σ) and the prior is flat p(θ) ∝ 1, the solution to µ?,σ? = argmaxµ,σ L(µ,σ) will satisfy\nED [fi(x)] = Ep̃ [fi(x)] , σ?i = 1\nN Ep̃ [ ifi(x)] (10)\nwhere p̃ = p(x|θ( ))p( ) is an extended system of the original undirected model in which the parameters θi = µi + iσi fluctuate according to the variational distribution. This bridges to the Maximum Likelihood solution as N → ∞ and σ?i → 0, while accounting for uncertainty in the parameters at finite sample sizes with the inverse of ‘sensitivity’ Ep̃ [ ifi(x)]."
+  }, {
+    "heading": "3. Fadeout",
+    "text": ""
+  }, {
+    "heading": "3.1. Noncentered Parameterizations of Hierarchical Priors",
+    "text": "Hierarchical models are powerful because they impose a priori correlations between latent variables that reflect problem-specific knowledge. For scale-mixture priors that promote sparsity, these correlations come in the form of scale uncertainty. Instead of assuming that the scale of a parameter in a model is known a priori, we posit that it is normally distributed with a randomly distributed variance p(σ2). The joint prior p(θ|σ2)p(σ2) gives rise to a strongly curved ‘funnel’ shape (Figure 2) that illustrates a simple but profound principle about hierarchical models:\nAlgorithm 1 Computing ∇ELBO for Fadeout Require: Global parameters {µτ , sτ} Require: Local parameters {µθ̃, µlogσ, sθ̃, slogσ} Require: Hyperprior gradient∇logσ,τ log p(logσ, τ ) Require: Likelihood gradient∇θp(x|θ) // Sample from variational distribution z1 ∼ N (0, I|τ |), z2 ∼ N (0, I|θ̃|), z3 ∼ N (0, I|σ|) τ ← µτ + exp{sτ} z1 θ̃ ← µθ̃ + exp{sθ̃} z2 σ ← exp {µlog σ + exp {slog σ} z3} θ ← θ̃ σ // Centered global parameters ∇µτL ← ∇τ log p(log σ, τ ) ∇sτL ← exp {sτ} z1 ∇µτL+ 1 // Noncentered local parameters ∇µθ̃L ← σ ∇θ log p(x|θ)− θ̃ ∇µlog σL ← θ ∇θ log p(x|θ) +∇log σ log p(log σ, τ ) ∇sθ̃L ← exp { sθ̃ } z2 ∇µθ̃L+ 1\n∇slog σL ← exp {slog σ} z3 ∇µlog σL+ 1\nas the hyperparameter log σ decreases and the prior accepts a smaller range of values for θ, normalization increases the probability density at the origin, favoring sparsity. This normalization-induced sharpening has been called called a Bayesian Occam’s Razor (MacKay, 2003).\nWhile normalization-induced sharpening gives rise to sparsity, these extreme correlations are a disaster for meanfield variational inference. Even if a tremendous amount of probability mass is concentrated at the base of the funnel, an uncorrelated mean-field approximation will yield estimates near the top. The result is a potentially non-sparse estimate from a very-sparse prior.\nThe strong coupling of hierarchical funnels also plagues exact methods based on MCMC with slow mixing, but the statistics community has found that these geometry pathologies can be effectively managed by transformations. Many models can be rewritten in a noncentered form where the parameters and hyperparmeters are a priori independen (Papaspiliopoulos et al., 2007; Betancourt & Girolami, 2013). For the scale-mixtures of normals, this change of variables is\n{θ, log σ} → { θ\nσ , log σ\n} (11)\nThen θ̃ , θσ ∼ N(0, 1) while preserving θ̃σ ∼ N(0, σ 2). In noncentered form, the joint prior is independent and well approximated by a mean-field Gaussian, while the likelihood will be variably correlated depending on the strength of the data (Figure 2). In this sense, centered parameterizations (CP) and noncentered parameterizations (NCP) are usually framed as favorable in strong and weak data\nregimes, respectively.5\nWe propose the use of non-centered parameterizations of scale-mixture priors for mean-field Gaussian variational inference. For convenience, we like to call this Fadeout (see next section). Fadeout can be easily implemented by either (i) using the chain rule to derive the gradient of the Evidence Lower BOund (ELBO) (Algorithm 1) or, for differentiable models, (ii) rewriting models in noncentered form and using automatic differentiation tools such as Stan (Kucukelbir et al., 2017) or autograd6 for ADVI. The only two requirements of the user are the gradient of the likelihood function and a choice of a global hyperprior, several options for which are presented in Table 1.\nEstimators for the centered posterior. Fadeout optimizes a mean-field Gaussian variational distribution over the noncentered parameters q(θ̃, logσ). As an estimator for the centered parameters, we use the mean-field property to compute the centered posterior mean as Eq[θ] = Eq[θ̃] Eq[σ], giving 7\nθ̂ = µθ̃ exp { µlogσ + 1\n2 e2slog σ\n} (12)\n5Although “weak data” may seem unrepresentative of typical problems in machine learning, it is important to remember that a sufficiently large and expressive model can make most data weak.\n6github.com/HIPS/autograd 7The term 1\n2 e2slog σ is optional in the sense that including it\ncorresponds to averaging over the hyperparameters, whereas discarding it corresponds to optimizing the hyperparameters (Empirical Bayes). We included it for all experiments."
+  }, {
+    "heading": "3.2. Connection to Dropout",
+    "text": "Dropout regularizes neural networks by perturbing hidden units in a directed network with multiplicative Bernoulli or Gaussian noise (Srivastava et al., 2014). Although it was originally framed as a heuristic, Dropout has been subsequently interpreted as variational inference under at least two different schemes (Gal & Ghahramani, 2016; Kingma et al., 2015). Here, we interpret Fadeout the reverse way, where we introduced it as variational inference and now notice that it looks similar to lognormal Dropout.8 If we take the uncertainty in θ̃ as low and clamp the other variational parameters, the gradient estimator for Fadeout is:\nz ∼ N (0, I|θ|) σ ← exp {µlog σ + exp {slog σ} z} θ ← θ̃ exp {µlog σ + exp {slog σ} z}\n∇µθ̃L ← σ ∇θ log p(x|θ)− θ̃ 8Rather than attempting to explain Dropout, the intent is to\nlend intuition about noncentered scale-mixture VI.\nThis is the gradient estimator for a lognormal version of Dropout with an L2 weight penalty of 12 . At each sample from the variational distribution, Fadeout introduces scale noise rather than the Bernoulli noise of Dropout. The connection to Dropout would seem to follow naturally from the common interpretation of scale mixtures as continuous relaxations of spike and slab priors (Engelhardt & Adams, 2014) and the idea that Dropout can be related to variational spike and slab inference (Louizos, 2015)."
+  }, {
+    "heading": "4. Experiments",
+    "text": ""
+  }, {
+    "heading": "4.1. Physics: Inferring Spin Models",
+    "text": "Ising model The Ising model is a prototypical undirected model for binary systems that includes both pairwise interactions and (potentially) sitewise biases. It can be seen as the fully observed case of the Boltzmann machine, and is typically parameterized with signed spins x ∈ {−1, 1}D and a likelihood given by\np(x|h,J) = 1 Z(h,J) exp {∑ i hixi + ∑ i<j Jijxixj } . (13)\nOriginally proposed as a minimal model of how long range order arises in magnets, it continues to find application in physics and biology as a model for phase transitions and quenched disorder in spin glasses (Nishimori, 2001) and collective firing patterns in neural spike trains (Schneidman et al., 2006; Shlens et al., 2006).\nHierarchical sparsity prior One appealing feature of the Ising model is that it allows a sparse set of underlying couplings J to give rise to long-range, distributed correlations across a system. Since many physical systems are thought to be dominated by a small number of relevant interactions, L1 regularization has been a favored approach for inferring Ising models. Here, we examine how a more accurate model of sparsity based on the Horseshoe prior (Figure 3) can improve inferences in these systems.\nEach coupling Jij and bias parameter hi is given its own scale parameter which are in turn tied under a global HalfCauchy prior for the scales (Figure 3, Appendix).\nSimulated datasets We generated synthetic couplings for two kinds of Ising systems: (i) a slightly sub-critical cubic ferromagnet (Jij > 0 for neighboring spins) and (ii) a Sherrington-Kirkpatrick spin glass diluted on an ErdösRenyi random graph with average degree 2. We sampled synthetic data for each system with the Swendsen-Wang algorithm (Appendix) (Swendsen & Wang, 1987).\nResults On both the ferromagnet and the spin glass, we found that Persistent VI with a noncentered Horseshoe prior (Fadeout) gave estimates with systematically lower reconstruction error of the couplings J (Figure 4) versus a variety of standard methods in the field (Appendix)."
+  }, {
+    "heading": "4.2. Biology: Reconstructing 3D Contacts in Proteins from Sequence Variation",
+    "text": "Potts model The Potts model generalizes the Ising model to non-binary categorical data. The factor graph is the same (Figure 3), except each spin xi can adopt q different categories with x ∈ {1, . . . , q}D and each Jij is a q × q matrix as\np(x|h,J) = 1 Z(h,J) exp {∑ i hi(xi) + ∑ i<j Jij(xi, xj) } .\n(14) The Potts model has recently generated considerable excitement in biology, where it has been used to infer 3D contacts in biological molecules solely from patterns of correlated mutations in the sequences that encode them (Marks et al., 2011; Morcos et al., 2011). These contacts are have been sufficient to predict the 3D structures of proteins, protein complexes, and RNAs (Marks et al., 2012).\nGroup sparsity Each pairwise factor Jij in a Potts model contains q × q parameters capturing all possible joint configurations of xi and xj . One natural way to enforce spar-\nsity in a Potts model is at the level of each q×q group. This can be accomplished by introducing a single scale parameter σij for all q × q z-scores J̃ij . We adopt this with the same Half-Cauchy hyperprior as the Ising problem, giving the same factor graph (Figure 3) now corresponding to a Group Horseshoe prior (Hernández-Lobato et al., 2013). In the real protein experiment, we also consider an exponential hyperprior, which corresponds to a Multivariate Laplace distribution (Eltoft et al., 2006) over the groups.\nSynthetic protein data We first investigated the performance of Persistent VI with group sparsity on a synthetic protein experiment. We constructed a synthetic Potts spin glass with a topology inspired by biological macromolecules. We generated synthetic parameters based on contacts in a simulated polymer and sampled 2000 sequences with 2× 106 steps of Gibbs sampling (Appendix).\nResults for a synthetic protein We inferred couplings with 400 of the sampled sequences using PVI with group sparsity and two standard methods of the field: L2 and Group L1 regularized maximum pseudolikelihood (Appendix). PVI with a noncentered Horseshoe yielded more accurate (Figure 5, right), less shrunk (Figure 5, left) estimates of interactions that were more predictive of the 1600 remaining test sequences (Table 2). The ability to generalize well to new sequences will likely be important to the related problem of predicting mutation effects with unsupervised models of sequence variation (Hopf et al., 2017; Figliuzzi et al., 2015).\nResults for natural sequence variation We applied the hierarchical Bayesian model from the protein simulation to model across-species amino acid covariation in the SH3\ndomain family (Figure 6). Transitioning from simulated to real protein data is particularly challenging for Bayesian methods because available sequence data are highly nonindependent due to a shared evolutionary history. We developed a new method for estimating the effective sample size (Appendix) which, when combined standard sequence reweighting techniques, yielded a reweighted effective sample size of 1,012 from 10,209 sequences.\nThe hierarchical Bayesian approach gave highly localized, sparse estimates of interactions compared to the two predominant methods in the field, L2 and groupL1 regularized pseudolikelihood (Figure 6). When compared to solved 3D structures for SH3 (Appendix), we found that the inferred interactions were considerably more accurate at predicting amino acids close in structure. Importantly, the hierarchical Bayesian approach accomplished this inference of strong, accurate interactions without a need to prespecify hyperparameters such as λ for L2 or L1 regularization. This is particularly important for natural biological sequences because the non-independence of samples limits the utility of cross validation for setting hyperparameters."
+  }, {
+    "heading": "5. Related work",
+    "text": ""
+  }, {
+    "heading": "5.1. Variational Inference",
+    "text": "One strategy for improving variational inference is to introduce correlations in variational distribution by geometric transformations. This can be made particularly powerful\nby using backpropagation to learn compositions of transformations that capture the geometry of complex posteriors (Rezende & Mohamed, 2015; Tran et al., 2016). Noncentered parameterizations of models may be complementary to these approaches by enabling more efficient representations of correlations between parameters and hyperparameters.\nMost related to this work, (Louizos et al., 2017; Ghosh & Doshi-Velez, 2017) show how variational inference with noncentered scale-mixture priors can be useful for Bayesian learning of neural networks, and how group sparsity can act as a form of automatic compression and model selection."
+  }, {
+    "heading": "5.2. Maximum Entropy",
+    "text": "Much of the work on inference of undirected graphical models has gone under the name of the Maximum Entropy method in physics and neuroscience, which can be equivalently formulated as maximum likelihood in an exponential family (MacKay, 2003). From this maximum likelihood interpretation, L1 regularized-maximum entropy modeling (MaxEnt) corresponds to the disfavored “integrate-out” approach to inference in hierarchical models9 (MacKay, 1996) that will introduce significant biases to inferred parameters (Macke et al., 2011). One solution to this bias was foreshadowed by methods for estimating entropy and Mutual Information, which used hierarchical priors to integrate over a large range of possible model complexities (Nemenman et al., 2002; Archer et al., 2013). These hierarchical approaches are favorable because in traditional MAP estimation any top level parameters that are fixed before inference (e.g. a global pseudocount α) introduce strong constraints on allowed model complexity. The improvements from PVI and Fadeout may be seen as extending this hierarchical approach to full systems of discrete variables."
+  }, {
+    "heading": "6. Conclusion",
+    "text": "We introduced a framework for scalable Bayesian sparsity for undirected graphical models composed of two methods. The first is an extension of stochastic variational inference to work with undirected graphical models that uses persistent gradient estimation to bypass estimating partition functions. The second is a variational approach designed to match the geometry of hierarchical, sparsity-promoting priors. We found that, when combined, these two methods give substantially improved inferences of undirected graphical models on both simulated and real systems from physics and computational biology.\n9To see this, note that L1-regularized MAP estimation is equivalent to integrating out a zero-mean Gaussian prior with unknown, exponentially-distributed variance"
+  }, {
+    "heading": "Acknowledgements",
+    "text": "We thank David Duvenaud, Finale Doshi-Velez, Miriam Huntley, Chris Sander, and members of the Marks lab for helpful comments and discussions. JBI was supported by a NSF Graduate Research Fellowship DGE1144152 and DSM by NIH grant 1R01-GM106303. Portions of this work were conducted on the Orchestra HPC Cluster at Harvard Medical School."
+  }],
+  "year": 2017,
+  "references": [{
+    "title": "Scale mixtures of normal distributions",
+    "authors": ["Andrews", "David F", "Mallows", "Colin L"],
+    "venue": "Journal of the Royal Statistical Society. Series B (Methodological), pp",
+    "year": 1974
+  }, {
+    "title": "Bayesian and quasi-bayesian estimators for mutual information from discrete data",
+    "authors": ["Archer", "Evan", "Park", "Il Memming", "Pillow", "Jonathan W"],
+    "year": 2013
+  }, {
+    "title": "Inverse ising inference using all the data",
+    "authors": ["Aurell", "Erik", "Ekeberg", "Magnus"],
+    "venue": "Physical review letters,",
+    "year": 2012
+  }, {
+    "title": "Hamiltonian monte carlo for hierarchical models",
+    "authors": ["MJ Betancourt", "Girolami", "Mark"],
+    "venue": "arXiv preprint arXiv:1312.0906,",
+    "year": 2013
+  }, {
+    "title": "The horseshoe estimator for sparse signals",
+    "authors": ["Carvalho", "Carlos M", "Polson", "Nicholas G", "Scott", "James G"],
+    "venue": "Biometrika, pp. asq017,",
+    "year": 2010
+  }, {
+    "title": "Bayesian structure learning for markov random fields with a spike and slab prior",
+    "authors": ["Chen", "Yutian", "Welling", "Max"],
+    "venue": "In Proceedings of the Twenty-Eighth Conference on Uncertainty in Artificial Intelligence,",
+    "year": 2012
+  }, {
+    "title": "Pseudolikelihood decimation algorithm improving the inference of the interaction network in a general class of ising models",
+    "authors": ["Decelle", "Aurélien", "Ricci-Tersenghi", "Federico"],
+    "venue": "Physical review letters,",
+    "year": 2014
+  }, {
+    "title": "On the multivariate laplace distribution",
+    "authors": ["Eltoft", "Torbjørn", "Kim", "Taesu", "Lee", "Te-Won"],
+    "venue": "IEEE Signal Processing Letters,",
+    "year": 2006
+  }, {
+    "title": "Bayesian structured sparsity from gaussian fields",
+    "authors": ["Engelhardt", "Barbara E", "Adams", "Ryan P"],
+    "venue": "arXiv preprint arXiv:1407.2235,",
+    "year": 2014
+  }, {
+    "title": "Coevolutionary landscape inference and the context-dependence of mutations in beta-lactamase tem-1",
+    "authors": ["Figliuzzi", "Matteo", "Jacquier", "Hervé", "Schug", "Alexander", "Tenaillon", "Oliver", "Weigt", "Martin"],
+    "venue": "Molecular biology and evolution, pp. msv211,",
+    "year": 2015
+  }, {
+    "title": "Dropout as a bayesian approximation: Representing model uncertainty in deep learning",
+    "authors": ["Gal", "Yarin", "Ghahramani", "Zoubin"],
+    "venue": "In Proceedings of The 33rd International Conference on Machine Learning,",
+    "year": 2016
+  }, {
+    "title": "Generalized spikeand-slab priors for bayesian group feature selection using expectation propagation",
+    "authors": ["Hernández-Lobato", "Daniel", "José Miguel", "Dupont", "Pierre"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 1891
+  }, {
+    "title": "Stochastic variational inference",
+    "authors": ["Hoffman", "Matthew D", "Blei", "David M", "Wang", "Chong", "Paisley", "John"],
+    "venue": "The Journal of Machine Learning Research,",
+    "year": 2013
+  }, {
+    "title": "Mutation effects predicted from sequence co-variation",
+    "authors": ["Hopf", "Thomas A", "Ingraham", "John B", "Poelwijk", "Frank J", "Schärfe", "Charlotta PI", "Springer", "Michael", "Sander", "Chris", "Marks", "Debora S"],
+    "venue": "Nature biotechnology,",
+    "year": 2017
+  }, {
+    "title": "An introduction to variational methods for graphical models",
+    "authors": ["Jordan", "Michael I", "Ghahramani", "Zoubin", "Jaakkola", "Tommi S", "Saul", "Lawrence K"],
+    "venue": "Machine learning,",
+    "year": 1999
+  }, {
+    "title": "Auto-encoding variational bayes",
+    "authors": ["Kingma", "Diederik P", "Welling", "Max"],
+    "venue": "In Proceedings of the International Conference on Learning Representations (ICLR),",
+    "year": 2014
+  }, {
+    "title": "Variational dropout and the local reparameterization trick",
+    "authors": ["DP Kingma", "T Salimans", "M. Welling"],
+    "venue": "Advances in Neural Information Processing Systems,",
+    "year": 2015
+  }, {
+    "title": "Probabilistic graphical models: principles and techniques",
+    "authors": ["Koller", "Daphne", "Friedman", "Nir"],
+    "venue": "MIT press,",
+    "year": 2009
+  }, {
+    "title": "Automatic differentiation variational inference",
+    "authors": ["Kucukelbir", "Alp", "Tran", "Dustin", "Ranganath", "Rajesh", "Gelman", "Andrew", "Blei", "David M"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2017
+  }, {
+    "title": "Smart regularization of deep architectures",
+    "authors": ["Louizos", "Christos"],
+    "venue": "Master’s thesis, University of Amsterdam,",
+    "year": 2015
+  }, {
+    "title": "Bayesian compression for deep learning",
+    "authors": ["Louizos", "Christos", "Ullrich", "Karen", "Welling", "Max"],
+    "venue": "arXiv preprint arXiv:1705.08665,",
+    "year": 2017
+  }, {
+    "title": "Hyperparameters: Optimize, or integrate out? In Maximum entropy and bayesian methods, pp. 43–59",
+    "authors": ["MacKay", "David JC"],
+    "year": 1996
+  }, {
+    "title": "Information theory, inference and learning algorithms",
+    "authors": ["MacKay", "David JC"],
+    "venue": "Cambridge university press,",
+    "year": 2003
+  }, {
+    "title": "Bayesian nonlinear modeling for the prediction competition",
+    "authors": ["MacKay", "David JC"],
+    "venue": "ASHRAE transactions,",
+    "year": 1994
+  }, {
+    "title": "How biased are maximum entropy models? In Advances in Neural Information Processing",
+    "authors": ["Macke", "Jakob H", "Murray", "Iain", "Latham", "Peter E"],
+    "year": 2011
+  }, {
+    "title": "Protein 3d structure computed from evolutionary sequence variation",
+    "authors": ["Marks", "Debora S", "Colwell", "Lucy J", "Sheridan", "Robert", "Hopf", "Thomas A", "Pagnani", "Andrea", "Zecchina", "Riccardo", "Sander", "Chris"],
+    "venue": "PloS one,",
+    "year": 2011
+  }, {
+    "title": "Protein structure prediction from sequence variation",
+    "authors": ["Marks", "Debora S", "Hopf", "Thomas A", "Sander", "Chris"],
+    "venue": "Nature biotechnology,",
+    "year": 2012
+  }, {
+    "title": "Bayesian variable selection in linear regression",
+    "authors": ["Mitchell", "Toby J", "Beauchamp", "John J"],
+    "venue": "Journal of the American Statistical Association,",
+    "year": 1988
+  }, {
+    "title": "Bayesian and l1 approaches for sparse unsupervised learning",
+    "authors": ["Mohamed", "Shakir", "Ghahramani", "Zoubin", "Heller", "Katherine A"],
+    "venue": "In Proceedings of the 29th International Conference on Machine Learning",
+    "year": 2012
+  }, {
+    "title": "Machine learning: a probabilistic perspective",
+    "authors": ["Murphy", "Kevin P"],
+    "venue": "MIT press,",
+    "year": 2012
+  }, {
+    "title": "Bayesian learning in undirected graphical models: approximate mcmc algorithms",
+    "authors": ["Murray", "Iain", "Ghahramani", "Zoubin"],
+    "venue": "In Proceedings of the 20th conference on Uncertainty in artificial intelligence,",
+    "year": 2004
+  }, {
+    "title": "Mcmc for doubly-intractable distributions",
+    "authors": ["Murray", "Iain", "Ghahramani", "Zoubin", "MacKay", "David JC"],
+    "venue": "In Proceedings of the Twenty-Second Conference on Uncertainty in Artificial Intelligence,",
+    "year": 2006
+  }, {
+    "title": "Entropy and inference, revisited",
+    "authors": ["Nemenman", "Ilya", "Shafee", "Fariel", "Bialek", "William"],
+    "venue": "Advances in neural information processing systems,",
+    "year": 2002
+  }, {
+    "title": "Statistical physics of spin glasses and information processing: an introduction",
+    "authors": ["Nishimori", "Hidetoshi"],
+    "year": 2001
+  }, {
+    "title": "A general framework for the parametrization of hierarchical models",
+    "authors": ["Papaspiliopoulos", "Omiros", "Roberts", "Gareth O", "Sköld", "Martin"],
+    "venue": "Statistical Science,",
+    "year": 2007
+  }, {
+    "title": "Black box variational inference",
+    "authors": ["Ranganath", "Rajesh", "Gerrish", "Sean", "Blei", "David"],
+    "venue": "In Proceedings of the Seventeenth International Conference on Artificial Intelligence and Statistics,",
+    "year": 2014
+  }, {
+    "title": "Variational inference with normalizing flows",
+    "authors": ["Rezende", "Danilo", "Mohamed", "Shakir"],
+    "venue": "In Proceedings of The 32nd International Conference on Machine Learning,",
+    "year": 2015
+  }, {
+    "title": "Stochastic backpropagation and approximate inference in deep generative models",
+    "authors": ["Rezende", "Danilo Jimenez", "Mohamed", "Shakir", "Wierstra", "Daan"],
+    "venue": "In Proceedings of The 31st International Conference on Machine Learning,",
+    "year": 2014
+  }, {
+    "title": "Weak pairwise correlations imply strongly correlated network states in a neural population",
+    "authors": ["Schneidman", "Elad", "Berry", "Michael J", "Segev", "Ronen", "Bialek", "William"],
+    "year": 2006
+  }, {
+    "title": "The structure of multi-neuron firing patterns in primate retina",
+    "authors": ["Shlens", "Jonathon", "Field", "Greg D", "Gauthier", "Jeffrey L", "Grivich", "Matthew I", "Petrusca", "Dumitru", "Sher", "Alexander", "Litke", "Alan M", "Chichilnisky", "EJ"],
+    "venue": "The Journal of neuroscience,",
+    "year": 2006
+  }, {
+    "title": "New method for parameter estimation in probabilistic models: minimum probability flow",
+    "authors": ["Sohl-Dickstein", "Jascha", "Battaglino", "Peter B", "DeWeese", "Michael R"],
+    "venue": "Physical review letters,",
+    "year": 2011
+  }, {
+    "title": "Dropout: A simple way to prevent neural networks from overfitting",
+    "authors": ["Srivastava", "Nitish", "Hinton", "Geoffrey", "Krizhevsky", "Alex", "Sutskever", "Ilya", "Salakhutdinov", "Ruslan"],
+    "venue": "The Journal of Machine Learning Research,",
+    "year": 1929
+  }, {
+    "title": "Nonuniversal critical dynamics in monte carlo simulations",
+    "authors": ["Swendsen", "Robert H", "Wang", "Jian-Sheng"],
+    "venue": "Physical review letters,",
+    "year": 1987
+  }, {
+    "title": "Regression shrinkage and selection via the lasso",
+    "authors": ["Tibshirani", "Robert"],
+    "venue": "Journal of the Royal Statistical Society. Series B (Methodological), pp",
+    "year": 1996
+  }, {
+    "title": "Training restricted boltzmann machines using approximations to the likelihood gradient",
+    "authors": ["Tieleman", "Tijmen"],
+    "venue": "In Proceedings of the 25th international conference on Machine learning,",
+    "year": 2008
+  }, {
+    "title": "Sparse bayesian learning and the relevance vector machine",
+    "authors": ["Tipping", "Michael E"],
+    "venue": "The journal of machine learning research,",
+    "year": 2001
+  }, {
+    "title": "Doubly stochastic variational bayes for non-conjugate inference",
+    "authors": ["Titsias", "Michalis", "Lázaro-Gredilla", "Miguel"],
+    "venue": "In Proceedings of the 31st International Conference on Machine Learning",
+    "year": 2014
+  }, {
+    "title": "The variational gaussian process",
+    "authors": ["Tran", "Dustin", "Ranganath", "Rajesh", "Blei", "David M"],
+    "venue": "In Proceedings of the International Conference on Learning Representations,",
+    "year": 2016
+  }, {
+    "title": "Parametric inference for imperfectly observed gibbsian fields",
+    "authors": ["Younes", "Laurent"],
+    "venue": "Probability theory and related fields,",
+    "year": 1989
+  }],
+  "id": "SP:aac99ce3c452b751870abda40bb40d41b073a350",
+  "authors": [{
+    "name": "John Ingraham",
+    "affiliations": []
+  }, {
+    "name": "Debora Marks",
+    "affiliations": []
+  }],
+  "abstractText": "Undirected graphical models are applied in genomics, protein structure prediction, and neuroscience to identify sparse interactions that underlie discrete data. Although Bayesian methods for inference would be favorable in these contexts, they are rarely used because they require doubly intractable Monte Carlo sampling. Here, we develop a framework for scalable Bayesian inference of discrete undirected models based on two new methods. The first is Persistent VI, an algorithm for variational inference of discrete undirected models that avoids doubly intractable MCMC and approximations of the partition function. The second is Fadeout, a reparameterization approach for variational inference under sparsity-inducing priors that captures a posteriori correlations between parameters and hyperparameters with noncentered parameterizations. We find that, together, these methods for variational inference substantially improve learning of sparse undirected graphical models in simulated and real problems from physics and biology.",
+  "title": "Variational Inference for Sparse and Undirected Models"
+}

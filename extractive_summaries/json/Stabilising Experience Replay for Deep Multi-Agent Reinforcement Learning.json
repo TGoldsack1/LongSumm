@@ -1,0 +1,249 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Reinforcement learning (RL), which enables an agent to learn control policies on-line given only sequences of observations and rewards, has emerged as a dominant paradigm for training autonomous systems. However, many real-world problems, such as network packet delivery (Ye et al., 2015), rubbish removal (Makar et al., 2001), and urban traffic control (Kuyer et al., 2008; Van der Pol & Oliehoek, 2016), are naturally modeled as cooperative\n*Equal contribution 1University of Oxford, Oxford, United Kingdom 2Microsoft Research, Redmond, USA. Correspondence to: Jakob Foerster <jakob.foerster@cs.ox.ac.uk>, Nantas Nardelli <nantas@robots.ox.ac.uk>.\nProceedings of the 34 th International Conference on Machine Learning, Sydney, Australia, PMLR 70, 2017. Copyright 2017 by the author(s).\nmulti-agent systems. Unfortunately, tackling such problems with traditional RL is not straightforward.\nIf all agents observe the true state, then we can model a cooperative multi-agent system as a single meta-agent. However, the size of this meta-agent’s action space grows exponentially in the number of agents. Furthermore, it is not applicable when each agent receives different observations that may not disambiguate the state, in which case decentralised policies must be learned.\nA popular alternative is independent Q-learning (IQL) (Tan, 1993), in which each agent independently learns its own policy, treating other agents as part of the environment. While IQL avoids the scalability problems of centralised learning, it introduces a new problem: the environment becomes nonstationary from the point of view of each agent, as it contains other agents who are themselves learning, ruling out any convergence guarantees. Fortunately, substantial empirical evidence has shown that IQL often works well in practice (Matignon et al., 2012).\nRecently, the use of deep neural networks has dramatically improved the scalability of single-agent RL (Mnih et al., 2015). However, one element key to the success of such approaches is the reliance on an experience replay memory, which stores experience tuples that are sampled during training. Experience replay not only helps to stabilise the training of a deep neural network, it also improves sample efficiency by repeatedly reusing experience tuples. Unfortunately, the combination of experience replay with IQL appears to be problematic: the nonstationarity introduced by IQL means that the dynamics that generated the data in the agent’s replay memory no longer reflect the current dynamics in which it is learning. While IQL without a replay memory can learn well despite nonstationarity so long as each agent is able to gradually track the other agents’ policies, that seems hopeless with a replay memory constantly confusing the agent with obsolete experience.\nTo avoid this problem, previous work on deep multi-agent RL has limited the use of experience replay to short, recent buffers (Leibo et al., 2017) or simply disabled replay altogether (Foerster et al., 2016). However, these workarounds limit the sample efficiency and threaten the stability of multi-agent RL. Consequently, the incompatibility of ex-\nperience replay with IQL is emerging as a key stumbling block to scaling deep multi-agent RL to complex tasks.\nIn this paper, we propose two approaches for effectively incorporating experience replay into multi-agent RL. The first approach interprets the experience in the replay memory as off-environment data (Ciosek & Whiteson, 2017). By augmenting each tuple in the replay memory with the probability of the joint action in that tuple, according to the policies in use at that time, we can compute an importance sampling correction when the tuple is later sampled for training. Since older data tends to generate lower importance weights, this approach naturally decays data as it becomes obsolete, preventing the confusion that a nonstationary replay memory would otherwise create.\nThe second approach is inspired by hyper Q-learning (Tesauro, 2003), which avoids the nonstationarity of IQL by having each agent learn a policy that conditions on an estimate of the other agents’ policies inferred from observing their behaviour. While it may seem hopeless to learn Qfunctions in this much larger space, especially when each agent’s policy is a deep neural network, we show that doing so is feasible as each agent need only condition on a lowdimensional fingerprint that is sufficient to disambiguate where in the replay memory an experience tuple was sampled from.\nWe evaluate these methods on a decentralised variant of StarCraft unit micromanagement,1 a challenging multi-agent benchmark problem with a high dimensional, stochastic environment that exceeds the complexity of many commonly used multi-agent testbeds. Our results confirm that, thanks to our proposed methods, experience replay can indeed be successfully combined with multiagent Q-learning to allow for stable training of deep multiagent value functions."
+  }, {
+    "heading": "2. Related Work",
+    "text": "Multi-agent RL has a rich history (Busoniu et al., 2008; Yang & Gu, 2004) but has mostly focused on tabular settings and simple environments. The most commonly used method is independent Q-learning (Tan, 1993; Shoham & Leyton-Brown, 2009; Zawadzki et al., 2014), which we discuss further in Section 3.2.\nMethods like hyper Q-learning (Tesauro, 2003), also discussed in Section 3.2, and AWESOME (Conitzer & Sandholm, 2007) try to tackle nonstationarity by tracking and conditioning each agent’s learning process on their teammates’ current policy, while Da Silva et al. (2006) propose detecting and tracking different classes of traces\n1StarCraft and its expansion StarCraft: Brood War are trademarks of Blizzard EntertainmentTM.\non which to condition policy learning. Kok & Vlassis (2006) show that coordination can be learnt by estimating a global Q-function in the classical distributed setting supplemented with a coordination graph. In general, these techniques have so far not successfully been scaled to highdimensional state spaces.\nLauer & Riedmiller (2000) propose a variation of distributed Q-learning, a coordination-free method. However, they also argue that the simple estimation of the value function in the standard model-free fashion is not enough to solve multi-agent problems, and coordination through means such as communication (Mataric, 1998) is required to ground separate observations to the full state function.\nMore recent work tries to leverage deep learning in multiagent RL, mostly as a means to reason about the emergence of inter-agent communication. Tampuu et al. (2015) apply a framework that combines DQN with independent Qlearning to two-player pong. Foerster et al. (2016) propose DIAL, an end-to-end differentiable architecture that allows agents to learn to communicate and has since been used by Jorge et al. (2016) in a similar setting. Sukhbaatar et al. (2016) also show that it is possible to learn to communicate by backpropagation. Leibo et al. (2017) analyse the emergence of cooperation and defection when using multiagent RL in mixed-cooperation environments such as the wolfpack problem. He et al. (2016) address multi-agent learning by explicitly marginalising the opponents’ strategy using a mixture of experts in the DQN. Unlike our contributions, none of these papers directly aim to address the nonstationarity arising in multi-agent learning.\nOur work is also broadly related to methods that attempt to allow for faster convergence of policy networks such as prioritized experience replay (Schaul et al., 2015), a version of the standard replay memory that biases the sampling distribution based on the TD error. However, this method does not account for nonstationary environments and does not take into account the unique properties of the multi-agent setting.\nWang et al. (2016) describe an importance sampling method for using off-policy experience in a single-agent actor-critic algorithm. However, to calculate policygradients, the importance ratios become products over potentially lengthy trajectories, introducing high variance that must be partially compensated for by truncation. By contrast, we address off-environment learning and show that the multi-agent structure results in importance ratios that are simply products over the agents’ policies.\nFinally, in the context of StarCraft micromanagement, Usunier et al. (2016) learn a centralised policy using standard single-agent RL. Their agent controls all the units owned by the player and observes the full state of the game.\nBy contrast, we consider a decentralised task in which each unit has only partial observability."
+  }, {
+    "heading": "3. Background",
+    "text": "We begin with background on single-agent and multi-agent reinforcement learning."
+  }, {
+    "heading": "3.1. Single-Agent Reinforcement Learning",
+    "text": "In a traditional RL problem, the agent aims to maximise its expected discounted return Rt = ∑∞ t=0 γ\ntrt, where rt is the reward the agent receives at time t and γ ∈ [0, 1) is the discount factor (Sutton & Barto, 1998). In a fully observable setting, the agent observes the true state of the environment st ∈ S, and chooses an action ut ∈ U according to a policy π(u|s). The action-value function Q of a policy π is Qπ(s, u) = E [Rt|st = s, ut = u]. The Bellman optimality equation,\nQ∗(s, u) = T Q∗(s, u) = r(s, u) + γ ∑ s′ P (s′|s, u) max u′ Q∗(s′, u′),\n(1)\nrecursively represents the optimal Q-function Q∗(s, u) = maxπ Q\nπ(s, u) as a function of the expected immediate reward r(s, u) and the transition function P (s′|s, u), which in turn yields an optimal greedy policy π∗(u|s) = δ(arg maxu′ Q(s, u\n′) − u). Q-learning (Watkins, 1989) uses a sample-based approximation of T to iteratively improve the Q-function. In deep Q-learning (Mnih et al., 2015), the Q-function is represented by a neural network parameterised by θ. During training, actions are chosen at each timestep according to an exploration policy, such as an -greedy policy that selects the currently estimated best action arg maxuQ(s, u) with probability 1 − , and takes a random exploratory action with probability . The reward and next state are observed, and the tuple 〈s, u, r, s′〉 is stored in a replay memory. The parameters θ are learned by sampling batches of b transitions from the replay memory, and minimising the squared TD-error:\nL(θ) = b∑ i=1 [(yDQNi −Q(s, u; θ))2], (2)\nwith a target yDQNi = ri + γmaxu′i Q(s ′ i, u ′ i; θ −), where θ− are the parameters of a target network periodically copied from θ and frozen for a number of iterations. The replay memory stabilises learning, prevents the network from overfitting to recent experiences, and improves sample efficiency. In partially observable settings, agents must in general condition on their entire action-observation history, or a sufficient stastistic thereof. In deep RL, this is\naccomplished by modelling the Q-function with a recurrent neural network (Hausknecht & Stone, 2015), utilising a gated architecture such as LSTM (Hochreiter & Schmidhuber, 1997) or GRU (Chung et al., 2014)."
+  }, {
+    "heading": "3.2. Multi-Agent Reinforcement Learning",
+    "text": "We consider a fully cooperative multi-agent setting in which n agents identified by a ∈ A ≡ {1, ..., n} participate in a stochastic game, G, described by a tuple G = 〈S,U, P, r, Z,O, n, γ〉. The environment occupies states s ∈ S, in which, at every time step, each agent takes an action ua ∈ U , forming a joint action u ∈ U ≡ Un. State transition probabilities are defined by P (s′|s,u) : S ×U × S → [0, 1]. As the agents are fully cooperative, they share the same reward function r(s,u) : S ×U→ R. Each agent’s observations z ∈ Z are governed by an observation function O(s, a) : S × A → Z. For notational simplicity, this observation function is deterministic, i.e., we model only perceptual aliasing and not noise. However, extending our methods to noisy observation functions is straightforward. Each agent a conditions its behaviour on its own action-observation history τa ∈ T ≡ (Z × U)∗, according to its policy πa(ua|τa) : T × U → [0, 1]. After each transition, the action ua and new observation O(s, a) are added to τa, forming τ ′a. We denote joint quantities over agents in bold, and joint quantities over agents other than a with the subscript −a, so that, e.g., u = [ua,u−a]. In independent Q-learning (IQL) (Tan, 1993), the simplest and most popular approach to multi-agent RL, each agent learns its own Q-function that conditions only on the state and its own action. Since our setting is partially observable, IQL can be implemented by having each agent condition on its action-observation history, i.e., Qa(τa, ua). In deep RL, this can be achieved by having each agent perform DQN using a recurrent neural network trained on its own observations and actions.\nIQL is appealing because it avoids the scalability problems of trying to learn a joint Q-function that conditions on u, since |U| grows exponentially in the number of agents. It is also naturally suited to partially observable settings, since, by construction, it learns decentralised policies in which each agent’s action conditions only on its own observations.\nHowever, IQL introduces a key problem: the environment becomes nonstationary from the point of view each agent, as it contains other agents who are themselves learning, ruling out any convergence guarantees. On the one hand, the conventional wisdom is that this problem is not severe in practice, and substantial empirical results have demonstrated success with IQL (Matignon et al., 2012). On the other hand, such results do not involve deep learning.\nAs discussed earlier, deep RL relies heavily on experience replay and the combination of experience replay with IQL appears to be problematic: the nonstationarity introduced by IQL means that the dynamics that generated the data in the agent’s replay memory no longer reflect the current dynamics in which it is learning. While IQL without a replay memory can learn well despite nonstationarity so long as each agent is able to gradually track the other agents’ policies, that seems hopeless with a replay memory constantly confusing the agent with obsolete experience. In the next section, we propose methods to address this problem."
+  }, {
+    "heading": "4. Methods",
+    "text": "To avoid the difficulty of combining IQL with experience replay, previous work on deep multi-agent RL has limited the use of experience replay to short, recent buffers (Leibo et al., 2017) or simply disabled replay altogether (Foerster et al., 2016). However, these workarounds limit the sample efficiency and threaten the stability of multi-agent RL. In this section, we propose two approaches for effectively incorporating experience replay into multi-agent RL."
+  }, {
+    "heading": "4.1. Multi-Agent Importance Sampling",
+    "text": "We can address the non-stationarity present in IQL by developing an importance sampling scheme for the multiagent setting. Just as an RL agent can use importance sampling to learn off-policy from data gathered when its own policy was different, so too can it learn off-environment (Ciosek & Whiteson, 2017) from data gathered in a different environment. Since IQL treats other agents’ policies as part of the environment, off-environment importance sampling can be used to stabilise experience replay. In particular, since we know the policies of the agents at each stage of training, we know exactly the manner in which the environment is changing, and can thereby correct for it with importance weighting, as follows. We consider first a fullyobservable multi-agent setting. If the Q-functions can condition directly on the true state s, we can write the Bellman optimality equation for a single agent given the policies of all other agents:\nQ∗a(s, ua|π−a) = ∑ u−a π−a(u−a|s) [ r(s, ua,u−a)+\nγ ∑ s′ P (s′|s, ua,u−a) max u′a Q∗a(s ′, u′a) ] . (3)\nThe nonstationary component of this equation is π−a(u−a|s) = Πi∈−aπi(ui|s), which changes as the other agents’ policies change over time. Therefore, to enable importance sampling, at the time of collection tc, we record πtc−a(u−a|s) in the replay memory, forming an augmented transition tuple 〈s, ua, r, π(u−a|s), s′〉(tc).\nAt the time of replay tr, we train off-environment by minimising an importance weighted loss function:\nL(θ) = b∑ i=1 πtr−a(u−a|s) πti−a(u−a|s) [(yDQNi −Q(s, u; θ))2], (4)\nwhere ti is the time of collection of the i-th sample.\nThe derivation of the non-stationary parts of the Bellman equation in the partially observable multi-agent setting is considerably more complex as the agents’ actionobservation histories are correlated in a complex fashion that depends on the agents’ policies as well as the transition and observation functions.\nTo make progress, we can define an augmented state space ŝ = {s, τ−a} ∈ Ŝ = S × Tn−1. This state space includes both the original state s and the action-observation history of the other agents τ−a. We also define a corresponding observation function Ô such that Ô(ŝ, a) = O(s, a). With these definitions in place, we define a new reward function r̂(ŝ, u) = ∑ u−a\nπ−a(u−a|τ−a)r(s,u) and a new transition function,\nP̂ (ŝ′|ŝ, u) = P (s′, τ ′|s, τ, u) =∑ u−a π−a(u−a|τ−a)P (s′|s,u)p(τ ′−a|τ−a,u−a, s′). (5)\nAll other elements of the augmented game Ĝ are adopted from the original game G. This also includes T , the space of action-observation histories. The augmented game is then specified by Ĝ = 〈Ŝ, U, P̂ , r̂, Z, Ô, n, γ〉. We can now write a Bellman equation for Ĝ:\nQ(τ, u) = ∑ ŝ p(ŝ|τ) [ r̂(ŝ, u) +\nγ ∑\nτ ′,ŝ′,u′\nP̂ (ŝ′|ŝ, u)π(u′, τ ′)p(τ ′|τ, ŝ′, u)Q(τ ′, u′) ] . (6)\nSubstituting back in the definitions of the quantities in Ĝ, we arrive at a Bellman equation of a form similar to (3), where the righthand side is multiplied by π−a(u−a|τ−a):\nQ(τ, u) = ∑ ŝ p(ŝ|τ) ∑ u−a π−a(u−a|τ−a) [ r(s,u) +\nγ ∑\nτ ′,ŝ′,u′\nP (s′|s,u)p(τ ′−a|τ−a,u−a, s′) ·\nπ(u′, τ ′)p(τ ′|τ, ŝ′, u)Q(τ ′, u′) ] . (7)\nThis construction simply allows us to demonstrate the dependence of the Bellman equation on the same nonstationary term π−a(u−a|s) in the partially-observable case.\nHowever, unlike in the fully observable case, the righthand side contains several other terms that indirectly depend on the policies of the other agents and are to the best of our knowledge intractable. Consequently, the importance ratio defined above, πtr−a(u−a|s) π\nti −a(u−a|s)\n, is only an approximation in the\npartially observable setting."
+  }, {
+    "heading": "4.2. Multi-Agent Fingerprints",
+    "text": "While importance sampling provides an unbiased estimate of the true objective, it often yields importance ratios with large and unbounded variance (Robert & Casella, 2004). Truncating or adjusting the importance weights can reduce the variance but introduces bias. Consequently, we propose an alternative method that embraces the nonstationarity of multi-agent problems, rather than correcting for it.\nThe weakness of IQL is that, by treating other agents as part of the environment, it ignores the fact that such agents’ policies are changing over time, rendering its own Q-function nonstationary. This implies that the Q-function could be made stationary if it conditioned on the policies of the other agents. This is exactly the philosophy behind hyper Q-learning (Tesauro, 2003): each agent’s state space is augmented with an estimate of the other agents’ policies computed via Bayesian inference. Intuitively, this reduces each agent’s learning problem to a standard, single-agent problem in a stationary, but much larger, environment.\nThe practical difficulty of hyper Q-learning is that it increases the dimensionality of the Q-function, making it potentially infeasible to learn. This problem is exacerbated in deep learning, when the other agents’ policies consist of high dimensional deep neural networks. Consider a naive approach to combining hyper Q-learning with deep RL that includes the weights of the other agents’ networks, θ−a, in the observation function. The new observation function is then O′(s) = {O(s),θ−a}. The agent could in principle\nthen learn a mapping from the weights θ−a, and its own trajectory τ , into expected returns. Clearly, if the other agents are using deep models, then θ−a is far too large to include as input to the Q-function.\nHowever, a key observation is that, to stabilise experience replay, each agent does not need to be able to condition on any possible θ−a, but only those values of θ−a that actually occur in its replay memory. The sequence of policies that generated the data in this buffer can be thought of as following a single, one-dimensional trajectory through the high-dimensional policy space. To stabilise experience replay, it should be sufficient if each agent’s observations disambiguate where along this trajectory the current training sample originated from.\nThe question then, is how to design a low-dimensional fingerprint that contains this information. Clearly, such a fingerprint must be correlated with the true value of stateaction pairs given the other agents’ policies. It should typically vary smoothly over training, to allow the model to generalise across experiences in which the other agents execute policies of varying quality as they learn. An obvious candidate for inclusion in the fingerprint is the training iteration number e. One potential challenge is that after policies have converged, this requires the model to fit multiple fingerprints to the same value, making the function somewhat harder to learn and more difficult to generalise from.\nAnother key factor in the performance of the other agents is the rate of exploration . Typically an annealing schedule is set for such that it varies smoothly throughout training and is quite closely correlated to performance. Therefore, we further augment the input to the Q-function with , such that the observation function becomes O′(s) = {O(s), , e}. Our results in Section 6 show that even this simple fingerprint is remarkably effective."
+  }, {
+    "heading": "5. Experiments",
+    "text": "In this section, we describe our experiments applying experience replay with fingerprints (XP+FP), with importance sampling (XP+IS), and with the combination (XP+IS+FP), to the StarCraft domain. We run experiments with both feedforward (FF) and recurrent (RNN) models, to test the hypothesis that in StarCraft recurrent models can use trajectory information to more easily disambiguate experiences from different stages of training."
+  }, {
+    "heading": "5.1. Decentralised StarCraft Micromanagement",
+    "text": "StarCraft is an example of a complex, stochastic environment whose dynamics cannot easily be simulated. This differs from standard multi-agent settings such as Packet World (Weyns et al., 2005) and simulated RoboCup (Hausknecht et al., 2016), where often entire episodes can be fully replayed and analysed. This difficulty is typical of real-world problems, and is well suited to the modelfree approaches common in deep RL. In StarCraft, micromanagement refers to the subtask of controlling single or grouped units to move them around the map and fight enemy units. In our multi-agent variant of StarCraft micromanagement, the centralised player is replaced by a set of agents, each assigned to one unit on the map. Each agent observes a subset of the map centred on the unit it controls, as shown in Figure 1, and must select from a restricted set of durative actions: move[direction], attack[enemy id], stop, and noop. During an episode, each unit is identified by a positive integer initialised on the first time-step.\nAll units are Terran Marines, ground units with a fixed range of fire about the length of four stacked units. Reward is the sum of the damage inflicted against opponent units during that timestep, with an additional terminal reward equal to the sum of the health of all units on the team. This is a variation of a naturally arising battle signal, comparable with the one used by Usunier et al. (2016). A few timesteps after the agents are spawned, they are attacked by opponent units of the same type. Opponents are controlled by the game AI, which is set to attack all the time. We consider two variations: 3 marines vs 3 marines (m3v3), and 5 marines vs 5 marines (m5v5). Both of these require the agents to coordinate their movements to get the opponents into their range of fire with good positioning, and to focus their firing on each enemy unit so as to destroy them more quickly. Skilled human StarCraft players can typically solve these tasks.\nWe build our models in Torch7 (Collobert et al., 2011), and run our StarCraft experiments with TorchCraft (Synnaeve et al., 2016), a library that provides the functionality to enact the standard reinforcement learning step in StarCraft: BroodWar, which we extend to enable multi-agent control."
+  }, {
+    "heading": "5.2. Architecture",
+    "text": "We use the recurrent DQN architecture described by Foerster et al. (2016) with a few modifications. We do not consider communicating agents, so there are no message connections. As mentioned above, we use two different different models: one with a feed-forward model with two fully connected hidden layers, and another with a singlelayer GRU. For both models, every hidden layer has 128 neurons.\nWe linearly anneal from 1.0 to 0.02 over 1500 episodes, and train the network for emax = 2500 training episodes. In the standard training loop, we collect a single episode and add it to the replay memory at each training step. We sample batches of 30n episodes uniformly from the replay memory and train on fully unrolled episodes. In order to reduce the variance of the multi-agent importance weights, we clip them to the interval [0.01, 2]. We also normalise the importance weights by the number of agents, by raising them to the power of 1n−1 . Lastly, we divide the importance weights by their running average in order to keep the overall learning rate constant. All other hyperparameters are identical to Foerster et al. (2016)."
+  }, {
+    "heading": "6. Results",
+    "text": "In this section, we present the results of our StarCraft experiments, summarised in Figure 2. Across all tasks and models, the baseline without experience replay (NOXP) performs poorly. Without the diversity in trajectories provided by experience replay, NOXP overfits to the greedy policy once becomes small. When exploratory actions do occur, agents visit areas of the state space that have not had their Q-values updated for many iterations, and bootstrap off of values which have become stale or distorted by updates to the Q-function elsewhere. This effect can harm or destabilise the policy. With a recurrent model, performance simply degrades, while in the feed-forward case, it begins to drop significantly later in training. We hypothesise that full trajectories are inherently more diverse than single observations, as they include compounding chances for exploratory actions. Consequently, it is easier to overfit to single observations, and experience replay is more essential for a feed-forward model.\nWith a naive application of experience replay (XP), the model tries to simultaneously learn a best-response policy to every historical policy of the other agents. Despite the nonstationarity, the stability of experience replay enables XP to outperform NOXP in each case. However, due to limited disambiguating information, the model cannot appropriately account for the impact of any particular policy of the other agents, or keep track of their current policy. The experience replay is therefore used inefficiently,\nand the model cannot generalise properly from experiences early in training."
+  }, {
+    "heading": "6.1. Importance Sampling",
+    "text": "The importance sampling approach (XP+IS) slightly outperforms XP when using feed-forward models. While mathematically sound in the fully observable case, XP+IS is only approximate for our partially observable problem, and runs into practical obstacles. Early in training, the importance weights are relatively well behaved and have low variance. However, as drops, the importance ratios become multi-modal with increasing variance. The large majority of importance weights are less than or equal to\n(1 − ) ≈ , so few experiences contribute strongly to learning. In a setting that does not require as strongly deterministic a policy as StarCraft, could be kept higher and the variance of the importance weights would be lower."
+  }, {
+    "heading": "6.2. Fingerprints",
+    "text": "Our results show that the simple fingerprint of adding e and to the observation (XP+FP) dramatically improves performance for the feed-forward model. This fingerprint provides sufficient disambiguation for the model to track the quality of the other agents’ policies over the course of training, and make proper use of the experience buffer. The network still sees a diverse array of input states across which\nto generalise but is able to modify its predicted value in accordance with the known stage of training.\nFigure 2 also shows that there is no extra benefit from combining importance sampling with fingerprints (XP+IS+FP). This makes sense given that the two approaches both address the same problem of nonstationarity, albeit in different ways.\nFigure 3, which shows the estimated value for XP+FS of a single initial state observation with different inputs, demonstrates that the network learns to smoothly vary its value estimates across different stages of training, correctly associating high values with the low seen later in training. This approach allows the model to generalise between best responses to different policies of other agents. In effect, a larger dataset is available in this case than when using importance sampling, where most experiences are strongly discounted during training. The fingerprint enables the transfer of learning between diverse historical experiences, which can significantly improve performance."
+  }, {
+    "heading": "6.3. Informative Trajectories",
+    "text": "When using recurrent networks, the performance gains of XP+IS and XP+FP are not as large; in the 3v3 task, neither method helps. The reason is that, in StarCraft, the observed trajectories are significantly informative about the state of training, as shown in Figurea 4a and 4b. For example, the agent can observe that it or its allies have taken many seemingly random actions, and infer that the sampled experience comes from early in training. This is a demonstration of the power of recurrent architectures in sequential tasks with partial observability: even without explicit additional information, the network is able to partially disambiguate experiences from different stages of training. To illustrate this, we train a linear model to predict the training from the\nhidden state of the recurrent model. Figure 4c shows a reasonably strong predictive accuracy even for a model trained with XP but no fingerprint, indicating that disambiguating information is indeed kept in the hidden states. However, the hidden states of a recurrent model trained with a fingerprint (Figure 4d) are even more informative."
+  }, {
+    "heading": "7. Conclusion",
+    "text": "This paper proposed two methods for stabilising experience replay in deep multi-agent reinforcement learning: 1) using a multi-agent variant of importance sampling to naturally decay obsolete data and 2) conditioning each agent’s value function on a fingerprint that disambiguates the age of the data sampled from the replay memory. Results on a challenging decentralised variant of StarCraft unit micromanagement confirmed that these methods enable the successful combination of experience replay with multiple agents. In the future, we would like to apply these methods to a broader range of nonstationary training problems, such as classification on changing data, and extend them to multiagent actor-critic methods."
+  }, {
+    "heading": "Acknowledgements",
+    "text": "This project has received funding from the European Research Council (ERC) under the European Unions Horizon 2020 research and innovation programme (grant agreement #637713). This work was also supported by the OxfordGoogle DeepMind Graduate Scholarship, the Microsoft Research PhD Scholarship Program, EPSRC AIMS CDT grant EP/L015987/1, ERC grant ERC-2012-AdG 321162- HELIOS, EPSRC grant Seebibyte EP/M013774/1 and EPSRC/MURI grant EP/N019474/1. Cloud computing GPU resources were provided through a Microsoft Azure for Research award. We thank Nando de Freitas, Yannis Assael, and Brendan Shillingford for the helpful comments and discussion. We also thank Gabriel Synnaeve, Zeming Lin, and the rest of the TorchCraft team at FAIR for all the help with the interface."
+  }],
+  "year": 2017,
+  "references": [{
+    "title": "A comprehensive survey of multiagent reinforcement learning",
+    "authors": ["Busoniu", "Lucian", "Babuska", "Robert", "De Schutter", "Bart"],
+    "venue": "IEEE Transactions on Systems Man and Cybernetics Part C Applications and Reviews,",
+    "year": 2008
+  }, {
+    "title": "Empirical evaluation of gated recurrent neural networks on sequence modeling",
+    "authors": ["Chung", "Junyoung", "Gulcehre", "Caglar", "Cho", "KyungHyun", "Bengio", "Yoshua"],
+    "venue": "arXiv preprint arXiv:1412.3555,",
+    "year": 2014
+  }, {
+    "title": "Torch7: A matlab-like environment for machine learning",
+    "authors": ["R. Collobert", "K. Kavukcuoglu", "C. Farabet"],
+    "venue": "In BigLearn, NIPS Workshop,",
+    "year": 2011
+  }, {
+    "title": "Awesome: A general multiagent learning algorithm that converges in self-play and learns a best response against stationary opponents",
+    "authors": ["Conitzer", "Vincent", "Sandholm", "Tuomas"],
+    "venue": "Machine Learning,",
+    "year": 2007
+  }, {
+    "title": "Dealing with non-stationary environments using context detection",
+    "authors": ["Da Silva", "Bruno C", "Basso", "Eduardo W", "Bazzan", "Ana LC", "Engel", "Paulo M"],
+    "venue": "In Proceedings of the 23rd international conference on Machine learning,",
+    "year": 2006
+  }, {
+    "title": "Learning to communicate with deep multi-agent reinforcement learning",
+    "authors": ["Foerster", "Jakob", "Assael", "Yannis M", "de Freitas", "Nando", "Whiteson", "Shimon"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2016
+  }, {
+    "title": "Deep recurrent qlearning for partially observable mdps",
+    "authors": ["Hausknecht", "Matthew", "Stone", "Peter"],
+    "venue": "arXiv preprint arXiv:1507.06527,",
+    "year": 2015
+  }, {
+    "title": "Half field offense: an environment for multiagent learning and ad hoc teamwork",
+    "authors": ["Hausknecht", "Matthew", "Mupparaju", "Prannoy", "Subramanian", "Sandeep", "S Kalyanakrishnan", "P. Stone"],
+    "venue": "In AAMAS Adaptive Learning Agents (ALA) Workshop,",
+    "year": 2016
+  }, {
+    "title": "Opponent modeling in deep reinforcement learning",
+    "authors": ["He", "Boyd-Graber", "Jordan", "Kwok", "Kevin", "Daumé III", "Hal"],
+    "venue": "In Proceedings of The 33rd International Conference on Machine Learning,",
+    "year": 2016
+  }, {
+    "title": "Long shortterm memory",
+    "authors": ["Hochreiter", "Sepp", "Schmidhuber", "Jürgen"],
+    "venue": "Neural computation,",
+    "year": 1997
+  }, {
+    "title": "Learning to play guess who? and inventing a grounded language as a consequence",
+    "authors": ["Jorge", "Emilio", "Kågebäck", "Mikael", "Gustavsson", "Emil"],
+    "venue": "arXiv preprint arXiv:1611.03218,",
+    "year": 2016
+  }, {
+    "title": "Collaborative multiagent reinforcement learning by payoff propagation",
+    "authors": ["Kok", "Jelle R", "Vlassis", "Nikos"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2006
+  }, {
+    "title": "Multiagent reinforcement learning for urban traffic control using coordination graphs",
+    "authors": ["Kuyer", "Lior", "Whiteson", "Shimon", "Bakker", "Bram", "Vlassis", "Nikos"],
+    "venue": "In ECML 2008: Proceedings of the Nineteenth European Conference on Machine Learning,",
+    "year": 2008
+  }, {
+    "title": "An algorithm for distributed reinforcement learning in cooperative multiagent systems",
+    "authors": ["Lauer", "Martin", "Riedmiller"],
+    "venue": "Proceedings of the Seventeenth International Conference on Machine Learning. Citeseer,",
+    "year": 2000
+  }, {
+    "title": "Multi-agent reinforcement learning in sequential social dilemmas",
+    "authors": ["Leibo", "Joel Z", "Zambaldi", "Vinicius", "Lanctot", "Marc", "Marecki", "Janusz", "Graepel", "Thore"],
+    "venue": "arXiv preprint arXiv:1702.03037,",
+    "year": 2017
+  }, {
+    "title": "Hierarchical multi-agent reinforcement learning",
+    "authors": ["Makar", "Rajbala", "Mahadevan", "Sridhar", "Ghavamzadeh", "Mohammad"],
+    "venue": "In Proceedings of the fifth international conference on Autonomous agents,",
+    "year": 2001
+  }, {
+    "title": "Using communication to reduce locality in distributed multiagent learning",
+    "authors": ["Mataric", "Maja J"],
+    "venue": "Journal of experimental & theoretical artificial intelligence,",
+    "year": 1998
+  }, {
+    "title": "Independent reinforcement learners in cooperative markov games: a survey regarding coordination problems",
+    "authors": ["Matignon", "Laetitia", "Laurent", "Guillaume J", "Le Fort-Piat", "Nadine"],
+    "venue": "The Knowledge Engineering Review,",
+    "year": 2012
+  }, {
+    "title": "Monte carlo statistical methods springer",
+    "authors": ["CP Robert", "G. Casella"],
+    "venue": "New York,",
+    "year": 2004
+  }, {
+    "title": "Multiagent Systems: Algorithmic, Game-Theoretic, and Logical Foundations",
+    "authors": ["Y. Shoham", "K. Leyton-Brown"],
+    "year": 2009
+  }, {
+    "title": "Learning multiagent communication with backpropagation",
+    "authors": ["Sukhbaatar", "Sainbayar", "Fergus", "Rob"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2016
+  }, {
+    "title": "Reinforcement learning: An introduction, volume 1",
+    "authors": ["Sutton", "Richard S", "Barto", "Andrew G"],
+    "venue": "MIT press Cambridge,",
+    "year": 1998
+  }, {
+    "title": "Torchcraft: a library for machine learning research on real-time strategy games",
+    "authors": ["Synnaeve", "Gabriel", "Nardelli", "Nantas", "Auvolat", "Alex", "Chintala", "Soumith", "Lacroix", "Timothée", "Lin", "Zeming", "Richoux", "Florian", "Usunier", "Nicolas"],
+    "venue": "arXiv preprint arXiv:1611.00625,",
+    "year": 2016
+  }, {
+    "title": "Multiagent cooperation and competition with deep reinforcement learning",
+    "authors": ["Tampuu", "Ardi", "Matiisen", "Tambet", "Kodelja", "Dorian", "Kuzovkin", "Ilya", "Korjus", "Kristjan", "Aru", "Juhan", "Jaan", "Vicente", "Raul"],
+    "venue": "arXiv preprint arXiv:1511.08779,",
+    "year": 2015
+  }, {
+    "title": "Multi-agent reinforcement learning: Independent vs. cooperative agents",
+    "authors": ["Tan", "Ming"],
+    "venue": "In Proceedings of the tenth international conference on machine learning,",
+    "year": 1993
+  }, {
+    "title": "Extending q-learning to general adaptive multi-agent systems",
+    "authors": ["Tesauro", "Gerald"],
+    "venue": "In NIPS,",
+    "year": 2003
+  }, {
+    "title": "Episodic exploration for deep deterministic policies: An application to starcraft micromanagement tasks",
+    "authors": ["Usunier", "Nicolas", "Synnaeve", "Gabriel", "Lin", "Zeming", "Chintala", "Soumith"],
+    "venue": "arXiv preprint arXiv:1609.02993,",
+    "year": 2016
+  }, {
+    "title": "Coordinated deep reinforcement learners for traffic light control",
+    "authors": ["Van der Pol", "Elise", "Oliehoek", "Frans A"],
+    "venue": "In NIPS’16 Workshop on Learning, Inference and Control of Multi-Agent Systems,",
+    "year": 2016
+  }, {
+    "title": "Sample efficient actor-critic with experience",
+    "authors": ["Wang", "Ziyu", "Bapst", "Victor", "Heess", "Nicolas", "Mnih", "Volodymyr", "Munos", "Remi", "Kavukcuoglu", "Koray", "de Freitas", "Nando"],
+    "venue": "replay. arXiv preprint arXiv:1611.01224,",
+    "year": 2016
+  }, {
+    "title": "Learning from delayed rewards",
+    "authors": ["Watkins", "Christopher John Cornish Hellaby"],
+    "venue": "PhD thesis,",
+    "year": 1989
+  }, {
+    "title": "The packet-world: A test bed for investigating situated multi-agent systems. In Software Agent-Based Applications, Platforms and Development Kits",
+    "authors": ["Weyns", "Danny", "Helleboogh", "Alexander", "Holvoet", "Tom"],
+    "year": 2005
+  }, {
+    "title": "Multiagent reinforcement learning for multi-robot systems: A survey",
+    "authors": ["Yang", "Erfu", "Gu", "Dongbing"],
+    "venue": "Technical report, tech. rep,",
+    "year": 2004
+  }, {
+    "title": "A multiagent framework for packet routing in wireless sensor",
+    "authors": ["Ye", "Dayong", "Zhang", "Minjie", "Yang", "Yun"],
+    "venue": "networks. sensors,",
+    "year": 2015
+  }, {
+    "title": "Empirically evaluating multiagent learning algorithms",
+    "authors": ["E. Zawadzki", "A. Lipson", "K. Leyton-Brown"],
+    "venue": "arXiv preprint 1401.8074,",
+    "year": 2014
+  }],
+  "id": "SP:fc5f17786452f94dce7e6213f879c03a183529de",
+  "authors": [{
+    "name": "Jakob Foerster",
+    "affiliations": []
+  }, {
+    "name": "Nantas Nardelli",
+    "affiliations": []
+  }, {
+    "name": "Gregory Farquhar",
+    "affiliations": []
+  }, {
+    "name": "Triantafyllos Afouras",
+    "affiliations": []
+  }, {
+    "name": "Philip. H. S. Torr",
+    "affiliations": []
+  }, {
+    "name": "Pushmeet Kohli",
+    "affiliations": []
+  }, {
+    "name": "Shimon Whiteson",
+    "affiliations": []
+  }],
+  "abstractText": "Many real-world problems, such as network packet routing and urban traffic control, are naturally modeled as multi-agent reinforcement learning (RL) problems. However, existing multi-agent RL methods typically scale poorly in the problem size. Therefore, a key challenge is to translate the success of deep learning on singleagent RL to the multi-agent setting. A major stumbling block is that independent Q-learning, the most popular multi-agent RL method, introduces nonstationarity that makes it incompatible with the experience replay memory on which deep Q-learning relies. This paper proposes two methods that address this problem: 1) using a multi-agent variant of importance sampling to naturally decay obsolete data and 2) conditioning each agent’s value function on a fingerprint that disambiguates the age of the data sampled from the replay memory. Results on a challenging decentralised variant of StarCraft unit micromanagement confirm that these methods enable the successful combination of experience replay with multi-agent RL.",
+  "title": "Stabilising Experience Replay for Deep Multi-Agent Reinforcement Learning"
+}

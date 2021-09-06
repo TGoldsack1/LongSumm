@@ -1,0 +1,375 @@
+{
+  "sections": [{
+    "text": "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 5027–5038 Brussels, Belgium, October 31 - November 4, 2018. c©2018 Association for Computational Linguistics\n5027"
+  }, {
+    "heading": "1 Introduction",
+    "text": "Semantic role labeling (SRL) extracts a high-level representation of meaning from a sentence, labeling e.g. who did what to whom. Explicit representations of such semantic information have been\nshown to improve results in challenging downstream tasks such as dialog systems (Tur et al., 2005; Chen et al., 2013), machine reading (Berant et al., 2014; Wang et al., 2015) and translation (Liu and Gildea, 2010; Bazrafshan and Gildea, 2013).\nThough syntax was long considered an obvious prerequisite for SRL systems (Levin, 1993; Punyakanok et al., 2008), recently deep neural network architectures have surpassed syntacticallyinformed models (Zhou and Xu, 2015; Marcheggiani et al., 2017; He et al., 2017; Tan et al., 2018; He et al., 2018), achieving state-of-the art SRL performance with no explicit modeling of syntax. An additional benefit of these end-to-end models is that they require just raw tokens and (usually) detected predicates as input, whereas richer linguistic features typically require extraction by an auxiliary pipeline of models.\nStill, recent work (Roth and Lapata, 2016; He et al., 2017; Marcheggiani and Titov, 2017) indicates that neural network models could see even higher accuracy gains by leveraging syntactic information rather than ignoring it. He et al. (2017) indicate that many of the errors made by a syntaxfree neural network on SRL are tied to certain syntactic confusions such as prepositional phrase attachment, and show that while constrained inference using a relatively low-accuracy predicted parse can provide small improvements in SRL accuracy, providing a gold-quality parse leads to substantial gains. Marcheggiani and Titov (2017) incorporate syntax from a high-quality parser (Kiperwasser and Goldberg, 2016) using graph convolutional neural networks (Kipf and Welling, 2017), but like He et al. (2017) they attain only small increases over a model with no syntactic parse, and even perform worse than a syntax-free model on out-of-domain data. These works suggest that though syntax has the potential to improve neural network SRL models, we have not\nyet designed an architecture which maximizes the benefits of auxiliary syntactic information.\nIn response, we propose linguistically-informed self-attention (LISA): a model that combines multi-task learning (Caruana, 1993) with stacked layers of multi-head self-attention (Vaswani et al., 2017); the model is trained to: (1) jointly predict parts of speech and predicates; (2) perform parsing; and (3) attend to syntactic parse parents, while (4) assigning semantic role labels. Whereas prior work typically requires separate models to provide linguistic analysis, including most syntaxfree neural models which still rely on external predicate detection, our model is truly end-to-end: earlier layers are trained to predict prerequisite parts-of-speech and predicates, the latter of which are supplied to later layers for scoring. Though prior work re-encodes each sentence to predict each desired task and again with respect to each predicate to perform SRL, we more efficiently encode each sentence only once, predict its predicates, part-of-speech tags and labeled syntactic parse, then predict the semantic roles for all predicates in the sentence in parallel. The model is trained such that, as syntactic parsing models improve, providing high-quality parses at test time will improve its performance, allowing the model to leverage updated parsing models without requiring re-training.\nIn experiments on the CoNLL-2005 and CoNLL-2012 datasets we show that our linguistically-informed models out-perform the syntax-free state-of-the-art. On CoNLL-2005 with predicted predicates and standard word embeddings, our single model out-performs the previous state-of-the-art model on the WSJ test set by 2.5 F1 points absolute. On the challenging out-of-domain Brown test set, our model improves substantially over the previous state-of-the-art by more than 3.5 F1, a nearly 10% reduction in error. On CoNLL-2012, our model gains more than 2.5 F1 absolute over the previous state-of-the-art. Our models also show improvements when using contextually-encoded word representations (Peters et al., 2018), obtaining nearly 1.0 F1 higher than the state-of-the-art on CoNLL-2005 news and more than 2.0 F1 improvement on out-of-domain text.1\n1Our implementation in TensorFlow (Abadi et al., 2015) is available at : http://github.com/strubell/ LISA"
+  }, {
+    "heading": "2 Model",
+    "text": "Our goal is to design an efficient neural network model which makes use of linguistic information as effectively as possible in order to perform endto-end SRL. LISA achieves this by combining: (1) A new technique of supervising neural attention to predict syntactic dependencies with (2) multi-task learning across four related tasks.\nFigure 1 depicts the overall architecture of our model. The basis for our model is the Transformer encoder introduced by Vaswani et al. (2017): we transform word embeddings into contextually-encoded token representations using stacked multi-head self-attention and feedforward layers (§2.1).\nTo incorporate syntax, one self-attention head is trained to attend to each token’s syntactic parent, allowing the model to use this attention head as an oracle for syntactic dependencies. We introduce this syntactically-informed self-attention (Figure 2) in more detail in §2.2.\nOur model is designed for the more realistic setting in which gold predicates are not provided at test-time. Our model predicts predicates and integrates part-of-speech (POS) information into earlier layers by re-purposing representations closer to the input to predict predicate and POS tags us-\ning hard parameter sharing (§2.3). We simplify optimization and benefit from shared statistical strength derived from highly correlated POS and predicates by treating tagging and predicate detection as a single task, performing multi-class classification into the joint Cartesian product space of POS and predicate labels.\nThough typical models, which re-encode the sentence for each predicate, can simplify SRL to token-wise tagging, our joint model requires a different approach to classify roles with respect to each predicate. Contextually encoded tokens are projected to distinct predicate and role embeddings (§2.4), and each predicted predicate is scored with the sequence’s role representations using a bilinear model (Eqn. 6), producing per-label scores for BIO-encoded semantic role labels for each token and each semantic frame.\nThe model is trained end-to-end by maximum likelihood using stochastic gradient descent (§2.5)."
+  }, {
+    "heading": "2.1 Self-attention token encoder",
+    "text": "The basis for our model is a multi-head selfattention token encoder, recently shown to achieve state-of-the-art performance on SRL (Tan et al., 2018), and which provides a natural mechanism\nfor incorporating syntax, as described in §2.2. Our implementation replicates Vaswani et al. (2017).\nThe input to the network is a sequence X of T token representations xt. In the standard setting these token representations are initialized to pretrained word embeddings, but we also experiment with supplying pre-trained ELMo representations combined with task-specific learned parameters, which have been shown to substantially improve performance of other SRL models (Peters et al., 2018). For experiments with gold predicates, we concatenate a predicate indicator embedding pt following previous work (He et al., 2017).\nWe project2 these input embeddings to a representation that is the same size as the output of the self-attention layers. We then add a positional encoding vector computed as a deterministic sinusoidal function of t, since the self-attention has no innate notion of token position.\nWe feed this token representation as input to a series of J residual multi-head self-attention layers with feed-forward connections. Denoting the jth self-attention layer as T (j)(·), the output of that layer s(j)t , and LN(·) layer normalization, the following recurrence applied to initial input c(p)t :\ns (j) t = LN(s (j 1) t + T (j)(s(j 1)t )) (1)\ngives our final token representations s(j)t . Each T (j)(·) consists of: (a) multi-head self-attention and (b) a feed-forward projection. The multi-head self attention consists of H attention heads, each of which learns a distinct attention function to attend to all of the tokens in the sequence. This self-attention is performed for each token for each head, and the results of the H self-attentions are concatenated to form the final self-attended representation for each token.\nSpecifically, consider the matrix S(j 1) of T token representations at layer j 1. For each attention head h, we project this matrix into distinct key, value and query representations K(j)h , V (j) h and Q(j)h of dimensions T⇥dk, T⇥dq, and T⇥dv, respectively. We can then multiply Q(j)h by K (j) h to obtain a T ⇥ T matrix of attention weights A(j)h between each pair of tokens in the sentence. Following Vaswani et al. (2017) we perform scaled dot-product attention: We scale the weights by the inverse square root of their embedding dimension\n2All linear projections include bias terms, which we omit in this exposition for the sake of clarity.\nand normalize with the softmax function to produce a distinct distribution for each token over all the tokens in the sentence:\nA (j) h = softmax(d 0.5 k Q (j) h K (j) h\nT ) (2)\nThese attention weights are then multiplied by V\n(j) h for each token to obtain the self-attended to-\nken representations M (j)h :\nM (j) h = A (j) h V (j) h (3)\nRow t of M (j)h , the self-attended representation for token t at layer j, is thus the weighted sum with respect to t (with weights given by A(j)h ) over the token representations in V (j)h .\nThe outputs of all attention heads for each token are concatenated, and this representation is passed to the feed-forward layer, which consists of two linear projections each followed by leaky ReLU activations (Maas et al., 2013). We add the output of the feed-forward to the initial representation and apply layer normalization to give the final output of self-attention layer j, as in Eqn. 1."
+  }, {
+    "heading": "2.2 Syntactically-informed self-attention",
+    "text": "Typically, neural attention mechanisms are left on their own to learn to attend to relevant inputs. Instead, we propose training the self-attention to attend to specific tokens corresponding to the syntactic structure of the sentence as a mechanism for passing linguistic knowledge to later layers.\nSpecifically, we replace one attention head with the deep bi-affine model of Dozat and Manning (2017), trained to predict syntactic dependencies. Let Aparse be the parse attention weights, at layer i. Its input is the matrix of token representations S (i 1). As with the other attention heads, we project S(i 1) into key, value and query representations, denoted Kparse, Qparse, Vparse. Here the key and query projections correspond to parent and dependent representations of the tokens, and we allow their dimensions to differ from the rest of the attention heads to more closely follow the implementation of Dozat and Manning (2017). Unlike the other attention heads which use a dot product to score key-query pairs, we score the compatibility between Kparse and Qparse using a bi-affine operator Uheads to obtain attention weights:\nAparse = softmax(QparseUheadsK T parse) (4)\nThese attention weights are used to compose a weighted average of the value representations Vparse as in the other attention heads.\nWe apply auxiliary supervision at this attention head to encourage it to attend to each token’s parent in a syntactic dependency tree, and to encode information about the token’s dependency label. Denoting the attention weight from token t to a candidate head q as Aparse[t, q], we model the probability of token t having parent q as:\nP (q = head(t) | X ) = Aparse[t, q] (5)\nusing the attention weights Aparse[t] as the distribution over possible heads for token t. We define the root token as having a self-loop. This attention head thus emits a directed graph3 where each token’s parent is the token to which the attention Aparse assigns the highest weight.\nWe also predict dependency labels using perclass bi-affine operations between parent and dependent representations Qparse and Kparse to produce per-label scores, with locally normalized probabilities over dependency labels ydept given by the softmax function. We refer the reader to Dozat and Manning (2017) for more details.\nThis attention head now becomes an oracle for syntax, denoted P , providing a dependency parse to downstream layers. This model not only predicts its own dependency arcs, but allows for the injection of auxiliary parse information at test time by simply setting Aparse to the parse parents produced by e.g. a state-of-the-art parser. In this way, our model can benefit from improved, external parsing models without re-training. Unlike typical multi-task models, ours maintains the ability to leverage external syntactic information."
+  }, {
+    "heading": "2.3 Multi-task learning",
+    "text": "We also share the parameters of lower layers in our model to predict POS tags and predicates. Following He et al. (2017), we focus on the end-toend setting, where predicates must be predicted on-the-fly. Since we also train our model to predict syntactic dependencies, it is beneficial to give the model knowledge of POS information. While much previous work employs a pipelined approach to both POS tagging for dependency parsing and predicate detection for SRL, we take a multi-task learning (MTL) approach (Caruana,\n3Usually the head emits a tree, but we do not enforce it here.\n1993), sharing the parameters of earlier layers in our SRL model with a joint POS and predicate detection objective. Since POS is a strong predictor of predicates4 and the complexity of training a multi-task model increases with the number of tasks, we combine POS tagging and predicate detection into a joint label space: For each POS tag TAG which is observed co-occurring with a predicate, we add a label of the form TAG:PREDICATE.\nSpecifically, we feed the representation s(r)t from a layer r preceding the syntacticallyinformed layer p to a linear classifier to produce per-class scores rt for token t. We compute locally-normalized probabilities using the softmax function: P (yprpt | X ) / exp(rt), where y prp t is a label in the joint space."
+  }, {
+    "heading": "2.4 Predicting semantic roles",
+    "text": "Our final goal is to predict semantic roles for each predicate in the sequence. We score each predicate against each token in the sequence using a bilinear operation, producing per-label scores for each token for each predicate, with predicates and syntax determined by oracles V and P .\nFirst, we project each token representation s(J)t to a predicate-specific representation spredt and a role-specific representation srolet . We then provide these representations to a bilinear transformation U for scoring. So, the role label scores sft for the token at index t with respect to the predicate at index f (i.e. token t and frame f ) are given by:\nsft = (s pred f ) T Us role t (6)\nwhich can be computed in parallel across all semantic frames in an entire minibatch. We calculate a locally normalized distribution over role labels for token t in frame f using the softmax function: P (yroleft | P,V,X ) / exp(sft).\nAt test time, we perform constrained decoding using the Viterbi algorithm to emit valid sequences of BIO tags, using unary scores sft and the transition probabilities given by the training data."
+  }, {
+    "heading": "2.5 Training",
+    "text": "We maximize the sum of the likelihoods of the individual tasks. In order to maximize our model’s ability to leverage syntax, during training we clamp P to the gold parse (PG) and V to gold predicates VG when passing parse and predicate\n4All predicates in CoNLL-2005 are verbs; CoNLL-2012 includes some nominal predicates.\nrepresentations to later layers, whereas syntactic head prediction and joint predicate/POS prediction are conditioned only on the input sequence X . The overall objective is thus:\n1\nT\nTX\nt=1\nh FX\nf=1\nlog P (yroleft | PG,VG,X )\n+ log P (yprpt | X ) + 1 log P (head(t) | X )\n+ 2 log P (y dep t | PG,X )\ni (7)\nwhere 1 and 2 are penalties on the syntactic attention loss.\nWe train the model using Nadam (Dozat, 2016) SGD combined with the learning rate schedule in Vaswani et al. (2017). In addition to MTL, we regularize our model using dropout (Srivastava et al., 2014). We use gradient clipping to avoid exploding gradients (Bengio et al., 1994; Pascanu et al., 2013). Additional details on optimization and hyperparameters are included in Appendix A."
+  }, {
+    "heading": "3 Related work",
+    "text": "Early approaches to SRL (Pradhan et al., 2005; Surdeanu et al., 2007; Johansson and Nugues, 2008; Toutanova et al., 2008) focused on developing rich sets of linguistic features as input to a linear model, often combined with complex constrained inference e.g. with an ILP (Punyakanok et al., 2008). Täckström et al. (2015) showed that constraints could be enforced more efficiently using a clever dynamic program for exact inference. Sutton and McCallum (2005) modeled syntactic parsing and SRL jointly, and Lewis et al. (2015) jointly modeled SRL and CCG parsing.\nCollobert et al. (2011) were among the first to use a neural network model for SRL, a CNN over word embeddings which failed to out-perform non-neural models. FitzGerald et al. (2015) successfully employed neural networks by embedding lexicalized features and providing them as factors in the model of Täckström et al. (2015).\nMore recent neural models are syntax-free. Zhou and Xu (2015), Marcheggiani et al. (2017) and He et al. (2017) all use variants of deep LSTMs with constrained decoding, while Tan et al. (2018) apply self-attention to obtain state-ofthe-art SRL with gold predicates. Like this work, He et al. (2017) present end-to-end experiments, predicting predicates using an LSTM, and He et al.\n(2018) jointly predict SRL spans and predicates in a model based on that of Lee et al. (2017), obtaining state-of-the-art predicted predicate SRL. Concurrent to this work, Peters et al. (2018) and He et al. (2018) report significant gains on PropBank SRL by training a wide LSTM language model and using a task-specific transformation of its hidden representations (ELMo) as a deep, and computationally expensive, alternative to typical word embeddings. We find that LISA obtains further accuracy increases when provided with ELMo word representations, especially on out-of-domain data.\nSome work has incorporated syntax into neural models for SRL. Roth and Lapata (2016) incorporate syntax by embedding dependency paths, and similarly Marcheggiani and Titov (2017) encode syntax using a graph CNN over a predicted syntax tree, out-performing models without syntax on CoNLL-2009. These works are limited to incorporating partial dependency paths between tokens whereas our technique incorporates the entire parse. Additionally, Marcheggiani and Titov (2017) report that their model does not out-perform syntax-free models on out-of-domain data, a setting in which our technique excels.\nMTL (Caruana, 1993) is popular in NLP, and others have proposed MTL models which incorporate subsets of the tasks we do (Collobert et al., 2011; Zhang and Weiss, 2016; Hashimoto et al., 2017; Peng et al., 2017; Swayamdipta et al., 2017), and we build off work that investigates where and when to combine different tasks to achieve the best results (Søgaard and Goldberg, 2016; Bingel and Søgaard, 2017; Alonso and Plank, 2017). Our specific method of incorporating supervision into self-attention is most similar to the concurrent work of Liu and Lapata (2018), who use edge marginals produced by the matrix-tree algorithm as attention weights for document classification and natural language inference.\nThe question of training on gold versus predicted labels is closely related to learning to search (Daumé III et al., 2009; Ross et al., 2011; Chang et al., 2015) and scheduled sampling (Bengio et al., 2015), with applications in NLP to sequence labeling and transition-based parsing (Choi and Palmer, 2011; Goldberg and Nivre, 2012; Ballesteros et al., 2016). Our approach may be interpreted as an extension of teacher forcing (Williams and Zipser, 1989) to MTL. We leave exploration of more advanced scheduled sampling techniques to\nfuture work."
+  }, {
+    "heading": "4 Experimental results",
+    "text": "We present results on the CoNLL-2005 shared task (Carreras and Màrquez, 2005) and the CoNLL-2012 English subset of OntoNotes 5.0 (Pradhan et al., 2006), achieving state-of-the-art results for a single model with predicted predicates on both corpora. We experiment with both standard pre-trained GloVe word embeddings (Pennington et al., 2014) and pre-trained ELMo representations with fine-tuned task-specific parameters (Peters et al., 2018) in order to best compare to prior work. Hyperparameters that resulted in the best performance on the validation set were selected via a small grid search, and models were trained for a maximum of 4 days on one TitanX GPU using early stopping on the validation set. We convert constituencies to dependencies using the Stanford head rules v3.5 (de Marneffe and Manning, 2008). A detailed description of hyperparameter settings and data pre-processing can be found in Appendix A.\nWe compare our LISA models to four strong baselines: For experiments using predicted predicates, we compare to He et al. (2018) and the ensemble model (PoE) from He et al. (2017), as well as a version of our own self-attention model which does not incorporate syntactic information (SA). To compare to more prior work, we present additional results on CoNLL-2005 with models given gold predicates at test time. In these experiments we also compare to Tan et al. (2018), the previous state-of-the art SRL model using gold predicates and standard embeddings.\nWe demonstrate that our models benefit from injecting state-of-the-art predicted parses at test time (+D&M) by fixing the attention to parses predicted by Dozat and Manning (2017), the winner of the 2017 CoNLL shared task (Zeman et al., 2017) which we re-train using ELMo embeddings. In all cases, using these parses at test time improves performance.\nWe also evaluate our model using the gold syntactic parse at test time (+Gold), to provide an upper bound for the benefit that syntax could have for SRL using LISA. These experiments show that despite LISA’s strong performance, there remains substantial room for improvement. In §4.3 we perform further analysis comparing SRL models using gold and predicted parses."
+  }, {
+    "heading": "4.1 Semantic role labeling",
+    "text": "Table 1 lists precision, recall and F1 on the CoNLL-2005 development and test sets using predicted predicates. For models using GloVe embeddings, our syntax-free SA model already achieves a new state-of-the-art by jointly predicting predicates, POS and SRL. LISA with its own parses performs comparably to SA, but when supplied with D&M parses LISA out-performs the previous state-of-the-art by 2.5 F1 points. On the out-ofdomain Brown test set, LISA also performs comparably to its syntax-free counterpart with its own parses, but with D&M parses LISA performs exceptionally well, more than 3.5 F1 points higher than He et al. (2018). Incorporating ELMo em-\nbeddings improves all scores. The gap in SRL F1 between models using LISA and D&M parses is smaller due to LISA’s improved parsing accuracy (see §4.2), but LISA with D&M parses still achieves the highest F1: nearly 1.0 absolute F1 higher than the previous state-of-the art on WSJ, and more than 2.0 F1 higher on Brown. In both settings LISA leverages domain-agnostic syntactic information rather than over-fitting to the newswire training data which leads to high performance even on out-of-domain text.\nTo compare to more prior work we also evaluate our models in the artificial setting where gold predicates are provided at test time. For fair comparison we use GloVe embeddings, provide predicate indicator embeddings on the input and reencode the sequence relative to each gold predicate. Here LISA still excels: with D&M parses, LISA out-performs the previous state-of-the-art by more than 2 F1 on both WSJ and Brown.\nTable 3 reports precision, recall and F1 on the CoNLL-2012 test set. We observe performance similar to that observed on ConLL-2005: Using GloVe embeddings our SA baseline already out-performs He et al. (2018) by nearly 1.5 F1. With its own parses, LISA slightly under-performs our syntax-free model, but when provided with stronger D&M parses LISA outperforms the state-of-the-art by more than 2.5 F1. Like CoNLL-2005, ELMo representations improve all models and close the F1 gap between models supplied with LISA and D&M parses. On this dataset ELMo also substantially narrows the\ndifference between models with- and without syntactic information. This suggests that for this challenging dataset, ELMo already encodes much of the information available in the D&M parses. Yet, higher accuracy parses could still yield improvements since providing gold parses increases F1 by 4 points even with ELMo embeddings."
+  }, {
+    "heading": "4.2 Parsing, POS and predicate detection",
+    "text": "We first report the labeled and unlabeled attachment scores (LAS, UAS) of our parsing models on the CoNLL-2005 and 2012 test sets (Table 4) with GloVe (G) and ELMo (E) embeddings. D&M achieves the best scores. Still, LISA’s GloVe UAS is comparable to popular off-the-shelf dependency parsers such as spaCy,5 and with ELMo\n5spaCy reports 94.48 UAS on WSJ using Stanford dependencies v3.3: https://spacy.io/usage/\nembeddings comparable to the standalone D&M parser. The difference in parse accuracy between LISAG and D&M likely explains the large increase in SRL performance we see from decoding with D&M parses in that setting.\nIn Table 5 we present predicate detection precision, recall and F1 on the CoNLL-2005 and 2012 test sets. SA and LISA with and without ELMo attain comparable scores so we report only LISA+GloVe. We compare to He et al. (2017) on CoNLL-2005, the only cited work reporting comparable predicate detection F1. LISA attains high predicate detection scores, above 97 F1, on both in-domain datasets, and out-performs He et al. (2017) by 1.5-2 F1 points even on the out-ofdomain Brown test set, suggesting that multi-task learning works well for SRL predicate detection."
+  }, {
+    "heading": "4.3 Analysis",
+    "text": "First we assess SRL F1 on sentences divided by parse accuracy. Table 6 lists average SRL F1 (across sentences) for the four conditions of LISA and D&M parses being correct or not (L±, D±). Both parsers are correct on 26% of sentences.\nfacts-figures\nHere there is little difference between any of the models, with LISA models tending to perform slightly better than SA. Both parsers make mistakes on the majority of sentences (57%), difficult sentences where SA also performs the worst. These examples are likely where gold and D&M parses improve the most over other models in overall F1: Though both parsers fail to correctly parse the entire sentence, the D&M parser is less wrong (87.5 vs. 85.7 average LAS), leading to higher SRL F1 by about 1.5 average F1.\nFollowing He et al. (2017), we next apply a series of corrections to model predictions in order to understand which error types the gold parse resolves: e.g. Fix Labels fixes labels on spans matching gold boundaries, and Merge Spans merges adjacent predicted spans into a gold span.6\nIn Figure 3 we see that much of the performance gap between the gold and predicted parses is due to span boundary errors (Merge Spans, Split Spans and Fix Span Boundary), which supports the hypothesis proposed by He et al. (2017) that incorporating syntax could be particularly helpful for resolving these errors. He et al. (2017) also point out\n6Refer to He et al. (2017) for a detailed explanation of the different error types.\nthat these errors are due mainly to prepositional phrase (PP) attachment mistakes. We also find this to be the case: Figure 4 shows a breakdown of split/merge corrections by phrase type. Though the number of corrections decreases substantially across phrase types, the proportion of corrections attributed to PPs remains the same (approx. 50%) even after providing the correct PP attachment to the model, indicating that PP span boundary mistakes are a fundamental difficulty for SRL."
+  }, {
+    "heading": "5 Conclusion",
+    "text": "We present linguistically-informed self-attention: a multi-task neural network model that effectively incorporates rich linguistic information for semantic role labeling. LISA out-performs the state-ofthe-art on two benchmark SRL datasets, including out-of-domain. Future work will explore improving LISA’s parsing accuracy, developing better training techniques and adapting to more tasks."
+  }, {
+    "heading": "Acknowledgments",
+    "text": "We are grateful to Luheng He for helpful discussions and code, Timothy Dozat for sharing his code, and to the NLP reading groups at Google and UMass and the anonymous reviewers for feedback on drafts of this work. This work was supported in part by an IBM PhD Fellowship Award to E.S., in part by the Center for Intelligent Information Retrieval, and in part by the National Science Foundation under Grant Nos. DMR-1534431 and IIS-1514053. Any opinions, findings, conclusions or recommendations expressed in this material are those of the authors and do not necessarily reflect those of the sponsor."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "When is multitask learning effective? semantic sequence prediction under varying data conditions",
+    "authors": ["Héctor Martı́nez Alonso", "Barbara Plank"],
+    "venue": "In EACL",
+    "year": 2017
+  }, {
+    "title": "Training with exploration improves a greedy stack lstm parser",
+    "authors": ["Miguel Ballesteros", "Yoav Goldberg", "Chris Dyer", "Noah A. Smith."],
+    "venue": "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing, pages 2005–2010.",
+    "year": 2016
+  }, {
+    "title": "Semantic roles for string to tree machine translation",
+    "authors": ["Marzieh Bazrafshan", "Daniel Gildea."],
+    "venue": "ACL.",
+    "year": 2013
+  }, {
+    "title": "Scheduled sampling for sequence prediction with recurrent neural networks",
+    "authors": ["Samy Bengio", "Oriol Vinyals", "Navdeep Jaitly", "Noam Shazeer."],
+    "venue": "NIPS.",
+    "year": 2015
+  }, {
+    "title": "Learning long-term dependencies with gradient descent is difficult",
+    "authors": ["Yoshua Bengio", "Patrice Simard", "Paolo Frasconi."],
+    "venue": "IEEE Transactions on Neural Networks, 5(2):157–166.",
+    "year": 1994
+  }, {
+    "title": "Modeling biological processes for reading comprehension",
+    "authors": ["Jonathan Berant", "Vivek Srikumar", "Pei-Chun Chen", "Brad Huang", "Christopher D. Manning", "Abby Vander Linden", "Brittany Harding", "Peter Clark."],
+    "venue": "EMNLP.",
+    "year": 2014
+  }, {
+    "title": "Identifying beneficial task relations for multi-task learning in deep neural networks",
+    "authors": ["Joachim Bingel", "Anders Søgaard."],
+    "venue": "EACL.",
+    "year": 2017
+  }, {
+    "title": "Introduction to the conll-2005 shared task: Semantic role labeling",
+    "authors": ["Xavier Carreras", "Lluı́s Màrquez"],
+    "venue": "In CoNLL",
+    "year": 2005
+  }, {
+    "title": "Multitask learning: a knowledgebased source of inductive bias",
+    "authors": ["Rich Caruana."],
+    "venue": "ICML.",
+    "year": 1993
+  }, {
+    "title": "Learning to search better than your teacher",
+    "authors": ["Kai-Wei Chang", "Akshay Krishnamurthy", "Alekh Agarwal", "Hal Daumé III", "John Langford."],
+    "venue": "ICML.",
+    "year": 2015
+  }, {
+    "title": "Unsupervised induction and filling of semantic slots for spoken dialogue systems using frame-semantic parsing",
+    "authors": ["Yun-Nung Chen", "William Yang Wang", "Alexander I Rudnicky."],
+    "venue": "Proc. of ASRU-IEEE.",
+    "year": 2013
+  }, {
+    "title": "Getting the most out of transition-based dependency parsing",
+    "authors": ["Jinho D. Choi", "Martha Palmer."],
+    "venue": "Proceedings of the 49th Annual Meeting of the Association for Computational Linguistics: short papers, pages 687–692.",
+    "year": 2011
+  }, {
+    "title": "Natural language processing (almost) from scratch",
+    "authors": ["Ronan Collobert", "Jason Weston", "Léon Bottou", "Michael Karlen", "Koray Kavukcuoglu", "Pavel Kuksa."],
+    "venue": "Journal of Machine Learning Research, 12(Aug):2493–2537.",
+    "year": 2011
+  }, {
+    "title": "Search-based structured prediction",
+    "authors": ["Hal Daumé III", "John Langford", "Daniel Marcu."],
+    "venue": "Machine Learning, 75(3):297–325.",
+    "year": 2009
+  }, {
+    "title": "Incorporating nesterov momentum into adam",
+    "authors": ["Timothy Dozat."],
+    "venue": "ICLR Workshop track.",
+    "year": 2016
+  }, {
+    "title": "Deep biaffine attention for neural dependency parsing",
+    "authors": ["Timothy Dozat", "Christopher D. Manning."],
+    "venue": "ICLR.",
+    "year": 2017
+  }, {
+    "title": "Semantic role labeling with neural network factors",
+    "authors": ["Nicholas FitzGerald", "Oscar Täckström", "Kuzman Ganchev", "Dipanjan Das."],
+    "venue": "Proceedings of the 2015 Conference on Empirical Methods in Natural Language Processing, pages 960–970.",
+    "year": 2015
+  }, {
+    "title": "Manual of information to accompany a standard corpus of presentday edited american english, for use with digital computers",
+    "authors": ["W.N. Francis", "H. Kučera."],
+    "venue": "Technical report, Department of Linguistics, Brown University, Providence, Rhode Is-",
+    "year": 1964
+  }, {
+    "title": "A dynamic oracle for arc-eager dependency parsing",
+    "authors": ["Yoav Goldberg", "Joakim Nivre."],
+    "venue": "Proceedings of COLING 2012: Technical Papers, pages 959–976.",
+    "year": 2012
+  }, {
+    "title": "A joint many-task model: Growing a neural network for multiple nlp tasks",
+    "authors": ["Kazuma Hashimoto", "Caiming Xiong", "Yoshimasa Tsuruoka", "Richard Socher."],
+    "venue": "Conference on Empirical Methods in Natural Language Processing.",
+    "year": 2017
+  }, {
+    "title": "Jointly predicting predicates and arguments in neural semantic role labeling",
+    "authors": ["Luheng He", "Kenton Lee", "Omer Levy", "Luke Zettlemoyer."],
+    "venue": "ACL.",
+    "year": 2018
+  }, {
+    "title": "Deep semantic role labeling: What works and whats next",
+    "authors": ["Luheng He", "Kenton Lee", "Mike Lewis", "Luke Zettlemoyer."],
+    "venue": "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics.",
+    "year": 2017
+  }, {
+    "title": "Dependency-based semantic role labeling of propbank",
+    "authors": ["Richard Johansson", "Pierre Nugues."],
+    "venue": "Proceedings of the 2008 Conference on Empirical Methods in Natural Language Processing, pages 69–78.",
+    "year": 2008
+  }, {
+    "title": "Adam: A method for stochastic optimization",
+    "authors": ["Diederik Kingma", "Jimmy Ba."],
+    "venue": "3rd International Conference for Learning Representations (ICLR), San Diego, California, USA.",
+    "year": 2015
+  }, {
+    "title": "Simple and accurate dependency parsing using bidirectional LSTM feature representations",
+    "authors": ["Eliyahu Kiperwasser", "Yoav Goldberg."],
+    "venue": "Transactions of the Association for Computational Linguistics, 4:313–327.",
+    "year": 2016
+  }, {
+    "title": "Semisupervised classification with graph convolutional networks",
+    "authors": ["Thomas N. Kipf", "Max Welling."],
+    "venue": "International Conference on Learning Representations.",
+    "year": 2017
+  }, {
+    "title": "End-to-end neural coreference resolution",
+    "authors": ["Kenton Lee", "Luheng He", "Mike Lewis", "Luke Zettlemoyer."],
+    "venue": "EMNLP.",
+    "year": 2017
+  }, {
+    "title": "English verb classes and alternations: A preliminary investigation",
+    "authors": ["Beth Levin."],
+    "venue": "University of Chicago press.",
+    "year": 1993
+  }, {
+    "title": "Joint A* CCG Parsing and Semantic Role Labeling",
+    "authors": ["Mike Lewis", "Luheng He", "Luke Zettlemoyer."],
+    "venue": "EMNLP.",
+    "year": 2015
+  }, {
+    "title": "Semantic role features for machine translation",
+    "authors": ["Ding Liu", "Daniel Gildea."],
+    "venue": "Proceedings of the 23rd International Conference on Computational Linguistics (COLING).",
+    "year": 2010
+  }, {
+    "title": "Learning structured text representations",
+    "authors": ["Yang Liu", "Mirella Lapata."],
+    "venue": "Transactions of the Association for Computational Linguistics, 6:63–75.",
+    "year": 2018
+  }, {
+    "title": "Rectifier nonlinearities improve neural network acoustic models",
+    "authors": ["Andrew L. Maas", "Awni Y. Hannun", "Andrew Y. Ng."],
+    "venue": "ICML, volume 30.",
+    "year": 2013
+  }, {
+    "title": "A simple and accurate syntax-agnostic neural model for dependency-based semantic role labeling",
+    "authors": ["Diego Marcheggiani", "Anton Frolov", "Ivan Titov."],
+    "venue": "CoNLL.",
+    "year": 2017
+  }, {
+    "title": "Encoding sentences with graph convolutional networks for semantic role labeling",
+    "authors": ["Diego Marcheggiani", "Ivan Titov."],
+    "venue": "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing (EMNLP).",
+    "year": 2017
+  }, {
+    "title": "Building a large annotated corpus of English: The Penn TreeBank",
+    "authors": ["Mitchell P. Marcus", "Mary Ann Marcinkiewicz", "Beatrice Santorini."],
+    "venue": "Computational Linguistics – Special issue on using large corpora: II, 19(2):313–330.",
+    "year": 1993
+  }, {
+    "title": "The stanford typed dependencies representation",
+    "authors": ["Marie-Catherine de Marneffe", "Christopher D. Manning."],
+    "venue": "COLING 2008 Workshop on Crossframework and Cross-domain Parser Evaluation.",
+    "year": 2008
+  }, {
+    "title": "A method of solving a convex programming problem with convergence rate o(1/k2)",
+    "authors": ["Yurii Nesterov."],
+    "venue": "volume 27, pages 372–376.",
+    "year": 1983
+  }, {
+    "title": "The proposition bank: An annotated corpus of semantic roles",
+    "authors": ["Martha Palmer", "Daniel Gildea", "Paul Kingsbury."],
+    "venue": "Computational Linguistics, 31(1).",
+    "year": 2005
+  }, {
+    "title": "On the difficulty of training recurrent neural networks",
+    "authors": ["Razvan Pascanu", "Tomas Mikolov", "Yoshua Bengio."],
+    "venue": "Proceedings of the 30 th International Conference on Machine Learning.",
+    "year": 2013
+  }, {
+    "title": "Deep multitask learning for semantic dependency parsing",
+    "authors": ["Hao Peng", "Sam Thomson", "Noah A. Smith."],
+    "venue": "ACL.",
+    "year": 2017
+  }, {
+    "title": "Glove: Global vectors for word representation",
+    "authors": ["Jeffrey Pennington", "Richard Socher", "Christopher D. Manning."],
+    "venue": "EMNLP.",
+    "year": 2014
+  }, {
+    "title": "Deep contextualized word representations",
+    "authors": ["Matthew E. Peters", "Mark Neumann", "Mohit Iyyer", "Matt Gardner", "Christopher Clark", "Kenton Lee", "Luke Zettlemoyer."],
+    "venue": "NAACL.",
+    "year": 2018
+  }, {
+    "title": "Towards robust linguistic analysis using ontonotes",
+    "authors": ["Sameer Pradhan", "Alessandro Moschitti", "Nianwen Xue", "Hwee Tou Ng", "Anders Björkelund", "Olga Uryupina", "Yuchen Zhang", "Zhi Zhong."],
+    "venue": "Proceedings of the Seventeenth Conference on Computa-",
+    "year": 2006
+  }, {
+    "title": "Semantic role labeling using different syntactic views",
+    "authors": ["Sameer Pradhan", "Wayne Ward", "Kadri Hacioglu", "James Martin", "Dan Jurafsky."],
+    "venue": "Proceedings of the Association for Computational Linguistics 43rd annual meeting (ACL).",
+    "year": 2005
+  }, {
+    "title": "The importance of syntactic parsing and inference in semantic role labeling",
+    "authors": ["Vasin Punyakanok", "Dan Roth", "Wen-Tau Yih."],
+    "venue": "Computational Linguistics, 34(2):257–287.",
+    "year": 2008
+  }, {
+    "title": "A reduction of imitation learning and structured prediction to no-regret online learning",
+    "authors": ["Stéphane Ross", "Geoffrey J. Gordon", "J. Andrew Bagnell."],
+    "venue": "Proceedings of the 14th International Conference on Artificial Intelligence and Statistics (AISTATS).",
+    "year": 2011
+  }, {
+    "title": "Neural semantic role labeling with dependency path embeddings",
+    "authors": ["Michael Roth", "Mirella Lapata."],
+    "venue": "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (ACL), pages 1192–1202.",
+    "year": 2016
+  }, {
+    "title": "Deep multi-task learning with low level tasks supervised at lower layers",
+    "authors": ["Anders Søgaard", "Yoav Goldberg."],
+    "venue": "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics, pages 231–235.",
+    "year": 2016
+  }, {
+    "title": "Dropout: a simple way to prevent neural networks from overfitting",
+    "authors": ["Nitish Srivastava", "Geoffrey E Hinton", "Alex Krizhevsky", "Ilya Sutskever", "Ruslan Salakhutdinov."],
+    "venue": "Journal of machine learning research, 15(1):1929–1958.",
+    "year": 2014
+  }, {
+    "title": "Combination strategies for semantic role labeling",
+    "authors": ["Mihai Surdeanu", "Lluı́s Màrquez", "Xavier Carreras", "Pere R. Comas"],
+    "venue": "Journal of Artificial Intelligence Research,",
+    "year": 2007
+  }, {
+    "title": "Joint parsing and semantic role labeling",
+    "authors": ["Charles Sutton", "Andrew McCallum."],
+    "venue": "CoNLL.",
+    "year": 2005
+  }, {
+    "title": "Frame-semantic parsing with softmax-margin segmental rnns and a syntactic scaffold",
+    "authors": ["Swabha Swayamdipta", "Sam Thomson", "Chris Dyer", "Noah A. Smith."],
+    "venue": "arXiv:1706.09528.",
+    "year": 2017
+  }, {
+    "title": "Efficient inference and structured learning for semantic role labeling",
+    "authors": ["Oscar Täckström", "Kuzman Ganchev", "Dipanjan Das."],
+    "venue": "TACL, 3:29–41.",
+    "year": 2015
+  }, {
+    "title": "Deep semantic role labeling with self-attention",
+    "authors": ["Zhixing Tan", "Mingxuan Wang", "Jun Xie", "Yidong Chen", "Xiaodong Shi."],
+    "venue": "AAAI.",
+    "year": 2018
+  }, {
+    "title": "A global joint model for semantic role labeling",
+    "authors": ["Kristina Toutanova", "Aria Haghighi", "Christopher D. Manning."],
+    "venue": "Computational Linguistics, 34(2):161–191.",
+    "year": 2008
+  }, {
+    "title": "Feature-rich part-ofspeech tagging with a cyclic dependency network",
+    "authors": ["Kristina Toutanova", "Dan Klein", "Christopher D Manning", "Yoram Singer."],
+    "venue": "Proceedings of the 2003 Conference of the North American Chapter of the Association for Computa-",
+    "year": 2003
+  }, {
+    "title": "Semi-supervised learning for spoken language understanding using semantic role labeling",
+    "authors": ["Gokhan Tur", "Dilek Hakkani-Tür", "Ananlada Chotimongkol."],
+    "venue": "ASRU.",
+    "year": 2005
+  }, {
+    "title": "Attention is all you need",
+    "authors": ["Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N Gomez", "Lukasz Kaiser", "Illia Polosukhin."],
+    "venue": "31st Conference on Neural Information Processing Systems (NIPS).",
+    "year": 2017
+  }, {
+    "title": "Machine comprehension with syntax, frames, and semantics",
+    "authors": ["Hai Wang", "Mohit Bansal", "Kevin Gimpel", "David McAllester."],
+    "venue": "ACL.",
+    "year": 2015
+  }, {
+    "title": "A learning algorithm for continually running fully recurrent neural networks",
+    "authors": ["R.J. Williams", "D. Zipser."],
+    "venue": "Neural computation, 1(2):270–280.",
+    "year": 1989
+  }, {
+    "title": "Stackpropagation: Improved representation learning for syntax",
+    "authors": ["Yuan Zhang", "David Weiss."],
+    "venue": "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1557–1566. Asso-",
+    "year": 2016
+  }, {
+    "title": "End-to-end learning of semantic role labeling using recurrent neural networks",
+    "authors": ["Jie Zhou", "Wei Xu."],
+    "venue": "Proc. of the Annual Meeting of the Association for Computational Linguistics (ACL).",
+    "year": 2015
+  }],
+  "id": "SP:eb407d1ae0e258f4104ba95a21a9f9b79c198313",
+  "authors": [{
+    "name": "Emma Strubell",
+    "affiliations": []
+  }, {
+    "name": "Patrick Verga",
+    "affiliations": []
+  }, {
+    "name": "Daniel Andor",
+    "affiliations": []
+  }, {
+    "name": "Andrew McCallum",
+    "affiliations": []
+  }],
+  "abstractText": "Current state-of-the-art semantic role labeling (SRL) uses a deep neural network with no explicit linguistic features. However, prior work has shown that gold syntax trees can dramatically improve SRL decoding, suggesting the possibility of increased accuracy from explicit modeling of syntax. In this work, we present linguistically-informed self-attention (LISA): a neural network model that combines multi-head self-attention with multi-task learning across dependency parsing, part-ofspeech tagging, predicate detection and SRL. Unlike previous models which require significant pre-processing to prepare linguistic features, LISA can incorporate syntax using merely raw tokens as input, encoding the sequence only once to simultaneously perform parsing, predicate detection and role labeling for all predicates. Syntax is incorporated by training one attention head to attend to syntactic parents for each token. Moreover, if a high-quality syntactic parse is already available, it can be beneficially injected at test time without re-training our SRL model. In experiments on CoNLL-2005 SRL, LISA achieves new state-of-the-art performance for a model using predicted predicates and standard word embeddings, attaining 2.5 F1 absolute higher than the previous state-of-the-art on newswire and more than 3.5 F1 on outof-domain data, nearly 10% reduction in error. On ConLL-2012 English SRL we also show an improvement of more than 2.5 F1. LISA also out-performs the state-of-the-art with contextually-encoded (ELMo) word representations, by nearly 1.0 F1 on news and more than 2.0 F1 on out-of-domain text.",
+  "title": "Linguistically-Informed Self-Attention for Semantic Role Labeling"
+}

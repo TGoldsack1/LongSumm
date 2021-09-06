@@ -1,0 +1,440 @@
+{
+  "sections": [{
+    "text": "Much like sentences are composed of words, words themselves are composed of smaller units. For example, the English word questionably can be analyzed as question+able+ly. However, this structural decomposition of the word does not directly give us a semantic representation of the word’s meaning. Since morphology obeys the principle of compositionality, the semantics of the word can be systematically derived from the meaning of its parts. In this work, we propose a novel probabilistic model of word formation that captures both the analysis of a word w into its constituent segments and the synthesis of the meaning of w from the meanings of those segments. Our model jointly learns to segment words into morphemes and compose distributional semantic vectors of those morphemes. We experiment with the model on English CELEX data and German DErivBase (Zeller et al., 2013) data. We show that jointly modeling semantics increases both segmentation accuracy and morpheme F1 by between 3% and 5%. Additionally, we investigate different models of vector composition, showing that recurrent neural networks yield an improvement over simple additive models. Finally, we study the degree to which the representations correspond to a linguist’s notion of morphological productivity."
+  }, {
+    "heading": "1 Introduction",
+    "text": "In most languages, words decompose further into smaller units, termed morphemes. For example, the English word questionably can be analyzed as question+able+ly. This structural decomposition of the word, however, by itself is not a semantic rep-\nresentation of the word’s meaning;1 we further require an account of how to synthesize the meaning from the decomposition. Fortunately, words—just like phrases—to a large extent obey the principle of compositionality: the semantics of the word can be systematically derived from the meaning of its parts.2 In this work, we propose a novel joint probabilistic model of word formation that captures both structural decomposition of a word w into its constituent segments and the synthesis of w’s meaning from the meaning of those segments.\nMorphological segmentation is a structured prediction task that seeks to break a word up into its constituent morphemes. The output segmentation has been shown to aid a diverse set of applications, such as automatic speech recognition (Afify et al., 2006), keyword spotting (Narasimhan et al., 2014), machine translation (Clifton and Sarkar, 2011) and parsing (Seeker and Çetinoğlu, 2015). In contrast to much of this prior work, we focus on supervised segmentation, i.e., we provide the model with gold segmentations during training time. Instead of sur-\n1There are many different linguistic and computational theories for interpreting the structural decomposition of a word. For example, un- often signifies negation and its effect on semantics can then be modeled by theories based on logic. This work addresses the question of structural decomposition and semantic synthesis in the general framework of distributional semantics.\n2Morphological research in theoretical and computational linguistics often focuses on noncompositional or less compositional phenomena—simply because compositional derivation poses fewer interesting research problems. It is also true that—just as many frequent multiword units are not completely compositional—many frequent derivations (e.g., refusal, fitness) are not completely compositional. An indication that nonlexicalized derivations are usually compositional is the fact that standard dictionaries like OUP editors (2010) list derivational affixes with their compositional meaning, without a hedge that they can also occur as part of only partially compositional forms. See also Haspelmath and Sims (2013), §5.3.6.\n33\nTransactions of the Association for Computational Linguistics, vol. 6, pp. 33–48, 2018. Action Editor: Regina Barzilay. Submission batch: 5/2016; Revision batch: 10/2016; Published 1/2018.\nc©2018 Association for Computational Linguistics. Distributed under a CC-BY 4.0 license.\nface segmentation, our model performs canonical segmentation (Cotterell et al., 2016a; Cotterell et al., 2016b; Kann et al., 2016), i.e., it allows the induction of orthographic changes together with the segmentation, which is not typical. For the example questionably, our model can restore the deleted characters le, yielding the canonical segments question, able and ly. In this work, our primary contribution lies in the integration of continuous semantic vectors into supervised morphological segmentation— we present a joint model of morphological analysis and semantic synthesis at the word-level.\nWe experimentally investigate three novel aspects of our model.\n• First, we show that jointly modeling continuous representations of the semantics of morphemes and words allows us to improve morphological analysis. On the English portion of CELEX (Baayen et al., 1993), we achieve a 5 point improvement in segmentation accuracy and a 3 point improvement in morpheme F1. On the German DErivBase dataset we achieve a 3 point improvement in segmentation accuracy and a 3 point improvement in morpheme F1.\n• Second, we explore improved models of vector composition for synthesizing word meaning. We find a recurrent neural network improves over previously proposed additive models. Moreover, we find that more syntactically oriented vectors (Levy and Goldberg, 2014a) are better suited for morphology than bag-ofword (BOW) models.\n• Finally, we explore the productivity of English derivational affixes in the context of distributional semantics."
+  }, {
+    "heading": "2 Derivational Morphology",
+    "text": "Two important goals of morphology, the linguistic study of the internal structure of words, are to describe the relation between different words in the lexicon and to decompose them into morphemes, the smallest linguistic unit bearing meaning. Morphology can be divided into two types: inflectional and derivational. Inflectional morphology is the set of processes through which the word form outwardly\ndisplays syntactic information, e.g., verb tense. It follows that an inflectional affix typically neither changes the part-of-speech (POS) nor the semantics of the word. For example, the English verb to run takes various forms: run, runs, ran and running, all of which convey “moving by foot quickly”, but appear in complementary syntactic contexts.\nDerivation deals with the formation of new words that have semantic shifts in meaning (often including POS) and is tightly intertwined with lexical semantics (Light, 1996). Consider the example of the English noun discontentedness, which is derived from the adjective discontented. It is true that both words share a close semantic relationship, but the transformation is clearly more than a simple inflectional marking of syntax. Indeed, we can go one step further and define a chain of words content 7→ contented 7→ discontented 7→ discontentedness.\nIn the computational literature, derivational morphology has received less attention than inflectional. There are, however, two bodies of work on derivation in computational linguistics. First, there is a series of papers that explore the relation between lexical semantics and derivation (Lazaridou et al., 2013; Zeller et al., 2014; Padó et al., 2015; Kisselew et al., 2015). All of these assume a gold morphological analysis and primarily focus on the effect of derivation on distributional semantics. The second body of work, e.g., the unsupervised morphological segmenter MORFESSOR (Creutz and Lagus, 2007), does not deal with semantics and makes no distinction between inflectional and derivational morphology.3 Even though the boundary between inflectional and derivational morphology is a continuum rather than a rigid divide (Haspelmath and Sims, 2013), there is still the clear distinction that derivation changes meaning whereas inflection does not. Our goal in this paper is to develop an account of how the meaning of a word form can be computed jointly, combining these two lines of work.\nProductivity and Semantic Coherence. We highlight two related issues in derivation that motivated the development of our model: productivity\n3Narasimhan et al. (2015) also make no distinction between inflectional and derivational morphology, but their model is an exception in that it includes vector similarity as a semantic feature. See §5 for discussion.\nand semantic coherence. Roughly, a productive affix is one that can still actively be employed to form new words in a language. For example, the English nominalizing affix ness (red7→red+ness) can be attached to just about any adjective, including novel forms. In contrast, the archaic English nominalizing affix th (dear7→dear+th, heal7→heal+th, steal7→steal+th) does not allow us to form new words such as cheapth. This is a crucial issue in derivational morphology since we would not in general want to analyze new words as having been formed from non-productive endings; e.g., we do not want to analyze hearth as hear+th (or wugth as wug+th). Relations such as those between heal and health are lexicalized since they no longer can be derived by productive processes (Bauer, 1983).\nUnder a generative treatment (Chomsky, 1965) of morphology, productivity becomes a central notion since a grammar needs to account for active word formation processes in the language (Aronoff, 1976). Defining productivity precisely, however, is tricky; Aronoff (1976) writes, “one of the central mysteries of derivational morphology . . . [is that] . . . though many things are possible in morphology, some are more possible than others.” Nevertheless, speakers often have clear intuitions about which affixes in the language are productive.4\nRelated to productivity is the notion of semantic coherence. The principle of compositionality (Frege, 1892; Heim and Kratzer, 1998) applies to interpretation of words just as it does to phrases. Indeed, compositionality is often taken to be a signal for productivity (Aronoff, 1976). When deciding whether to further decompose a word, asking whether the parts sum up to the whole is often a good indicator. In the case of questionably 7→ question+able+ly, the compositional meaning is “in a manner that could be questioned”, which corresponds to the meaning of the word. Contrast this with the word unquiet, which means “restless”, rather than “not quiet” and the compound blackmail, which does not refer to a letter written in black ink.\nThe model we will describe in §3 is a joint model of both semantic coherence and segmentation; that\n4It is also important to distinguish productivity from creativity—a non-rule-governed form of word formation (Lyons, 1977). As an example of creativity, consider the creation of portmanteaux, e.g., dramedy and soundscape.\nis, an analysis is judged not only by character-level features, but also by the degree to which the word is semantically compositional. Implicit in such a treatment is the desire to only segment a word if the segmentation is derived from a productive process. While most prior work on morphological segmentation has not explicitly modeled productivity,5 we believe, from a computational modeling perspective, segmenting only productive affixes is preferable. This is analogous to the modeling of phrase compositionality in embedding models, where it can be better to not further decompose noncompositional multiword units like named entities and idiomatic expressions; see, e.g., Mikolov et al. (2013b), Wang et al. (2014), Yin and Schütze (2015), Yaghoobzadeh and Schütze (2015), and Hashimoto and Tsuruoka (2016).6\nIn this paper, we refer to the semantic aspect of the model either as semantic synthesis or as coherence. These are two ways of looking at semantics that are related as follows. If the synthesis (i.e., composition) of the meaning of the derived form from the meaning of its parts is a regular application of the linguistic rules of derivation, then the meaning so constructed is coherent. These are the cases where a joint model is expected to be beneficial for both segmentation and interpretation."
+  }, {
+    "heading": "3 A Joint Model",
+    "text": "From an NLP perspective, canonical segmentation (Naradowsky and Goldwater, 2009; Cotterell et al., 2016b) is the task that seeks to algorithmically decompose a word into its canonical sequence of morphemes. It is a version of morphological segmentation that requires the learner to handle orthographic changes that take place during word formation. We believe this is a more natural formulation of morphological analysis—especially for the processing\n5Note that segmenters such as MORFESSOR utilize the principle of minimum description length, which implicitly encodes productivity, in order to guide segmentation.\n6As a reviewer points out, productivity of an affix and semantic coherence of the words formed from it are not perfectly aligned. Nonproductive affixes can produce semantically coherent words, e.g., warm 7→warm+th. Productive affixes can produce semantically incoherent words, e.g., canny 7→un+canny. Again, this is analogous to multiword units. However, there is a strong correlation and our experiments show that relying on it gives good results.\nof derivational morphology—as it draws heavily on linguistic notions (see §2).\nThe main innovation we present is the augmentation of canonical segmentation to take into account semantic coherence and productivity. Consider the word hypercuriosity and its canonical segmentation hyper+curious+ity; this canonical segmentation seeks to decompose the word into its constituent morphemes and account for orthographic changes. This amounts to a structural decomposition of the word, i.e., how do we break up the string of characters into chunks? This is similar to the decomposition of a sentence into a parse tree. However, it is also natural to consider the semantic compositionality of a word, i.e., how is the meaning of the word synthesized from the meaning of the individual morphemes?\nWe consider both of these questions together in a single model, where we would like to place high probability on canonical segmentations that are also semantically coherent. Returning to hypercuriosity, we could further decompose it into hyper+cure+ous+ity in analogy to, say, vice 7→ vicious. Nothing about the surface form of curious alone gives us a strong cue that we should rule out the segmentation cure+ous. Turning to distributional semantics, however, it is the case that the contexts in which curious occurs are quite different from those in which cure occurs. This gives us a strong cue which segmentation is correct.\nFormally, given a word string w ∈ Σ∗, where Σ is a discrete alphabet of characters (in English this\ncould be as simple as the 26 letter lowercase alphabet), and a word vector v ∈ V , where V is a set of low-dimensional word embeddings, we define the model as:\np(v, s, l, u |w)\n= 1\nZθ(w) exp\n( 1\n2σ2 ||v − Cβ(s, l)||22\n+f(s, l, u)>η + g(u,w)>ω ) . (1)\nThis model is composed of three factors: composition factor ( 1\n2σ2 ||v−Cβ(s, l)||22), segmentation factor\nf and transduction factor g. The parameters of the model are θ = {β,η,ω}, the function Cβ composes morpheme vectors together, s is the segmentation, l is the labeling of the segments, u is the underlying representation and Zθ(w) is the partition function. Note that the conditional distribution p(v | s, l, u, w) is Gaussian distributed by construction. A visualization of our model is found in Figure 1. This model is a conditional random field (CRF) that is mixed, i.e., it is defined over both discrete and continuous random variables (Koller and Friedman, 2009). We restrict the range of u to be a subset of Σ|w|+k, where k is an insertion limit (Dreyer, 2011). In this work, we take k = 5. Explicitly, the partition function is defined as\nZθ(w) =\n∫ ∑\nl′,s′,u′ exp\n( 1\n2σ2 ||v′ − Cβ(s′, l′)||22\n+ f(s′, l′, u′)>η + g(u′, w)>ω ) dv′, (2)\nwhich is guaranteed to be finite.7\nA CRF is simply the globally renormalized product of several non-negative factors (Sutton and McCallum, 2006). Our model is composed of three: transduction, segmentation and composition factors—we describe each in turn."
+  }, {
+    "heading": "3.1 Transduction Factor",
+    "text": "The first factor we consider is the transduction factor: exp ( g(u,w)>ω ) , which scores a surface\n7Since we have capped the insertion limit, we have a finite number of values that u can take for anyw. Thus, it follows that we have a finite number of canonical segmentations s. Hence we take a finite number of Gaussian integrals. These integrals all converge since we have fixed the covariance matrix as σ2I , which is positive definite.\nrepresentation (SR) w, the character string observed in raw text, and an underlying representation (UR), a character string with orthographic processes reversed. The aim of this factor is to place high weight on good pairs, e.g., the pair (w=questionably,u=questionablely), so we can accurately restore character-level changes.\nWe encode this portion of the model as a weighted finite-state machine for ease of computation. This factor generalizes probabilistic edit distance (Ristad and Yianilos, 1998) by looking at additional input and output context; see Cotterell et al. (2014) for details. As mentioned above and in contrast to Cotterell et al. (2014), we bound the insertion limit in the edit distance model.8 Computing the score between two strings u and w requires a dynamic program that runs inO(|u|·|w|). This is a generalization of the forward algorithm for Hidden Markov Models (HMMs) (Rabiner, 1989).\nWe employ standard feature templates for the task that look at features of edit operations, e.g., substitute i for y, in varying context granularities. See Cotterell et al. (2016b) for details. Recent work has also explored weighting of WFST arcs with scores computed by LSTMs (Hochreiter and Schmidhuber, 1997), obviating the need for human selection of feature templates (Rastogi et al., 2016)."
+  }, {
+    "heading": "3.2 Segmentation Factor",
+    "text": "The second factor is the segmentation factor: exp ( f(s, l, u)>η ) . The goal of this factor is to score a segmentation s of a UR u. In our example, it scores the input-output pair (u=questionablely, s=question+able+ly). It additionally scores a labeling of the segmentation. Our label set in this work is L = {stem, prefix, suffix}. The proper labeling of the segmentation above is l=question:stem+able:suffix+ly:suffix. The labeling is critical for our composition functions Cβ (Cotterell et al., 2015): which vectors are used depends on the label given to the segment; e.g., the vectors of the prefix “post” and the stem “post” are different.\nWe can view this factor as an unnormalized first8As our transduction model is an unnormalized factor in a CRF, we do not require the local normalization discussed in Cotterell et al. (2014)—a weight on an edge may be any nonnegative real number since we will renormalize later. The underlying model, however, remains the same.\norder semi-CRF (Sarawagi and Cohen, 2005). Computation of the factor again requires dynamic programming. The algorithm is a different generalization of the forward algorithm for HMMs, one that extends it to the semi-Markov case. This algorithm runs in O(|u|2 · |L|2).\nFeatures. We again use standard feature templates for the task. We create atomic indicator features for the individual segments. We then conjoin the atomic features with left and right context features as well as the label to create more complex feature templates. We also include transition features that fire on pairs of sequential labels. See Cotterell et al. (2015) for details. Recent work has also showed that a neural parameterization can remove the need for manual feature design (Kong et al., 2016)."
+  }, {
+    "heading": "3.3 Composition Factor",
+    "text": "The composition factor takes the form of an unnormalized multivariate Gaussian density: exp ( 1\n2σ2 ||v − Cβ(s, l)||22\n) , where the mean is\ncomputed by the (potentially non-linear) composition function (See Table 1) and the covariance matrix σ2I is a diagonal matrix. The goal of the composition function Cβ(s, l) is to stitch together morpheme embeddings to approximate the vector of the entire word.\nThe simplest form of the composition function Cβ(s, l) is add, an additive model of the morphemes. See Table 1: each vector mlisi refers to a morpheme-\nspecific, label-dependent embedding. If li = stem, then si represents a stem morpheme. Given that our segmentation is canonical, an si that is a stem generally itself is an entry in the lexicon and v(si) ∈ V . If v(si) 6∈ V , then we set v(si) to 0.9 We optimize over vectors with li ∈ {prefix, suffix} as they correspond to bound morphemes.\nWe also consider a more expressive composition model, a recurrent neural network (RNN). Let N be the number of segments. Then Cβ(s, l) = hN where hi is a hidden vector, defined by the recursion:10 hi = tanh ( Xhi−1 + Umlisi ) (Elman, 1990). Again, we optimize the morpheme embeddings mlisi only when li 6= stem along with the other parameters of the RNN, i.e., the matrices U and X ."
+  }, {
+    "heading": "4 Inference and Learning",
+    "text": "Exact inference is intractable since we allow arbitrary segment-level features on the canonicalized word forms u. Since the semi-CRF factor has features that fire on substrings, we would need a dynamic programming state for each substring of each of the exponentially many settings of u; this breaks the dynamic program. We thus turn to approximate inference through an importance sampling routine (Rubinstein and Kroese, 2011)."
+  }, {
+    "heading": "4.1 Inference by Importance Sampling",
+    "text": "Rather than considering all underlying orthographic forms u and segmentations s, we sample from a tractable proposal distribution q—a distribution over canonical segmentations. In the following equations we omit the dependence on w for notational brevity and define h(l, s, u) = f(s, l, u) + g(u,w). Crucially, the partition function Zθ(w) is not a function of parameter subvector β and its gradient with re-\n9This is not changed in training, so all such v(si) are 0 in the final model. Clearly, this could be improved in future work as a reviewer points out, e.g., by setting such v(si) to an average of a suitable chosen set of known word vectors.\n10We do not explore more complex RNNs, e.g., LSTMs (Hochreiter and Schmidhuber, 1997) and GRUs (Cho et al., 2014a) as words in our data have ≤7 morphemes. These architectures make the learning of long distance dependencies easier, but are no more powerful than an Elman RNN, at least in theory. Note that perhaps if applied to languages with richer derivational morphology than English, considering more complex neural architectures would make sense.\nspect to β is 0.11 Recall that computing the gradient of the log-partition function is equivalent to the problem of marginal inference (Wainwright and Jordan, 2008). We derive our estimator as follows:\n∇θ logZ = E (l,s,u)∼p [h(l, s, u)] (3)\n= ∑\nl,s,u\np(l, s, u)h(l, s, u) (4)\n= ∑\nl,s,u\nq(l, s, u) q(l, s, u) p(l, s, u)h(l, s, u) (5)\n= E (l,s,u)∼q\n[ p(l, s, u)\nq(l, s, u) h(l, s, u)\n] , (6)\nwhere we have omitted the dependence on w (which we condition on) and v (which we marginalize out). So long as q has support everywhere p does (i.e., p(l, s, u) > 0 ⇒ q(l, s, u) > 0), the estimate is unbiased. Unfortunately, we can only efficiently compute p(l, s, u) up to a constant factor, p(l, s, u) = p̄(l, s, u)/Z ′θ(w). Thus, we use the indirect importance sampling estimator,\n1 ∑M\ni=1w (i)\nM∑\ni=1\nw(i)h(l(i), s(i), u(i)), (7)\nwhere (l(1),s(1),u(1)) . . . (l(M),s(M),u(M)) i.i.d.∼ q and importance weights w(i) are defined as:\nw(i) = p̄(l(i), s(i), u(i))\nq(l(i), s(i), u(i)) . (8)\nThis indirect estimator is biased, but consistent.12\nProposal Distribution. The success of importance sampling depends on the choice of a “good” proposal distribution, i.e., one that ideally is close to p. Since we are fully supervised at training time, we have the option of training locally normalized distributions for the individual components. Concretely, we train two proposal distributions q1(u | w) and q2(l, s | u) that take the form of a WFST and a semi-CRF, respectively, using features identical\n11The subvector β is responsible for computing only the mean of the Gaussian factor and thus has no impact on its normalization coefficient (Murphy, 2012).\n12Informally, the indirect importance sampling estimate converges to the true expectation as M → ∞ (the definition of statistical consistency).\nto the joint model. Each of these distributions is tractable—we can compute the marginals with dynamic programming and thus sample efficiently. To draw samples (l, s, u) ∼ q, we sample sequentially from q1 and then q2, conditioned on the output of q1."
+  }, {
+    "heading": "4.2 Learning",
+    "text": "We optimize the log-likelihood of the model using ADAGRAD (Duchi et al., 2011), which is SGD with a special per-parameter learning rate. The full gradient of the objective for one training example is:\n∇θ log p(v, s, l, u | w) = f(s, l, u)> + g(u,w)>\n− 1 σ2\n(v − Cβ(s, l))∇θCβ(s, l) −∇θ logZθ(w), (9)\nwhere we use the importance sampling algorithm described in §4.1 to approximate the gradient of the log-partition function, following Bengio and Senecal (2003). Note that ∇θCβ(s, l) depends on the composition function used. In the most complicated case when Cβ is a RNN, we can compute ∇βCβ(s, l) efficiently with backpropagation through time (Werbos, 1990). We take M = 10 importance samples; using so few samples can lead to a poor estimate of the gradient, but for our application it suffices. We employ L2 regularization."
+  }, {
+    "heading": "4.3 Decoding",
+    "text": "Decoding the model is also intractable. To approximate the solution, we again employ importance sampling. We take M =10,000 importance samples and select the highest weighted sample."
+  }, {
+    "heading": "5 Related Work",
+    "text": "The idea that vector semantics is useful for morphological segmentation is not new. Count vectors (Salton, 1971; Turney and Pantel, 2010) have been shown to be beneficial in the unsupervised induction of morphology (Schone and Jurafsky, 2000; Schone and Jurafsky, 2001). Embeddings were shown to act similarly (Soricut and Och, 2015). Our method differs from this line of research in two key ways. (i) We present a probabilistic model of the process of synthesizing the word’s meaning from the meaning of its morphemes. Prior work was either not probabilistic or did not explicitly model\nmorphemes. (ii) Our method is supervised and focuses on derivation. Schone and Jurafsky (2000) and Soricut and Och (2015), being fully unsupervised, do not distinguish between inflection and derivation and Schone and Jurafsky (2001) focus on inflection. More recently, Narasimhan et al. (2015) look at the unsupervised induction of “morphological chains” with semantic vectors as a crucial feature. Their goal is to jointly figure out an ordering of word formation and a morphological segmentation, e.g., play7→playful7→playfulness. While it is a rich model like ours, theirs differs in that it is unsupervised and uses vectors as features, rather than explicitly treating vector composition. All of the above work focuses on surface segmentation and not canonical segmentation, as we do.\nA related line of work that has different goals concerns morphological generation. Two recent papers that address this problem using deep learning are Faruqui et al. (2016a) and Faruqui et al. (2016b). In an older line of work, Yarowsky and Wicentowski (2000) and Wicentowski (2002) exploit log frequency ratios of inflectionally related forms to tease apart that, e.g., the past tense of sing is not singed, but instead sang. Related work by Dreyer and Eisner (2011) uses a Dirichlet process to model a corpus as a “mixture of a paradigm”, allowing for the semi-supervised incorporation of distributional semantics into a structured model of inflectional paradigm completion.\nOur work is also related to recent attempts to integrate morphological knowledge into general embedding models. For example, Botha and Blunsom (2014) train a log-bilinear language model that models the composition of morphological structure. Likewise, Luong et al. (2013) train a recursive neural network (Goller and Küchler, 1996) over a heuristically derived tree structure to learn morphological composition over continuous vectors. Our work is different in that we learn a joint model of segmentation and composition. Moreover, supervised morphological analysis can drastically outperform unsupervised analysis (Ruokolainen et al., 2013).\nEarly work by Kay (1977) can be interpreted as finite-state canonical segmentation, but it neither addresses nor experimentally evaluates the question of joint modeling of morphological analysis and semantic synthesis. Moreover, we may view canoni-\ncalization as an orthographic analogue to phonology. On this interpretation, the finite-state systems of Kaplan and Kay (1994), which computationally apply SPE-style phonological rules (Chomsky and Halle, 1968), may be run backwards to get canonical underlying forms."
+  }, {
+    "heading": "6 Experiments and Results",
+    "text": "We conduct experiments on English and German derivational morphology. We analyze our joint model’s ability to segment words into their canonical morphemes as well as its ability to compositionally derive vectors for new words. Finally, we explore the relationship between distributional semantics and morphological productivity.\nFor English, we use the pretrained vectors of Levy and Goldberg (2014a) for all experiments. For German, we train word2vec skip-gram vectors on the German Wikipedia. We first describe our English dataset, the subset of the English portion of the CELEX lexical database (Baayen et al., 1993) that was selected by Lazaridou et al. (2013); the dataset contains 10,000 forms. This allows for comparison with previously proposed methods. We make two modifications. (i) Lazaridou et al. (2013) make the two-morpheme assumption: every word is composed of exactly two morphemes. In general, this is not true, so we further segment all complex\nwords in the corpus. For example, friendless+ness is further segmented into friend+less+ness. To nevertheless allow for fair comparison, we provide versions of our experiments with and without the two-morpheme assumption where appropriate. (ii) Lazaridou et al. (2013) only provide a single train/test split. As we require a held-out development set for hyperparameter tuning, we randomly allocate a portion of the training data to select the hyperparameters and then retrain the model using these parameters on the original train split. We also report 10-fold cross validation results in addition to Lazaridou et al.’s train/test split.\nOur German dataset is taken from Zeller et al. (2013) and is described in Cotterell et al. (2016b). It, again, consists of 10,000 derivational forms. We report results on 10-fold cross validation."
+  }, {
+    "heading": "6.1 Experiment 1: Canonical Segmentation",
+    "text": "For our first experiment, we test whether jointly modeling the continuous representations allows us to segment words more accurately. We assume that we are given an embedding for the target word. We estimate the model p(v, s, l, u | w) as described in §4 with L2 regularization λ||θ||22. To evaluate, we decode the distribution p(s, l, u | v, w). We perform approximate MAP inference with importance sampling—taking the sample with the highest score.\nIn these experiments, we use the RNN with the dependency vectors, the combination of which performs best on vector approximation in §6.2.\nWe follow the experimental design of Cotterell et al. (2016b). We compare against two baselines (marked “Baseline” in Table 2): (i) a “SemiCRF” segmenter that cannot account for orthographic changes and (ii) the full “Joint” model of Cotterell et al. (2016b).13 We additionally consider an “Oracle” setting, where we give the model the gold underlying orthographic form (“UR”) at both training and test time. This gives us insight into the performance of the transduction factor of our model, i.e., how much could we benefit from a richer model.\nOur hyperparameters are (i) the regularization coefficient λ and (ii) σ2, the variance of the Gaussian factor. We use grid search to tune them: λ ∈ {0.0, 101, 102, 103, 104, 105}, σ2 ∈ {0.25, 0.5, 0.75, 1.0}. Metrics. We use three metrics to evaluate segmentation accuracy. Note that the evaluation of canonical segmentation is hard since a system may return a sequence of morphemes whose concatenation is not the same length as the concatenation of the gold morphemes. This rules out metrics for surface segmentation like border F1 (Kurimo et al., 2010), which require the strings to be of the same length.\nWe now define the metrics. (i) Segmentation accuracy measures whether every single canonical morpheme in the returned sequence is correct. It is inflexible: closer answers are penalized the same as\n13i.e., a model without the Gaussian factor that scores vectors.\nmore distant answers. (ii) Morpheme F1 (van den Bosch and Daelemans, 1999) takes the predicted sequence of canonical morphemes, turns it into a set, computes precision and recall in the standard way and based on that then computes F1. This metric gives credit if some of the canonical morphemes were correct. (iii) Levenshtein distance joins the canonical segments with a special symbol # into a single string and computes the Levenshtein distance between predicted and gold strings.\nDiscussion. Results in Table 2 show that jointly modeling semantic coherence improves our ability to analyze words. For test, our proposed joint model (“This Work”) outperforms the baseline supervised canonical segmenter, which is state-of-the-art for the task, by .05 (resp. .03) on accuracy and .03 (resp. .03) on F1 for English (resp. German). We also find that when we give the joint model an oracle UR the vectors generally help less: .01 (resp. .02) on accuracy and .01 (resp. .03) on F1 for English (resp. German). This indicates that the chief boon the vector composition factor provides lies in selection of an appropriate UR. Moreover, the up to .15 difference in English between systems with and without the oracle UR suggests that reversing orthographic changes is a particularly difficult part of the task, at least for English."
+  }, {
+    "heading": "6.2 Experiment 2: Vector Approximation",
+    "text": "We adopt the experimental design of Lazaridou et al. (2013). Its aim is to approximate a vector of a derivationally complex word using a learned model of composition. As Lazaridou et al. (2013) assume a gold morphological analysis, we compare two settings: (i) oracle morphological analysis and (ii) inferred morphological analysis. To the best of our knowledge, (ii) is a novel experimental condition that no previous work has addressed.\nWe consider four composition models (See Table 1). (i) stem, using just the stem vector. This baseline tells us what happens if we make the incorrect assumption that derivation behaves like inflection and is not meaning-changing. (ii) add, a purely additive model. This is arguably the simplest way of combining the vectors of the morphemes. (iii) LDS, a linear dynamical system. This is arguably the simplest sequence model. (iv) A (simple) RNN. Recur-\nrent neural networks are currently the most widely used nonlinear sequence model and simple RNNs are the simplest such models.\nPart of the motivation for considering a richer class of models lies in our removal of the twomorpheme assumption. Indeed, it is unclear that the wadd and fulladd models (Mitchell and Lapata, 2008) are useful models in the general case of multimorphemic words—the weights are tied by position, i.e., the first morpheme’s vector (be it a prefix or stem) is always multiplied by the same matrix.\nComparison with Lazaridou et al. To compare with Lazaridou et al. (2013), we use their exact train/test split. Those results are reported in Table 4. This dataset enforces that all words are composed of\nexactly two morphemes. Thus, a word like unquestionably is segmented as un+questionably, without further decomposition. The vectors employed by Lazaridou et al. (2013) are high-dimensional count vectors derived from lemmatized and POS tagged text with a before-and-after window of size 2. They then apply pointwise mutual information (PMI) weighting and dimensionality reduction by non-negative matrix factorization. In contrast, we employ WORD2VEC (Mikolov et al., 2013a), a model that is also interpretable as the factorization of a PMI matrix (Levy and Goldberg, 2014b). We consider three WORD2VEC models: two bag-of-word (BOW) models with before-and-after windows of size 2 and 5 and DEPs (Levy and Goldberg, 2014a), a dependency-based model whose context is derived from dependency parses rather than BOW.\nIn general, the results indicate that the key to better vector approximation is not a richer model of composition, but rather lies in the vectors themselves. We find that our best model, the RNN, only marginally edges out the LDS. Additionally, looking at the “all” column and the DEPs vectors, the simple additive model is only ≤.02 lower than LDS. In comparison, we observe large differences between the vectors. The RNN+DEPs model is .23 better than the BOW5 models (.81 vs. .58), .14 better than the BOW2 models (.81 vs. .67) and .25 better than Lazaridou et al.’s best model (.81 vs. .56). A wider context for BOW (5 instead of 2) yields worse results. This suggests that syntactic information or at least positional information is necessary for improved models of morpheme composition. The test vectors are annotated for relatedness, which is a proxy for semantic coherence. HR (highrelatedness) words were judged to be more compositional than LR (low-relatedness) words.\nCharacter-Level Neural Retrofitting. As a further strong baseline, we consider a retrofitting (Faruqui et al., 2015) approach based on characterlevel recurrent neural networks. Recently, running a recurrent net over the character stream has become a popular way of incorporating subword information into a model—empirical gains have been observed in a diverse set of NLP tasks: POS tagging (dos Santos and Zadrozny, 2014; Ling et al., 2015), parsing (Ballesteros et al., 2015) and language modeling\n(Kim et al., 2016). To the best of our knowledge, character-level retrofitting is a novel approach.\nGiven a vector v for a word form w, we seek a function to minimize the following objective\n1 2 ||v − hN ||22, (10)\nwhere hN is the final hidden state of a recurrent neural architecture, i.e.,\nhi = σ(Ahi−1 +Bwi), (11)\nwhere σ is a non-linearity and wi is the ith character in w, hi−1 is the previous hidden state and A and B are matrices. While we have defined the architecture for a vanilla RNN, we experiment with two more advanced recurrent architectures: GRUs (Cho et al., 2014b) and LSTMs (Hochreiter and Schmidhuber, 1997) as well as deep variants (Sutskever et al., 2014; Gillick et al., 2016; Firat et al., 2016). Importantly, this model has no knowledge of morphology—it can only rely on representations it extracts from the characters. This gives us a clear ablation on the benefit of adding structured morphological knowledge. We optimize the depth and the size of the hidden units on development data using a coarse-grained grid search. We found a depth of 2 and hidden units of size 100 (in both LSTM and GRU) performed best. We trained all models for 100 iterations of Adam (Kingma and Ba, 2015) with L2 regularization with regularization coefficient 0.01.\nTable 4 shows that the two character-level models (“c-GRU” and “c-LSTM”) perform much worse than our models. This indicates that supervised morphological analysis produces higher-quality vector representations than “knowledge-poor” characterlevel models. However, we note that these character-level models have fewer parameters than our morpheme-level models—there are many more morphemes in a languages than characters.\nOracle Morphology. In general, the twomorpheme assumption is incorrect. We consider an expanded setting of Lazaridou et al. (2013)’s task, in which we fully decompose the word, e.g., unquestionably7→un+question+able+ly. These results are reported in Table 3 (top block, “oracle”). We report mean cosine similarity. Standard deviations s for 10-fold cross-validation (not shown) are\nsmall (≤ .012) with two exceptions: s = .044 for the DEPs-joint-stem results (.411 and .412).\nThe multi-morphemic results mirror those of the bi-morphemic setting of Lazaridou et al. (2013). (i) RNN+DEPs attains an average cosine similarity of around .80 for English. Numbers for German are lower, around .70. (ii) The RNN only marginally edges out LDS for English and is slightly worse for German. Again, this is not surprising as we are modeling short sequences. (iii) Certain embeddings lend themselves more naturally to derivational compositionality: BOW2 is better than BOW5, DEPs is the clear winner.\nInferred Morphology. The final setting we consider is the vector approximation task without gold morphology. In this case, we rely on the full joint model p(v, s, l, u | w). At evaluation, we are interested in the marginal distribution p(v | w) =∑\ns,l,u p(v, s, l, u | w). We then use importance sampling to approximate the mean of this marginal distribution as the predicted embedding, i.e.,\nv̂ = ∫ vp(v | w)dv (12)\n≈ 1∑M i=1w (i)\nM∑\ni=1\nw(i)Cβ(l(i), s(i)), (13)\nwhere w(i) are the importance weights defined in Equation 8 and l(i) and s(i) are the ith sampled labeling and segmentation, respectively.\nDiscussion. Surprisingly, Table 3 (joint) shows that relying on the inferred morphology does not drastically affect the results. Indeed, we are often within .01 of the result with gold morphology. Our method can be viewed as a retrofitting procedure (Faruqui et al., 2015), so this result is useful: it indicates that joint semantic synthesis and morphological analysis produces high-quality vectors."
+  }, {
+    "heading": "6.3 Experiment 3: Derivational Productivity",
+    "text": "We now delve into the relation between distributional semantics and morphological productivity. The extent to which jointly modeling semantics aids morphological analysis will be determined by the inherent compositionality of the words within the vector space. We break down our results on the vector approximation task with gold morphology using the\ndependency vectors and the RNN composer in Figure 2 by selected affixes. We observe a wide range of scores: the most compositional ending ly gives rise to cosine similarities that are 20 points higher than those of the least compositional er.\nOn the left end of Figure 2 we see extremely productive suffixes. The affix ize is used productively with relatively obscure words in the sciences, e.g., Rao-Blackwellize. Likewise, the affix ness can be applied to almost any adjective without restriction, e.g., Poissonness ‘degree to which data have a Poisson distribution’. On the right end, we find -ment, -er and re-. The affix -ment is borderline productive (Bauer, 1983)—modern English tends to form novel nominalizations with ness or ity. More interesting are re- and er, both of which are very productive in English. For er, many of the words bringing down the average are simply non-compositional. For example, homer ‘homerun in baseball’ is not derived from home+er—this is an error in data. We also see examples like cutter. It has a compositional reading (e.g., “box cutter”), but also frequently occurs in the non-compositional meaning ‘type of boat’. Finally, proper nouns like Homer and Turner end in er and in our experiments we computed vectors for lowercased words. The affix re- similarly has a large number of non-compositional cases, e.g., remove, relocate, remark. Indeed, to get the compositional reading of remove, the first syllable (rather than the second) is typically stressed to emphasize the prefix.\nWe finally note several limitations of this experiment. (i) The ability of our models—even the recurrent neural network—to model transformations between vectors is limited. (ii) Our vectors are far from perfect; e.g., sparseness in the training data affects quality and some of the words in our corpus are rare. (iii) Semantic coherence is not the only criterion for productivity. An example is -th in English. As noted earlier, it is compositional in a word like warmth, but it cannot be used to form new words."
+  }, {
+    "heading": "7 Conclusion",
+    "text": "We have presented a model of the semantics and structure of derivationally complex words. To the best of our knowledge, this is the first attempt to jointly consider, within a single model, (i) the morphological decomposition of the word form and (ii) the semantic coherence of the resulting analysis. We found that directly modeling coherence increases segmentation accuracy, improving over a strong baseline. Also, our models show state-of-theart performance on the derivational vector approximation task introduced by Lazaridou et al. (2013).\nFuture work will focus on the extension of the method to more complex instances of derivational morphology, e.g., compounding and reduplication, and on the extension to additional languages. We also plan to explore the relation between derivation and distributional semantics in greater detail.\nAcknowledgments. The first author was supported by a DAAD Long-Term Research Grant and an NDSEG fellowship and the second by a Volkswagenstiftung Opus Magnum grant. We would also like to thank action editor Regina Barzilay for suggesting several changes we incorporated into the work and the three anonymous reviewers."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "On the use of morphological analysis for dialectal Arabic speech recognition",
+    "authors": ["Mohamed Afify", "Ruhi Sarikaya", "Hong-Kwang Jeff Kuo", "Laurent Besacier", "Yuqing Gao."],
+    "venue": "Ninth International Conference on Spoken Language Processing.",
+    "year": 2006
+  }, {
+    "title": "Word Formation in Generative Grammar",
+    "authors": ["Mark Aronoff."],
+    "venue": "MIT Press.",
+    "year": 1976
+  }, {
+    "title": "The CELEX lexical data base on CDROM",
+    "authors": ["Harald Baayen", "Richard Piepenbrock", "Hedderik van Rijn"],
+    "year": 1993
+  }, {
+    "title": "Improved transition-based parsing by modeling characters instead of words with LSTMs",
+    "authors": ["Miguel Ballesteros", "Chris Dyer", "Noah A. Smith."],
+    "venue": "Proceedings of the 2015 Conference on Empirical Methods in Natural Language Processing, pages 349–359,",
+    "year": 2015
+  }, {
+    "title": "English Word-Formation",
+    "authors": ["Laurie Bauer."],
+    "venue": "Cambridge University Press.",
+    "year": 1983
+  }, {
+    "title": "Quick training of probabilistic neural nets by importance sampling",
+    "authors": ["Yoshua Bengio", "Jean-Sébastien Senecal."],
+    "venue": "Proceedings of the Ninth International Conference on Artificial Intelligence and Statistics.",
+    "year": 2003
+  }, {
+    "title": "Compositional morphology for word representations and language modelling",
+    "authors": ["Jan A. Botha", "Phil Blunsom."],
+    "venue": "International Conference on Machine Learning, pages 1899–1907.",
+    "year": 2014
+  }, {
+    "title": "On the properties of neural machine translation: Encoder–decoder approaches",
+    "authors": ["Kyunghyun Cho", "Bart van Merriënboer", "Dzmitry Bahdanau", "Yoshua Bengio."],
+    "venue": "Workshop On Syntax, Semantics and Structure in Statistical Translation.",
+    "year": 2014
+  }, {
+    "title": "Learning phrase representations using RNN encoder-decoder for statistical machine translation",
+    "authors": ["Kyunghyun Cho", "Bart Van Merriënboer", "Caglar Gulcehre", "Dzmitry Bahdanau", "Fethi Bougares", "Holger Schwenk", "Yoshua Bengio."],
+    "venue": "Conference on",
+    "year": 2014
+  }, {
+    "title": "The sound pattern of English",
+    "authors": ["Noam Chomsky", "Morris Halle."],
+    "venue": "Harper & Row.",
+    "year": 1968
+  }, {
+    "title": "Aspects of the Theory of Syntax",
+    "authors": ["Noam Chomsky."],
+    "venue": "MIT Press.",
+    "year": 1965
+  }, {
+    "title": "Combining morpheme-based machine translation with postprocessing morpheme prediction",
+    "authors": ["Ann Clifton", "Anoop Sarkar."],
+    "venue": "Proceedings of the 49th Annual Meeting of the Association for Computational Linguistics: Human Language Technolo-",
+    "year": 2011
+  }, {
+    "title": "Stochastic contextual edit distance and probabilistic FSTs",
+    "authors": ["Ryan Cotterell", "Nanyun Peng", "Jason Eisner."],
+    "venue": "Proceedings of the 52nd Annual Meeting of the Association for Computational Linguistics (Volume 2: Short Papers), pages 625–630, Baltimore,",
+    "year": 2014
+  }, {
+    "title": "Labeled morphological segmentation with semi-Markov models",
+    "authors": ["Ryan Cotterell", "Thomas Müller", "Alexander Fraser", "Hinrich Schütze."],
+    "venue": "Proceedings of the Nineteenth Conference on Computational Natural Language Learning, pages 164–174, Beijing,",
+    "year": 2015
+  }, {
+    "title": "Morphological segmentation inside-out",
+    "authors": ["Ryan Cotterell", "Arun Kumar", "Hinrich Schütze."],
+    "venue": "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing, pages 2325–2330, Austin, Texas, November. Association for",
+    "year": 2016
+  }, {
+    "title": "A joint model of orthography and morphological segmentation",
+    "authors": ["Ryan Cotterell", "Tim Vieira", "Hinrich Schütze."],
+    "venue": "Proceedings of the 2016 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Tech-",
+    "year": 2016
+  }, {
+    "title": "Unsupervised models for morpheme segmentation and morphology learning",
+    "authors": ["Mathias Creutz", "Krista Lagus."],
+    "venue": "ACM Transactions on Speech and Language Processing, 4(1):3.",
+    "year": 2007
+  }, {
+    "title": "Learning character-level representations for part-ofspeech tagging",
+    "authors": ["Cı́cero Nogueira dos Santos", "Bianca Zadrozny"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2014
+  }, {
+    "title": "Discovering morphological paradigms from plain text using a Dirichlet process mixture model",
+    "authors": ["Markus Dreyer", "Jason Eisner."],
+    "venue": "Proceedings of the 2011 Conference on Empirical Methods in Natural Language Processing, pages 616–627. Association for",
+    "year": 2011
+  }, {
+    "title": "A Non-parametric Model for the Discovery of Inflectional Paradigms from Plain Text using Graphical Models over Strings",
+    "authors": ["Markus Dreyer."],
+    "venue": "Ph.D. thesis, Johns Hopkins University.",
+    "year": 2011
+  }, {
+    "title": "Adaptive subgradient methods for online learning",
+    "authors": ["John Duchi", "Elad Hazan", "Yoram Singer"],
+    "year": 2011
+  }, {
+    "title": "Finding structure in time",
+    "authors": ["Research", "12:2121–2159. Jeffrey L. Elman"],
+    "year": 1990
+  }, {
+    "title": "Morphological inflection gen",
+    "authors": ["Chris Dyer"],
+    "year": 2016
+  }, {
+    "title": "Association for Computational Linguistics",
+    "authors": ["nia", "June"],
+    "venue": "Christoph Goller and Andreas Küchler",
+    "year": 1996
+  }, {
+    "title": "Understanding morphology",
+    "authors": ["Martin Haspelmath", "Andrea Sims."],
+    "venue": "Routledge.",
+    "year": 2013
+  }, {
+    "title": "Semantics in Generative Grammar",
+    "authors": ["Irene Heim", "Angelika Kratzer."],
+    "venue": "Blackwell.",
+    "year": 1998
+  }, {
+    "title": "Long short-term memory",
+    "authors": ["Sepp Hochreiter", "Jürgen Schmidhuber."],
+    "venue": "Neural Computation, 9(8):1735– 1780.",
+    "year": 1997
+  }, {
+    "title": "Neural morphological analysis: Encodingdecoding canonical segments",
+    "authors": ["Katharina Kann", "Ryan Cotterell", "Hinrich Schütze."],
+    "venue": "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing, pages 961–967, Austin, Texas,",
+    "year": 2016
+  }, {
+    "title": "Regular models of phonological rule systems",
+    "authors": ["Ronald M. Kaplan", "Martin Kay."],
+    "venue": "Computational Linguistics, 20(3):331–378.",
+    "year": 1994
+  }, {
+    "title": "Morphological and syntactic analysis",
+    "authors": ["Martin Kay."],
+    "venue": "Linguistic Structures Processing, 5:131.",
+    "year": 1977
+  }, {
+    "title": "Character-aware neural language models",
+    "authors": ["Yoon Kim", "Yacine Jernite", "David Sontag", "Alexander M. Rush."],
+    "venue": "Proceedings of the Thirtieth AAAI Conference on Artificial Intelligence, pages 2741–2749.",
+    "year": 2016
+  }, {
+    "title": "Adam: A method for stochastic optimization",
+    "authors": ["Diederik Kingma", "Jimmy Ba."],
+    "venue": "International Conference on Learning Representations.",
+    "year": 2015
+  }, {
+    "title": "Obtaining a better understanding of distributional models of German derivational morphology",
+    "authors": ["Max Kisselew", "Sebastian Padó", "Alexis Palmer", "Jan Šnajder."],
+    "venue": "Proceedings of the 11th International Conference on Computational Semantics, pages 58–63.",
+    "year": 2015
+  }, {
+    "title": "Probabilistic Graphical Models: Principles and Techniques",
+    "authors": ["Daphne Koller", "Nir Friedman."],
+    "venue": "MIT Press.",
+    "year": 2009
+  }, {
+    "title": "Segmental recurrent neural networks",
+    "authors": ["Lingpeng Kong", "Chris Dyer", "Noah A Smith."],
+    "venue": "4th International Conference on Learning Representations.",
+    "year": 2016
+  }, {
+    "title": "Morpho Challenge competition 2005– 2010: Evaluations and results",
+    "authors": ["Mikko Kurimo", "Sami Virpioja", "Ville Turunen", "Krista Lagus."],
+    "venue": "Special Interest Group on Computational Morphology and Phonology.",
+    "year": 2010
+  }, {
+    "title": "Compositional-ly derived representations of morphologically complex words in distributional semantics",
+    "authors": ["Angeliki Lazaridou", "Marco Marelli", "Roberto Zamparelli", "Marco Baroni."],
+    "venue": "Proceedings of the 51st Annual Meeting of the Association for Computational",
+    "year": 2013
+  }, {
+    "title": "Dependencybased word embeddings",
+    "authors": ["Omer Levy", "Yoav Goldberg."],
+    "venue": "Proceedings of the 52nd Annual Meeting of the Association for Computational Linguistics (Volume 2: Short Papers), pages 302–308,",
+    "year": 2014
+  }, {
+    "title": "Neural word embedding as implicit matrix factorization",
+    "authors": ["Omer Levy", "Yoav Goldberg."],
+    "venue": "Advances in Neural Information Processing Systems, pages 2177–2185.",
+    "year": 2014
+  }, {
+    "title": "Morphological cues for lexical semantics",
+    "authors": ["Marc Light."],
+    "venue": "Proceedings of the 34th Annual Meeting of the Association for Computational Linguistics, pages 25–31, Santa Cruz, California, USA, June. Association for Computational Linguistics.",
+    "year": 1996
+  }, {
+    "title": "Finding function in form: Compositional character models for open vocabulary word representation",
+    "authors": ["Wang Ling", "Chris Dyer", "Alan W. Black", "Isabel Trancoso", "Ramon Fermandez", "Silvio Amir", "Luis Marujo", "Tiago Luis."],
+    "venue": "Proceedings of the 2015 Conference",
+    "year": 2015
+  }, {
+    "title": "Better word representations with recursive neural networks for morphology",
+    "authors": ["Thang Luong", "Richard Socher", "Christopher Manning."],
+    "venue": "Proceedings of the Seventeenth Conference on Computational Natural Language Learning, pages 104–113, Sofia, Bul-",
+    "year": 2013
+  }, {
+    "title": "Semantics",
+    "authors": ["John Lyons."],
+    "venue": "Cambridge University Press.",
+    "year": 1977
+  }, {
+    "title": "Efficient estimation of word representations in vector space",
+    "authors": ["Tomas Mikolov", "Kai Chen", "Greg Corrado", "Jeffrey Dean."],
+    "venue": "2th International Conference on Learning Representations.",
+    "year": 2013
+  }, {
+    "title": "Distributed representations of words and phrases and their compositionality",
+    "authors": ["Tomas Mikolov", "Ilya Sutskever", "Kai Chen", "Gregory S. Corrado", "Jeffrey Dean."],
+    "venue": "Advances in neural information processing systems, pages 3111–3119.",
+    "year": 2013
+  }, {
+    "title": "Vector-based models of semantic composition",
+    "authors": ["Jeff Mitchell", "Mirella Lapata."],
+    "venue": "Proceedings of Association of Computational Linguistics, pages 236– 244, Columbus, Ohio, June. Association for Computational Linguistics.",
+    "year": 2008
+  }, {
+    "title": "Machine Learning: A Probabilistic Perspective",
+    "authors": ["Kevin P. Murphy."],
+    "venue": "MIT Press.",
+    "year": 2012
+  }, {
+    "title": "Improving morphology induction by learning spelling rules",
+    "authors": ["Jason Naradowsky", "Sharon Goldwater."],
+    "venue": "Twenty-first International Joint Conference on Artificial Intelligence, pages 1531–1536.",
+    "year": 2009
+  }, {
+    "title": "Morphological segmentation for keyword spotting",
+    "authors": ["Karthik Narasimhan", "Damianos Karakos", "Richard Schwartz", "Stavros Tsakalidis", "Regina Barzilay."],
+    "venue": "Proceedings of the 2014 Conference on Empirical Methods in Natural Language Processing",
+    "year": 2014
+  }, {
+    "title": "An unsupervised method for uncovering morphological chains",
+    "authors": ["Karthik Narasimhan", "Regina Barzilay", "Tommi Jaakkola."],
+    "venue": "Transactions of the Association for Computational Linguistics, 3:157–167.",
+    "year": 2015
+  }, {
+    "title": "New Oxford American Dictionary",
+    "authors": ["OUP editors."],
+    "venue": "Oxford University Press.",
+    "year": 2010
+  }, {
+    "title": "Measuring semantic content to assess asymmetry in derivation",
+    "authors": ["Sebastian Padó", "Alexis Palmer", "Max Kisselew", "Jan Šnajder."],
+    "venue": "Proceedings of the 11th International Conference on Computational Semantics.",
+    "year": 2015
+  }, {
+    "title": "A tutorial on hidden Markov models and selected applications in speech recognition",
+    "authors": ["Lawrence R. Rabiner."],
+    "venue": "Proceedings of the Institute of Electrical and Electronics Engineers, 77(2):257–286.",
+    "year": 1989
+  }, {
+    "title": "Weighting finite-state transductions with neural context",
+    "authors": ["Pushpendre Rastogi", "Ryan Cotterell", "Jason Eisner."],
+    "venue": "Proceedings of the 2016 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Tech-",
+    "year": 2016
+  }, {
+    "title": "Learning string-edit distance",
+    "authors": ["Eric S. Ristad", "Peter N. Yianilos."],
+    "venue": "IEEE Transactions on Pattern Analysis and Machine Intelligence, 20(5):522–532.",
+    "year": 1998
+  }, {
+    "title": "Simulation and the Monte Carlo method",
+    "authors": ["Reuven Y. Rubinstein", "Dirk P. Kroese."],
+    "venue": "John Wiley & Sons.",
+    "year": 2011
+  }, {
+    "title": "Supervised morphological segmentation in a low-resource learning setting using conditional random fields",
+    "authors": ["Teemu Ruokolainen", "Oskar Kohonen", "Sami Virpioja", "Mikko Kurimo."],
+    "venue": "Proceedings of the Seventeenth Conference on Computational Natural Lan-",
+    "year": 2013
+  }, {
+    "title": "The SMART Retrieval System—Experiments in Automatic Document Processing",
+    "authors": ["Gerard Salton", "editor"],
+    "year": 1971
+  }, {
+    "title": "SemiMarkov conditional random fields for information extraction",
+    "authors": ["Sunita Sarawagi", "William W. Cohen."],
+    "venue": "Advances in neural information processing systems, pages 1185–1192.",
+    "year": 2005
+  }, {
+    "title": "Knowledgefree induction of morphology using latent semantic analysis",
+    "authors": ["Patrick Schone", "Daniel Jurafsky."],
+    "venue": "Proceedings the 4th Conference on Computational Natural Language Learning, pages 67–72. Association for Computational Linguistics.",
+    "year": 2000
+  }, {
+    "title": "Knowledgefree induction of inflectional morphologies",
+    "authors": ["Patrick Schone", "Daniel Jurafsky."],
+    "venue": "Proceedings of the Second Meeting of the North American",
+    "year": 2001
+  }, {
+    "title": "A graphbased lattice dependency parser for joint morphological segmentation and syntactic analysis",
+    "authors": ["Wolfgang Seeker", "Özlem Çetinoğlu."],
+    "venue": "Transactions of the Association for Computational Linguistics, 3:359–373.",
+    "year": 2015
+  }, {
+    "title": "Unsupervised morphology induction using word embeddings",
+    "authors": ["Radu Soricut", "Franz Och."],
+    "venue": "Proceedings of the 2015 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies, pages 1627–",
+    "year": 2015
+  }, {
+    "title": "Sequence to sequence learning with neural networks",
+    "authors": ["Ilya Sutskever", "Oriol Vinyals", "Quoc V. Le."],
+    "venue": "Advances in Neural Information Processing Systems, pages 3104–3112.",
+    "year": 2014
+  }, {
+    "title": "An introduction to conditional random fields for relational learning",
+    "authors": ["Charles Sutton", "Andrew McCallum."],
+    "venue": "Lise Getoor and Ben Taskar, editors, Introduction to Statistical Relational Learning, pages 93–128. MIT Press.",
+    "year": 2006
+  }, {
+    "title": "From frequency to meaning: Vector space models of semantics",
+    "authors": ["Peter D. Turney", "Patrick Pantel."],
+    "venue": "Journal of Artificial Intelligence Research, 37(1):141– 188.",
+    "year": 2010
+  }, {
+    "title": "Memory-based morphological analysis",
+    "authors": ["Antal van den Bosch", "Walter Daelemans."],
+    "venue": "Proceedings of the 37th Annual Meeting of the Association for Computational Linguistics, pages 285–292, College Park, Maryland, USA, June. Association for Compu-",
+    "year": 1999
+  }, {
+    "title": "Graphical models, exponential families, and variational inference",
+    "authors": ["Martin J. Wainwright", "Michael I. Jordan."],
+    "venue": "Foundations and Trends in Machine Learning, 1(1-2):1–305.",
+    "year": 2008
+  }, {
+    "title": "Knowledge graph and text jointly embedding",
+    "authors": ["Zhen Wang", "Jianwen Zhang", "Jianlin Feng", "Zheng Chen."],
+    "venue": "Proceedings of the 2014 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 1591–1601, Doha, Qatar, October.",
+    "year": 2014
+  }, {
+    "title": "Backpropagation through time: What it does and how to do it",
+    "authors": ["Paul J. Werbos."],
+    "venue": "Proceedings of the Institute of Electrical and Electronics Engineers, 78(10):1550–1560.",
+    "year": 1990
+  }, {
+    "title": "Modeling and Learning Multilingual Inflectional Morphology in a Minimally Supervised Framework",
+    "authors": ["Richard Wicentowski."],
+    "venue": "Ph.D. thesis, Johns Hopkins University.",
+    "year": 2002
+  }, {
+    "title": "Corpus-level fine-grained entity typing using contextual information",
+    "authors": ["Yadollah Yaghoobzadeh", "Hinrich Schütze."],
+    "venue": "Proceedings of the 2015 Conference on Empirical Methods in Natural Language Processing, pages 715–725, Lisbon, Portugal, September.",
+    "year": 2015
+  }, {
+    "title": "Minimally supervised morphological analysis by multimodal alignment",
+    "authors": ["David Yarowsky", "Richard Wicentowski."],
+    "venue": "The 38th Annual Meeting of the Association for Computational Linguistics.",
+    "year": 2000
+  }, {
+    "title": "Convolutional neural network for paraphrase identification",
+    "authors": ["Wenpeng Yin", "Hinrich Schütze."],
+    "venue": "Proceedings of the 2015 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies, pages 901–",
+    "year": 2015
+  }, {
+    "title": "DErivBase: Inducing and evaluating a derivational morphology resource for German",
+    "authors": ["Britta D. Zeller", "Jan Šnajder", "Sebastian Padó."],
+    "venue": "Proceedings of the 51st Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages",
+    "year": 2013
+  }, {
+    "title": "Towards semantic validation of a derivational lexicon",
+    "authors": ["Britta D. Zeller", "Sebastian Padó", "Jan Šnajder."],
+    "venue": "Proceedings the 25th International Conference on Computational Linguistics, pages 1728–1739, Dublin, Ireland, August. Dublin City University and Associa-",
+    "year": 2014
+  }],
+  "id": "SP:38afef35de217bdce44e2d02f366ca42bedfb60e",
+  "authors": [{
+    "name": "Ryan Cotterell",
+    "affiliations": []
+  }, {
+    "name": "Hinrich Schütze",
+    "affiliations": []
+  }],
+  "abstractText": "Much like sentences are composed of words, words themselves are composed of smaller units. For example, the English word questionably can be analyzed as question+able+ly. However, this structural decomposition of the word does not directly give us a semantic representation of the word’s meaning. Since morphology obeys the principle of compositionality, the semantics of the word can be systematically derived from the meaning of its parts. In this work, we propose a novel probabilistic model of word formation that captures both the analysis of a word w into its constituent segments and the synthesis of the meaning of w from the meanings of those segments. Our model jointly learns to segment words into morphemes and compose distributional semantic vectors of those morphemes. We experiment with the model on English CELEX data and German DErivBase (Zeller et al., 2013) data. We show that jointly modeling semantics increases both segmentation accuracy and morpheme F1 by between 3% and 5%. Additionally, we investigate different models of vector composition, showing that recurrent neural networks yield an improvement over simple additive models. Finally, we study the degree to which the representations correspond to a linguist’s notion of morphological productivity.",
+  "title": "Joint Semantic Synthesis and Morphological Analysis of the Derived Word"
+}

@@ -1,0 +1,341 @@
+{
+  "sections": [{
+    "text": "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Long Papers), pages 2160–2170 Melbourne, Australia, July 15 - 20, 2018. c©2018 Association for Computational Linguistics\n2160\nMost previous supervised event extraction methods have relied on features derived from manual annotations, and thus cannot be applied to new event types without extra annotation effort. We take a fresh look at event extraction and model it as a generic grounding problem: mapping each event mention to a specific type in a target event ontology. We design a transferable architecture of structural and compositional neural networks to jointly represent and map event mentions and types into a shared semantic space. Based on this new framework, we can select, for each event mention, the event type which is semantically closest in this space as its type. By leveraging manual annotations available for a small set of existing event types, our framework can be applied to new unseen event types without additional manual annotations. When tested on 23 unseen event types, this zeroshot framework, without manual annotations, achieves performance comparable to a supervised model trained from 3,000 sentences annotated with 500 event mentions.1"
+  }, {
+    "heading": "1 Introduction",
+    "text": "The goal of event extraction is to identify event triggers and their arguments in unstructured text data, and then to assign an event type to each trigger and a semantic role to each argument. An example is shown in Figure 1. Traditional supervised methods have typically modeled this task of event\n1The programs are publicly available for research purpose at: https://github.com/wilburOne/ZeroShotEvent\nextraction as a classification problem, by assigning event triggers to event types from a pre-defined fixed set. These methods rely heavily on manual annotations and features specific to each event type, and thus are not easily adapted to new event types without extra annotation effort. Handling new event types may even entail starting over, without being able to re-use annotations from previous event types.\nTo make event extraction effective as new realworld scenarios emerge, we take a look at this task from the perspective of zero-shot learning, ZSL (Frome et al., 2013; Norouzi et al., 2013; Socher et al., 2013a). ZSL, as a type of transfer learning, makes use of separate, pre-existing classifiers to build a semantic, cross-concept space that maps between their respective classes. The resulting shared semantic space then allows for building a novel “zero-shot” classifier, i,e,, requiring no (zero) additional training examples, to handle unseen cases. We observe that each event mention has a structure consisting of a candidate trigger and arguments, with corresponding predefined name labels for the event type and argument roles. We propose to enrich the semantic representations of each event mention and event type with rich structures, and determine the type based on the semantic similarity between an event mention and each event type defined in a target ontology. Let’s consider two example sentences:\nE1. The Government of China has ruled Tibet since 1951 after dispatching troops to the Himalayan region in 1950.\nE2. Iranian state television stated that the conflict between the Iranian police and the drug smugglers took place near the town of mirjaveh.\nIn E1, as also diagrammed in Figure 1, dis-\npatching is the trigger for the event mention of type Transport Person and in E2, conflict is the trigger for the event mention of type Attack. We make use of Abstract Meaning Representations (AMR) (Banarescu et al., 2013) to identify the candidate arguments and construct event mention structures as shown in Figure 2 (top). Figure 2 (bottom) also shows event type structures defined in the Automatic Content Extraction (ACE) guideline.2 We can see that a trigger and its event type name usually have some shared meaning. Furthermore, their structures also tend to be similar: a Transport Person event typically involves a Person as its patient role, while an Attack event involves a Person or Location as an Attacker. This observation matches the theory by Pustejovsky (1991): “the semantics of an event structure can be generalized and mapped to event mention structures in a systematic and predictable way”.\nInspired by this theory, for the first time, we model event extraction as a generic grounding problem, by mapping each mention to its semantically closest event type. Given an event ontology,\n2https://en.wikipedia.org/wiki/Automatic content extraction\nwhere each event type structure is well-defined, we will refer to the event types for which we have annotated event mentions as seen types, while those without annotations as unseen types. Our goal is to learn a generic mapping function independent of event types, which can be trained from annotations for a limited number of seen event types and then used for any new unseen event types. We design a transferable neural architecture, which jointly learns and maps the structural representations of event mentions and types into a shared semantic space, by minimizing the distance between each event mention and its corresponding type. For event mentions with unseen types, their structures will be projected into the same semantic space using the same framework and assigned types with top-ranked similarity values.\nTo summarize, to apply our new zero-shot transfer learning framework to any new unseen event types, we only need (1) a structured definition of the unseen event type (its type name along with role names for its arguments, from the event ontology); and (2) some annotations for one or a few seen event types. Without requiring any additional manual annotations for the new unseen types, our ZSL framework achieves performance comparable to supervised methods trained from a substantial amount of training data for the same types."
+  }, {
+    "heading": "2 Approach Overview",
+    "text": "Briefly here, we overview the phases involved in building our framework’s shared semantic space that, in turn, is the basis for the ZSL framework. Given a sentence s, we start by identifying candidate triggers and arguments based on AMR parsing (Wang et al., 2015b). For the example shown in Figure 1, we identify dispatching as a trigger, and its candidate arguments: China, troops, Himalayan and 1950. The details will be described in Section 3.\nAfter this identification phase, we use our new neural architecture, as depicted in Figure 3, to classify triggers into event types. (The classification of arguments into roles follows the same pipeline.) For each trigger t, e.g., dispatch-01, we determine its type by comparing its semantic representation with that of any event type in the event ontology. In order to incorporate the contexts into the semantic representation of t, we build a structure St using AMR as shown in Figure 3. Each structure is composed of a set of tuples, e.g, 〈dispatch-01, :ARG0, China〉. We use a matrix to represent each AMR relation, composing its semantics with two concepts for each tuple (in Section 4), and feed all tuple representations into a CNN to generate a dense vector representation VSt for the event mention structure (in Section 5.1).\nGiven a target event ontology, for each type y, e.g., Transport Person, we construct a type structure Sy consisting of its predefined roles, and use a tensor to denote the implicit relation between any type and argument role. We compose the semantics of type and argument role with the tensor for each tuple, e.g., 〈Transport Person, Destination〉 (in Section 4). Then we generate the event type structure representation VSy using the same CNN (in Section 5.1). By minimizing the semantic distance between dispatch-01 and Trans-\nport Person using their dense vectors, VSt and VSy respectively, we jointly map the representations of event mention and event types into a shared semantic space, where each mention is closest to its annotated type.\nAfter training that completes the construction of the semantic space, the compositional functions and CNNs are then used to project any new event mention (e.g., donate-01) into the semantic space and find its closest event type (e.g., Donation) (in Section 5.3). In the next sections we will elaborate each step in great detail."
+  }, {
+    "heading": "3 Trigger and Argument Identification",
+    "text": "Similar to Huang et al. (2016), we identify candidate triggers and arguments based on AMR Parsing (Wang et al., 2015b) and apply the same word sense disambiguation (WSD) tool (Zhong and Ng, 2010) to disambiguate word senses and link each sense to OntoNotes, as shown in Figure 1.\nGiven a sentence, we consider all noun and verb concepts that can be mapped to OntoNotes senses by WSD as candidate event triggers. In addition, the concepts that can be matched with verbs or nominal lexical units in FrameNet (Baker et al., 1998) are also considered as candidate triggers. For each candidate trigger, we consider any concepts that are involved in a subset of AMR rela-\ntions as candidate arguments 3. We manually select this subset of AMR relations that are useful for capturing generic relations between event triggers and arguments, as shown in Table 1."
+  }, {
+    "heading": "4 Trigger and Type Structure Composition",
+    "text": "As Figure 3 shows, for each candidate trigger t, we construct its event mention structure St based on its candidate arguments and AMR parsing. For each type y in the target event ontology, we construct a structure Sy by including its pre-defined roles and using its type as the root.\nEach St or Sy is composed of a collection of tuples. For each event mention structure, a tuple consists of two AMR concepts and an AMR relation. For each event type structure, a tuple consists of a type name and an argument role name. Next we will describe how to compose semantic representations for event mention and event type respectively based on these structures.\nEvent Mention Structure For each tuple u = 〈w1, λ, w2〉 in an event mention structure, we use a matrix to represent each AMR relation λ, and compose the semantics of λ between two concepts w1 and w2 as:\nVu = [V ′ w1 ;V ′ w2 ] = f([Vw1 ;Vw2 ] ·Mλ)\nwhere Vw1 , Vw2 ∈ Rd are the vector representations of words w1 and w2. d is the dimension size of each word vector. [ ; ] denotes the concatenation of two vectors. Mλ ∈ R2d×2d is the matrix representation for AMR relation λ. Vu is the composition representation of tuple u, which consists of two updated vector representations V\n′ w1 , V ′ w2 for\nw1 and w2 by incorporating the semantics of λ. Event Type Structure For each tuple u′ = 〈y, r〉 in an event type structure, where y denotes the\n3On the whole ACE2005 corpus, using the AMR parser (Wang et al., 2015b), the coverage for trigger identification is 89.4% and the coverage for argument candidate identification is 66.0%.\nevent type and r denotes an argument role, following Socher et al. (2013b), we assume an implicit relation exists between any pair of type and argument, and use a single and powerful tensor to represent the implicit relation:\nVu′ = [V ′ y ;V ′ r ] = f([Vy;Vr] T · U [1:2d] · [Vy;Vr])\nwhere Vy and Vr are vector representations for y and r. U [1:2d] ∈ R2d×2d×2d is a 3-order tensor. V ′ u is the composition representation of tuple u ′ , which consists of two updated vector representations V ′ y , V ′ r for y and r by incorporating the semantics of their implicit relation U [1:2d]."
+  }, {
+    "heading": "5 Trigger and Argument Classification",
+    "text": ""
+  }, {
+    "heading": "5.1 Trigger Classification for Seen Types",
+    "text": "Both event mention and event type structures are relatively simple and can be represented with a set of tuples. CNNs have been demonstrated effective at capturing sentence level information by aggregating compositional n-gram representations. In order to generate structure-level representations, we use CNN to learn to aggregate all edge and tuple representations.\nInput layer is a sequence of tuples, where the order of tuples is from top to bottom in the structure. Each tuple is represented by a d × 2 dimensional vector, thus each mention structure and each type structure are represented as a feature map of dimensionality d × 2h∗ and d × 2p∗ respectively, where h∗ and p∗ are the maximal number of tuples for event mention and type structures. We use zero-padding to the right to make the volume of all input structures consistent.\nConvolution layer Take St with h∗ tuples: u1, u2, ..., uh∗ as an example. The input matrix of St is a feature map of dimensionality d× 2h∗. We make ci as the concatenated embeddings of n continuous columns from the feature map, where n is the filter width and 0 < i < 2h∗ + n. A convolution operation involves a filter W ∈ Rnd, which is applied to each sliding window ci:\nc ′ i = tanh(W · ci + b)\nwhere c ′ i is the new feature representation, and b ∈ Rd is a biased vector. We set filter width as 2 and stride as 2 to make the convolution function operate on each tuple with two input columns.\nMax-Pooling: All tuple representations c′i are used to generate the representation of the input sequence by max-pooling.\nLearning: For each event mention t, we name the correct type as positive and all the other types in the target event ontology as negative. To train the composition functions and CNN, we first consider the following hinge ranking loss:\nL1(t, y) = ∑\nj∈Y, j 6=y max{0,m− Ct,y + Ct,j}\nCt,y = cos([Vt;VSt ], [Vy;VSy ])\nwhere y is the positive event type for t. Y is the type set of the target event ontology. [Vt;VSt ] denotes the concatenation of representations of t and St. j is a negative event type for t from Y . m is a margin. Ct,y denotes the cosine similarity between t and y.\nThe hinge loss is commonly used in zero-shot visual object classification task. However, it tends to overfit the seen types in our experiments. While clever data augmentation can help alleviate overfitting, we design two strategies: (1) we add “negative” event mentions into the training process. Here a “negative” event mention means that the mention has no positive event type among all seen types, namely it belongs to Other. (2) we design a new loss function as follows:\nLd1(t, y) ={ max\nj∈Y,j 6=y max{0,m− Ct,y + Ct,j}, y 6= Other\nmax j∈Y ′ ,j 6=y′ max{0,m− Ct,y′ + Ct,j}, y = Other\nwhere Y is the type set of the event ontology. Y ′ is the seen type set. y is the annotated type. y ′\nis the type which ranks the highest among all event types for event mention t, while t belongs to Other.\nBy minimizing Ld1, we can learn the optimized model which can compose structure representations and map both event mention and types into a shared semantic space, where the positive type ranks the highest for each mention."
+  }, {
+    "heading": "5.2 Argument Classification for Seen Types",
+    "text": "For each mention, we map each candidate argument to a specific role based on the semantic similarity of the argument path. Take E1 as an example. China is matched to Agent based on the semantic similarity between dispatch-01→ :ARG0→ China and Transport-Person→Agent.\nGiven a trigger t and a candidate argument a, we first extract a path Sa = (u1, u2, ..., up), which connects t and a and consists of p tuples. Each predefined role r is also represented as a structure by incorporating the event type, Sr = 〈y, r〉. We apply the same framework to take the sequence of tuples contained in Sa and Sr into a weightsharing CNN to rank all possible roles for a.\nLd2(a, r) = maxj∈Ry,j 6=rmax{0,m− Ca,r + Ca,j} r 6= Othermax j∈R\nY ′ ,j 6=r′\nmax{0,m− Ca,r′ + Ca,j} r|y = Other\nwhere Ry and RY ′ are the set of argument roles which are predefined for trigger type y and all seen types Y ′ . r is the annotated role and r ′ is the argument role which ranks the highest for a when a or y is annotated as Other.\nIn our experiments, we sample various size of “negative” training data for trigger and argument labeling respectively. In the following section, we describe how the negative training instances are generated."
+  }, {
+    "heading": "5.3 Zero-Shot Classification for Unseen Types",
+    "text": "During test, given a new event mention t ′ , we compute its mention structure representation for St′ and all event type structure representations for SY = {Sy1 , Sy2 , ..., Syn} using the same parameters trained from seen types. Then we rank all event types based on their similarity scores with mention t ′ . The top ranked prediction for t ′ from the event type set, denoted as ŷ(t ′ , 1), is given by:\nŷ(t ′ , 1) = argmax\ny∈Y cos([Vt′ ;VSt′ ], [Vy;VSy ])\nMoreover, ŷ(t ′ , k) denotes the kth most probable event type predicted for t ′ . We will investigate the event extraction performance based on the topk predicted event types.\nAfter determining the type y ′ for mention t ′ , for each candidate argument, we adopt the same ranking function to find the most appropriate role from the role set defined for y ′ ."
+  }, {
+    "heading": "6 Experiments",
+    "text": ""
+  }, {
+    "heading": "6.1 Hyper-Parameters",
+    "text": "We used the English Wikipedia dump to learn trigger sense and argument embeddings based on\nthe Continuous Skip-gram model (Mikolov et al., 2013). Table 2 shows the hyper-parameters we used to train models."
+  }, {
+    "heading": "6.2 ACE Event Classification",
+    "text": "We first used the ACE event schema 4 as our target event ontology and assumed the boundaries of triggers and arguments as given. Of the 33 ACE event types, we selected the top-N most popular event types from ACE05 data as “seen” types, and used 90% event annotations of these for training and 10% for development. We set N as 1, 3, 5, 10 respectively. We tested the zero-shot classification performance on the annotations for the remaining 23 unseen types. Table 3 shows the types that we selected for training in each experiment setting.\nThe negative event mentions and arguments that belong to Other were sampled from the output of the system developed by Huang et al. (2016) based on ACE05 training sentences, which groups all candidate triggers and arguments into clusters based on semantic representations and assigns a type/role name to each cluster. We sampled the negative event mentions from the clusters (e.g., Build, Threaten) which do not map to ACE event types. We sampled the negative arguments from the arguments of negative event mentions. Table 4 shows the statistics of the training, development and testing data sets.\nTo show the effectiveness of structural similarity in our approach, we designed a baseline, WSD-\n4ACE event schema specification is at: https://www.ldc.upenn.edu/sites/www.ldc.upenn.edu/files/englishevents-guidelines-v5.4.3.pdf\nEmbedding, which directly maps event mentions and arguments to their candidate types and roles using our pre-trained word sense embeddings. Table 5 makes the contrast clear: structural similarity (our approach) is much more effective than lexical similarity (baseline) for both trigger and argument classification. Also, as the number of seen types in training increases, the performance of the transfer model improves.\nWe further evaluated the performance of our transfer approach on similar and distinct unseen types. The 33 subtypes defined in ACE fall within 8 coarse-grained main types, such as Life and Justice. Each subtype belongs to one main type. Subtypes that belong to the same main type tend to have similar structures. For example, TrialHearing and Charge-Indict have the same set of argument roles. For training our transfer model, we selected 4 subtypes of Justice: Arrest-Jail, Convict, Charge-Indict, Execute. For testing, we selected 3 other subtypes of Justice: Sentence, Appeal, Release-Parole. Additionally, we selected one subtype from each of the other seven main types for comparison. Table 6 shows that, when testing on a new unseen type, the more similar it is to the seen types, the better performance is achieved."
+  }, {
+    "heading": "6.3 ACE Event Identification & Classification",
+    "text": "The ACE2005 corpus includes the richest event annotations currently available for 33 types. However, in real-world scenarios, there may be thousands of event types of interest. To enrich the target event ontology and assess our transferable neural architecture on a large number of unseen types, when trained on limited annotations of seen types, we manually constructed a new event ontology which combined 33 ACE event types and argument roles, and 1,161 frames from FrameNet, except for the most generic frames such as Entity and Locale. Some ACE event types were easily aligned to frames, e.g., Die aligned to Death. Some frames were instead more accurately treated as inheritors of ACE types, such as Suicide-Attack, which inherits from Attack. We manually mapped the selected frames to ACE types.\nWe then compared our approach with the following state-of-the-art supervised methods:\n• LSTM: A long short-term memory neural network (Hochreiter and Schmidhuber, 1997) based on distributed semantic features, similar\nto (Feng et al., 2016).\n• Joint: A structured perceptron model based on symbolic semantic features (Li et al., 2013).\nFor our approach, we followed the experiment setting D in the previous section, using the same training and development data sets for the 10 seen types, but targeted all 1,194 event types in our new event ontology, instead of just the 33 ACE event types. For evaluation, we sampled 150 sentences from the remaining ACE05 data, including 129 annotated event mentions for the 23 unseen types. For both LSTM and Joint approaches, we used the entire ACE05 annotated data for 33 ACE event types for training except for the held-out 150 evaluation sentences.\nWe first identified the candidate triggers and arguments, then mapped each of these to the target event ontology. We evaluated our model on their extracting of event mentions which were classified into 23 testing ACE types. Table 7 shows the per-\nformance. To further demonstrate the effectiveness of zero-shot learning in our framework and its impact in saving human annotation effort, we used the supervised LSTM approach for comparison. The training data of LSTM contained 3,464 sentences with 905 annotated event mentions for the 23 unseen event types. We divided these event annotations into 10 subsets and successively added one subset at a time (10% of annotations) into the training data of LSTM. Figure 4 shows the LSTM learning curve. By contrast, without any annotated mentions on the 23 unseen test event types in its training set, our transfer learning approach achieved performance comparable to that of the LSTM, which was trained on 3,000 sentences5 with 500 annotated event mentions.\n5The 3,000 sentences included all the sentences which even have not any event annotations."
+  }, {
+    "heading": "6.4 Impact of AMR",
+    "text": "Recall that we used AMR parsing output to identify triggers and arguments in constructing event structures. To assess the impact of the AMR parser (Wang et al., 2015a) on event extraction, we chose a subset of the ERE (Entity, Relation, Event) corpus (Song et al., 2015) which has ground-truth AMR annotations. This subset contains 304 documents with 1,022 annotated event mentions of 40 types. We selected the top-6 most popular event types (Arrest-Jail, Execute, Die, Meet, Sentence, Charge-Indict) with manual annotations of 548 event mentions as seen types. We sampled 500 negative event mentions from distinct types of clusters generated from the system (Huang et al., 2016) based on ERE training sentences. We combined the annotated events for seen types and the negative event mentions, and used 90% for training and 10% for development. For evaluation, we selected 200 sentences from the remaining ERE subset, which contains 128 Attack event mentions and 40 Convict event mentions. Table 8 shows the event extraction performances based on groundtruth AMR and system AMR respectively.\nWe also compared AMR analyses with Semantic Role Labeling (SRL) output (Palmer et al., 2010) by keeping only the core roles (e.g., :ARG0, :ARG1) from AMR annotations. As Table 8 shows, comparing the full AMR (top row) to this SRL proxy (middle row), the fine-grained AMR semantic relations such as :location, :instrument appear to be more informative for inferring event argument role labeling."
+  }, {
+    "heading": "7 Related Work",
+    "text": "Most previous event extraction methods have been based on supervised learning, using either symbolic features (Ji and Grishman, 2008; Miwa et al., 2009; Liao and Grishman, 2010; Liu et al., 2010; Hong et al., 2011; McClosky et al., 2011; Riedel and McCallum, 2011; Li et al., 2013; Liu et al., 2016) or distributional features (Chen et al., 2015; Nguyen and Grishman, 2015; Feng et al., 2016; Nguyen et al., 2016) derived from a large amount of training data, and treating event types and argument role labels as symbols. These approaches can achieve high quality for known event types, but cannot be applied to new types without additional annotation effort. In contrast, we provide a new angle on event extraction, modeling it as a generic grounding task by taking advantage of rich semantics of event types.\nSome other IE paradigms such as Open IE (Etzioni et al., 2005; Banko et al., 2007, 2008; Etzioni et al., 2011; Ritter et al., 2012), Preemptive IE (Shinyama and Sekine, 2006), Ondemand IE (Sekine, 2006), Liberal IE (Huang et al., 2016, 2017), and semantic frame-based event discovery (Kim et al., 2013) can discover many events without pre-defined event schema. These paradigms however rely on information redundancy, and so they are not effective when the input data only consists of a few sentences. Our work can discover events from any size of input corpus and can also be complementary with these paradigms.\nOur event extraction paradigm is similar to the task of entity linking (Ji and Grishman, 2011) in semantic mapping. However, entity linking aims to map entity mentions to the same concept, while our framework maps each event mention to a specific category. In addition, Bronstein et al. (2015) and Peng et al. (2016) employ an eventindependent similarity-based function for event trigger detection, which follows few-shot learning setting and requires some trigger examples as seeds. Lu and Roth (2012) design a structure pref-\nerence modeling framework, which can automatically predict argument roles without any annotated data, but it relies on manually constructed patterns.\nZero-Shot learning has been widely applied in visual object classification (Frome et al., 2013; Norouzi et al., 2013; Socher et al., 2013a; Chen et al., 2017; Li et al., 2017; Xian et al., 2017; Changpinyo et al., 2017), fine-grained name tagging (Ma et al., 2016; Qu et al., 2016), relation extraction (Verga et al., 2016; Levy et al., 2017), semantic parsing (Bapna et al., 2017) and domain adaptation (Romera-Paredes and Torr, 2015; Kodirov et al., 2015; Peng et al., 2017). In contrast to these tasks, for our case, the number of seen types in event extraction with manual annotations is quite limited. The most popular event schemas, such as ACE, define 33 event types while most visual object training sets contain more than 1,000 types. Therefore, methods proposed for zero-shot visual-object classification cannot be directly applied to event extraction due to overfitting. In this work, we designed a new loss function by creating “negative” training instances to avoid overfitting."
+  }, {
+    "heading": "8 Conclusions and Future Work",
+    "text": "In this work, we take a fresh look at the event extraction task and model it as a generic grounding problem. We propose a transferable neural architecture, which leverages existing humanconstructed event schemas and manual annotations for a small set of seen types, and transfers the knowledge from the existing types to the extraction of unseen types, to improve the scalability of event extraction as well as to save human effort. To the best of our knowledge, this work is the first time that zero-shot learning has been applied to event extraction. Without any annotation, our approach can achieve performance comparable to state-of-the-art supervised models trained on a large amount of labeled data. In the future, we will extend this framework to other Information Extraction problems."
+  }, {
+    "heading": "Acknowledgments",
+    "text": "This material is based upon work supported by United States Air Force under Contract No. FA8650-17-C-7715 and ARL NS-CTA No. W911NF-09-2-0053. Any opinions, findings and conclusions or recommendations expressed in this material are those of the author(s) and do not necessarily reflect the views of the United States Air\nForce. or the United States Government. The United States Government is authorized to reproduce and distribute reprints for Government purposes notwithstanding any copyright notation here on."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "The berkeley framenet project",
+    "authors": ["Collin F Baker", "Charles J Fillmore", "John B Lowe."],
+    "venue": "Proc. COLING1998.",
+    "year": 1998
+  }, {
+    "title": "Abstract meaning representation for sembanking",
+    "authors": ["L. Banarescu", "C. Bonial", "S. Cai", "M. Georgescu", "K. Griffitt", "U. Hermjakob", "K. Knight", "P. Koehn", "M. Palmer", "N. Schneider."],
+    "venue": "Proc. ACL2013 Workshop on Linguistic Annotation and",
+    "year": 2013
+  }, {
+    "title": "Open information extraction for the web",
+    "authors": ["M. Banko", "M. Cafarella", "S. Soderland", "M. Broadhead", "O. Etzioni."],
+    "venue": "Proc. IJCAI2007.",
+    "year": 2007
+  }, {
+    "title": "The tradeoffs between open and traditional relation extraction",
+    "authors": ["M. Banko", "O. Etzioni", "T. Center."],
+    "venue": "Proc. ACL-HLT2008.",
+    "year": 2008
+  }, {
+    "title": "Towards zero-shot frame semantic parsing for domain scaling",
+    "authors": ["Ankur Bapna", "Gokhan Tur", "Dilek Hakkani-Tur", "Larry Heck."],
+    "venue": "arXiv preprint arXiv:1707.02363 .",
+    "year": 2017
+  }, {
+    "title": "Seed-based event trigger labeling: How far can event descriptions get us? In Proc",
+    "authors": ["Ofer Bronstein", "Ido Dagan", "Qi Li", "Heng Ji", "Anette Frank."],
+    "venue": "ACL2015.",
+    "year": 2015
+  }, {
+    "title": "Predicting visual exemplars of unseen classes for zero-shot learning",
+    "authors": ["Soravit Changpinyo", "Wei-Lun Chao", "Fei Sha."],
+    "venue": "Proc. ICCV2017.",
+    "year": 2017
+  }, {
+    "title": "Zero-shot visual recognition using semantics-preserving adversarial embedding network",
+    "authors": ["Long Chen", "Hanwang Zhang", "Jun Xiao", "Wei Liu", "Shih-Fu Chang."],
+    "venue": "arXiv preprint arXiv:1712.01928 .",
+    "year": 2017
+  }, {
+    "title": "Event extraction via dynamic multi-pooling convolutional neural networks",
+    "authors": ["Y. Chen", "L. Xu", "K. Liu", "D. Zeng", "J. Zhao."],
+    "venue": "Proc. ACL2015.",
+    "year": 2015
+  }, {
+    "title": "Unsupervised named-entity extraction from the web: An experimental study",
+    "authors": ["O. Etzioni", "M. Cafarella", "D. Downey", "A. Popescu", "T. Shaked", "S. Soderland", "D. Weld", "A. Yates."],
+    "venue": "Artificial Intelligence .",
+    "year": 2005
+  }, {
+    "title": "Open information extraction: The second generation",
+    "authors": ["O. Etzioni", "A. Fader", "J. Christensen", "S. Soderland", "M. Mausam."],
+    "venue": "Proc. IJCAI2011.",
+    "year": 2011
+  }, {
+    "title": "A language-independent neural network for event detection",
+    "authors": ["X. Feng", "L. Huang", "D. Tang", "B. Qin", "H. Ji", "T. Liu."],
+    "venue": "Proc. ACL2016.",
+    "year": 2016
+  }, {
+    "title": "Devise: A deep visualsemantic embedding model",
+    "authors": ["A. Frome", "G. Corrado", "J. Shlens", "S. Bengio", "J. Dean", "T. Mikolov."],
+    "venue": "Proc. NIPS2013.",
+    "year": 2013
+  }, {
+    "title": "Long shortterm memory",
+    "authors": ["S. Hochreiter", "J. Schmidhuber."],
+    "venue": "Neural computation .",
+    "year": 1997
+  }, {
+    "title": "Using cross-entity inference to improve event extraction",
+    "authors": ["Y. Hong", "J. Zhang", "B. Ma", "J. Yao", "G. Zhou", "Q. Zhu."],
+    "venue": "Proc. ACL2011.",
+    "year": 2011
+  }, {
+    "title": "Liberal event extraction and event schema induction",
+    "authors": ["L. Huang", "T. Cassidy", "X. Feng", "H. Ji", "C. Voss", "J. Han", "A. Sil."],
+    "venue": "Proc. ACL2016.",
+    "year": 2016
+  }, {
+    "title": "Liberal entity extraction: Rapid construction of fine-grained entity typing systems",
+    "authors": ["L. Huang", "J. May", "X. Pan", "H. Ji", "X. Ren", "J. Han", "L. Zhao", "J. Hendler."],
+    "venue": "Big Data .",
+    "year": 2017
+  }, {
+    "title": "Refining event extraction through cross-document inference",
+    "authors": ["H. Ji", "R. Grishman."],
+    "venue": "Proc. ACL2008.",
+    "year": 2008
+  }, {
+    "title": "Knowledge base population: Successful approaches and challenges",
+    "authors": ["Heng Ji", "Ralph Grishman."],
+    "venue": "Proc. ACL-HLT2011.",
+    "year": 2011
+  }, {
+    "title": "Semantic frame-based document representation for comparable corpora",
+    "authors": ["H. Kim", "X. Ren", "Y. Sun", "C. Wang", "J. Han."],
+    "venue": "Proc. ICDM2013.",
+    "year": 2013
+  }, {
+    "title": "Unsupervised domain adaptation for zero-shot learning",
+    "authors": ["Elyor Kodirov", "Tao Xiang", "Zhenyong Fu", "Shaogang Gong."],
+    "venue": "Proc. ICCV2015.",
+    "year": 2015
+  }, {
+    "title": "Zero-shot relation extraction via reading comprehension",
+    "authors": ["Omer Levy", "Minjoon Seo", "Eunsol Choi", "Luke Zettlemoyer."],
+    "venue": "arXiv preprint arXiv:1706.04115 .",
+    "year": 2017
+  }, {
+    "title": "Joint event extraction via structured prediction with global features",
+    "authors": ["Q. Li", "H. Ji", "L. Huang."],
+    "venue": "Proc. ACL2013.",
+    "year": 2013
+  }, {
+    "title": "Zero-shot recognition using dual visual-semantic mapping paths",
+    "authors": ["Yanan Li", "Donghui Wang", "Huanhang Hu", "Yuetan Lin", "Yueting Zhuang."],
+    "venue": "arXiv preprint arXiv:1703.05002 .",
+    "year": 2017
+  }, {
+    "title": "Using document level cross-event inference to improve event extraction",
+    "authors": ["S. Liao", "R. Grishman."],
+    "venue": "Proc. ACL2010.",
+    "year": 2010
+  }, {
+    "title": "Dependency-driven feature-based learning for extracting protein-protein interactions from biomedical text",
+    "authors": ["B. Liu", "L. Qian", "H. Wang", "G. Zhou."],
+    "venue": "Proc. COLING2010.",
+    "year": 2010
+  }, {
+    "title": "Leveraging framenet to improve automatic event detection",
+    "authors": ["S. Liu", "Y. Chen", "S. He", "K. Liu", "J. Zhao."],
+    "venue": "Proc. ACL2016.",
+    "year": 2016
+  }, {
+    "title": "Automatic event extraction with structured preference modeling",
+    "authors": ["Wei Lu", "Dan Roth."],
+    "venue": "Proc. ACL2012.",
+    "year": 2012
+  }, {
+    "title": "Label embedding for zero-shot fine-grained named entity typing",
+    "authors": ["Y. Ma", "E. Cambria", "S. Gao."],
+    "venue": "Proc. COLING2016.",
+    "year": 2016
+  }, {
+    "title": "Event extraction as dependency parsing",
+    "authors": ["D. McClosky", "M. Surdeanu", "C.D. Manning."],
+    "venue": "Proc. ACL2011.",
+    "year": 2011
+  }, {
+    "title": "Efficient estimation of word representations in vector space",
+    "authors": ["T. Mikolov", "K. Chen", "G. Corrado", "J. Dean."],
+    "venue": "CoRR abs/1301.3781.",
+    "year": 2013
+  }, {
+    "title": "A rich feature vector for protein-protein interaction extraction from multiple corpora",
+    "authors": ["M. Miwa", "R. Stre", "Y. Miyao", "J. Tsujii."],
+    "venue": "Proc. EMNLP2009.",
+    "year": 2009
+  }, {
+    "title": "Joint event extraction via recurrent neural networks",
+    "authors": ["T. Nguyen", "K. Cho", "R. Grishman."],
+    "venue": "Proc. NAACL-HLT2016.",
+    "year": 2016
+  }, {
+    "title": "Event detection and domain adaptation with convolutional neural networks",
+    "authors": ["T. Nguyen", "R. Grishman."],
+    "venue": "Proc. ACL2015.",
+    "year": 2015
+  }, {
+    "title": "Zero-shot learning by convex combination of semantic embeddings",
+    "authors": ["M. Norouzi", "T. Mikolov", "S. Bengio", "Y. Singer", "J. Shlens", "A. Frome", "G. Corrado", "J. Dean."],
+    "venue": "arXiv preprint arXiv:1312.5650 .",
+    "year": 2013
+  }, {
+    "title": "Semantic role labeling",
+    "authors": ["M. Palmer", "D. Gildea", "N. Xue."],
+    "venue": "Synthesis Lectures on Human Language Technologies .",
+    "year": 2010
+  }, {
+    "title": "Event detection and co-reference with minimal supervision",
+    "authors": ["Haoruo Peng", "Yangqiu Song", "Dan Roth."],
+    "venue": "Proc. EMNLP2016.",
+    "year": 2016
+  }, {
+    "title": "Zero-shot deep domain adaptation",
+    "authors": ["Kuan-Chuan Peng", "Ziyan Wu", "Jan Ernst."],
+    "venue": "arXiv preprint arXiv:1707.01922 .",
+    "year": 2017
+  }, {
+    "title": "The syntax of event structure",
+    "authors": ["J. Pustejovsky."],
+    "venue": "Cognition .",
+    "year": 1991
+  }, {
+    "title": "Named entity recognition for novel types by transfer learning",
+    "authors": ["L. Qu", "G. Ferraro", "L. Zhou", "W. Hou", "T. Baldwin."],
+    "venue": "Proc. ACL2016.",
+    "year": 2016
+  }, {
+    "title": "Fast and robust joint models for biomedical event extraction",
+    "authors": ["S. Riedel", "A. McCallum."],
+    "venue": "Proc. EMNLP2011.",
+    "year": 2011
+  }, {
+    "title": "Open domain event extraction from twitter",
+    "authors": ["A. Ritter", "O. Etzioni", "S. Clark."],
+    "venue": "Proc. SIGKDD2012.",
+    "year": 2012
+  }, {
+    "title": "An embarrassingly simple approach to zero-shot learning",
+    "authors": ["Bernardino Romera-Paredes", "Philip Torr."],
+    "venue": "Proc. ICML2015.",
+    "year": 2015
+  }, {
+    "title": "On-demand information extraction",
+    "authors": ["S. Sekine."],
+    "venue": "Proc. COLING-ACL2006.",
+    "year": 2006
+  }, {
+    "title": "Preemptive information extraction using unrestricted relation discovery",
+    "authors": ["Y. Shinyama", "S. Sekine."],
+    "venue": "Proc. HLT-NAACL2006.",
+    "year": 2006
+  }, {
+    "title": "Zero-shot learning through cross-modal transfer",
+    "authors": ["R. Socher", "M. Ganjoo", "C. Manning", "A. Ng."],
+    "venue": "Proc. NIPS2013.",
+    "year": 2013
+  }, {
+    "title": "Recursive deep models for semantic compositionality over a sentiment treebank",
+    "authors": ["R. Socher", "A. Perelygin", "J. Wu", "J. Chuang", "C. Manning", "A. Ng", "C. Potts."],
+    "venue": "Proc. EMNLP2013.",
+    "year": 2013
+  }, {
+    "title": "From light to rich ere: Annotation of entities, relations, and events",
+    "authors": ["Zhiyi Song", "Ann Bies", "Stephanie Strassel", "Tom Riese", "Justin Mott", "Joe Ellis", "Jonathan Wright", "Seth Kulick", "Neville Ryant", "Xiaoyi Ma."],
+    "venue": "Proc. NAACL-HLT2015 Workshop on on",
+    "year": 2015
+  }, {
+    "title": "Multilingual relation extrac",
+    "authors": ["P. Verga", "D. Belanger", "E. Strubell", "B. Roth", "A. McCallum"],
+    "year": 2016
+  }, {
+    "title": "Boosting transition-based amr parsing with refined actions and auxiliary analyzers",
+    "authors": ["C. Wang", "N. Xue", "S. Pradhan."],
+    "venue": "Proc. ACL2015.",
+    "year": 2015
+  }, {
+    "title": "A transition-based algorithm for amr parsing",
+    "authors": ["Chuan Wang", "Nianwen Xue", "Sameer Pradhan", "Sameer Pradhan."],
+    "venue": "HLT-NAACL.",
+    "year": 2015
+  }, {
+    "title": "Zero-shot learning-the good, the bad and the ugly",
+    "authors": ["Yongqin Xian", "Bernt Schiele", "Zeynep Akata."],
+    "venue": "arXiv preprint arXiv:1703.04394 .",
+    "year": 2017
+  }, {
+    "title": "It makes sense: A widecoverage word sense disambiguation system for free text",
+    "authors": ["Z. Zhong", "H.T. Ng."],
+    "venue": "Proc. ACL2010.",
+    "year": 2010
+  }],
+  "id": "SP:e7e9889a1e4bbe0354a74d3766f5778ab665041b",
+  "authors": [{
+    "name": "Lifu Huang",
+    "affiliations": []
+  }, {
+    "name": "Heng Ji",
+    "affiliations": []
+  }, {
+    "name": "Kyunghyun Cho",
+    "affiliations": []
+  }, {
+    "name": "Ido Dagan",
+    "affiliations": []
+  }, {
+    "name": "Sebastian Riedel",
+    "affiliations": []
+  }, {
+    "name": "Clare R. Voss",
+    "affiliations": []
+  }],
+  "abstractText": "Most previous supervised event extraction methods have relied on features derived from manual annotations, and thus cannot be applied to new event types without extra annotation effort. We take a fresh look at event extraction and model it as a generic grounding problem: mapping each event mention to a specific type in a target event ontology. We design a transferable architecture of structural and compositional neural networks to jointly represent and map event mentions and types into a shared semantic space. Based on this new framework, we can select, for each event mention, the event type which is semantically closest in this space as its type. By leveraging manual annotations available for a small set of existing event types, our framework can be applied to new unseen event types without additional manual annotations. When tested on 23 unseen event types, this zeroshot framework, without manual annotations, achieves performance comparable to a supervised model trained from 3,000 sentences annotated with 500 event mentions.1",
+  "title": "Zero-Shot Transfer Learning for Event Extraction"
+}

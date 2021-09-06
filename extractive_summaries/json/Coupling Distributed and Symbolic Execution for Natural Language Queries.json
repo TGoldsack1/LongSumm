@@ -1,0 +1,81 @@
+{
+  "sections": [{
+    "heading": "1 INTRODUCTION",
+    "text": "Using natural language to query a knowledge base has wide applications in question answering (Yin et al., 2016a), human-computer conversation (Wen et al., 2016), etc. Fig. 1a illustrates an example. Such task is also known as semantic parsing. An emerging research topic in semantic parsing is to query a knowledge base by neural networks. Because queries can be composited in a highly complicated manner, neural enquirers necessitate multiple steps of execution. The difficulty then lies in the lack of step-by-step supervision. In other words, we only assume groundtruth denotations are available in realistic settings; that we do not know execution sequences or intermediate results.\nYin et al. (2016b) propose a fully distributed neural enquirer, comprising several neuralized execution layers of field attention, row annotation, etc. The model is differentiable and end-to-end learnable, but it lacks explicit interpretation and is not efficient in execution. Neelakantan et al. (2016) propose a neural programmer by defining a set of symbolic operators (e.g., argmax); at each step, all possible execution results are fused by softmax. The step-by-step fusion is accomplished by weighted sum and the model is trained with mean square error. Such approaches work with numeric tables, but not with other operations like string matching; it also suffers from the problem of “exponential numbers of combinatorial states.” Liang et al. (2016) train a symbolic executor by REINFORCE, but it is known that REINFORCE is sensitive to the initial policy. It could be very difficult to get started with a random initial policy; thus it only works with simple cases.\nIn this paper, we propose to couple distributed and symbolic execution for natural language queries. Our intuition rises from the observation that a fully distributed/neuralized executor also exhibits some (imperfect) symbolic interpretation. For example, the field attention gadget in Yin et al. (2016b) generally aligns with column selection. We therefore use the distributed model’s intermediate execution results as supervision signals to pretrain a symbolic executor. Guided by such imperfect step-by-step supervision, the symbolic executor learns a fairly meaningful initial policy, which largely alleviates the cold start problem of the REINFORCE algorithm. Moreover, the improved policy can be fed back to the distributed enquirer to improve the neural network’s performance.\nTo the best of our knowledge, we are the first to couple distributed and symbolic execution for semantic parsing. Our work is related to (but different from) several other studies of incorporating neural networks with external mechanisms Ling et al. (2015); Hu et al. (2016); Lei et al. (2016); Mi et al. (2016), where additional knowledge is used to improve neural networks’ performance. Our\n1The full version of this paper is available at https://arxiv.org/pdf/1612.02741.pdf\nmain idea works in an opposite way: we first utilize the differentiability of neural networks to learn meaningful (although imperfect) intermediate execution steps, and then guide an external symbolic system, which is more natural to the semantic parsing task. Our study also sheds light on neural sequence prediction in general."
+  }, {
+    "heading": "2 APPROACH",
+    "text": "• Distributed Enquirer. The distributed enquirer makes full use of neural networks for table querying, where all semantic units (words, tables entries, etc.) are represented as real-valued vectors and processed by neural networks. It consists of the following main components.\n- Query encoder. A bi-directional recurrent neural net (RNN) goes through word embeddings in a sentence. Bi-RNNs’ last states in both directions are concatenated as the query representation q. - Table encoder. For a cell c with its column name being f , the cell vector c is the concatenation of the embeddings of c and f , further processed by a multi-layer perceptron (MLP). - Executor. The distributed neural enquirer comprises several layers of execution. In each execution step, the neural network annotates each row with a vector, i.e., an embedding (Fig. 1d). The row vector can be intuitively thought of as row selection in query execution, but is represented by distributed semantics here. In the final execution layer, a softmax classifier is applied to the entire table to select a cell as the answer. We further describe the executor as follows.\nLet r(t−1)i be the previous step’s row annotation results, where the subscript i indexes a particular row. We summarize global execution information (denoted as g(t−1)) by max-pooling the row annotation r(t−1), i.e., g(t−1) = MaxPooli{r(t−1)i }.\nIn the current execution step, we first compute a distribution p(t)f over all fields as “soft” field selction. The computation is based on the query q, the previous global information g(t−1), and the field name embeddings f , i.e.,\np (t) fj = softmax ( exp{MLP([q;fj ; g(t−1)])} ) (1)\nWe represent the selected cell in each row as the sum of all cells in that row, weighted by soft field selection, i.e., c(t)select[i] = ∑ j p (t) fj cij . The current row annotation is computed by another MLP,\ngiven by r(t)i = MLP ([ q, g(t−1), r(t−1), c (t) select[i] ]) . As said, the last execution layer applies a softmax classifier over all cells to select an answer. The probability of choosing the i-th row, j-th column is pij = softmax ( exp{MLP(q, g(t−1), r(t−1)i , cij)} ) .\n• Symbolic Executor. The methodology of designing a symbolic executor is to define a set of primitive operators for the task, and then to use a machine learning model to predict the operator sequence and its arguments.\n- Primitive Operators. We design six operators for symbolic execution. The result of one-step execution is a boolean scalar, indicating whether a row is selected after a step of execution. The symbolic execution takes previous results as input, with a column/field being the argument. Blue boxes in Fig. 1c illustrate the process and Fig. 1e summarizes our primitive operator set.\n- Operator/Argument Predictors. We also leverage RNNs to predict the operator and its argument (a column). The predicted probability of an operator i is p(t)opi = softmax{w (out) opi >h (t−1) op }; the\noperator with the largest predicted probability is selected for execution. Likewise, another RNN predicts the field selection, i.e.,\nh (t−1) field = sigmoid(W (rec) field h (t−1) field ), p (t) fj = softmax { f>j h (t−1) field } (2)\n• A Unified View. We observe that the field attention in Eqn. 1 generally aligns with column selection in Eqn. 2. We therefore pretrain the column selector in the symbolic enquirer with labels predicted by a fully neuralized enquirer. Such pretraining can obtain up to 70% accurate field selection and largely reduce the search space during reinforcement learning. After obtaining a meaningful, albeit imperfect, initial policy, we apply REINFORCE (Sutton & Barto, 1998) to improve the policy.\nAfter policy improvement by REINFORCE, we could further feed back the symbolic executor’s intermediate results to the distributed one, akin to step-by-step supervised training. The loss is a combination of denotation cross entropy loss and field attention cross entropy loss."
+  }, {
+    "heading": "3 EXPERIMENTS",
+    "text": "Dataset. We evaluated our approach on a QA dataset in Yin et al. (2016b). The dataset comprises 25k different tables and queries. The validation and test sets contain 10k samples, respectively, and do not overlap with the training data. Each table is of size 10×10; the queries can be divided into four types: SelectWhere, Superlative, WhereSuperlative, and NestQuery, requiring 2–4 execution steps (EOE excluded).\nResults. As we see in Fig. 2a, both distributed and symbolic enquirers outperform the traditional SEMPRE system; the coupled approach also significantly outperforms either of them. If trained solely by reinforcement learning, the symbolic executor can recover the execution sequences for simple questions (50%). However, for more complicated queries, it only learns last one or two steps of execution and has trouble in recovering early steps. This results in low execution accuracy but near 50% denotation accuracy. In our scenario, we still have half chance to obtain an accurate denotation even if the nested (early) execution is wrong—the ultimate result is either in the candidate list or not, given a wrong where-clause execution.\nFigs. 2b and 2c show that our coupling approach largely accelerates the symbolic executor’s learning process, whereas Fig. 2d presents the time consumption of execution of the test test. When we feed back the symbolic executor’s knowledge to the distributed one, we also obtain a higher performance than end-to-end learning by neural networks (Fig. 2e), showing further evidence that the neural and symbolic worlds can be coupled well.\nIn summary, our approach makes use of both the distributed and symbolic worlds, and achieves high learning efficiency, high execution efficiency, high interpretability, as well as high performance."
+  }],
+  "year": 2017,
+  "references": [{
+    "title": "Harnessing deep neural networks with logic rules",
+    "authors": ["Zhiting Hu", "Xuezhe Ma", "Zhengzhong Liu", "Eduard Hovy", "Eric Xing"],
+    "venue": "In ACL,",
+    "year": 2016
+  }, {
+    "title": "Rationalizing neural predictions",
+    "authors": ["Tao Lei", "Regina Barzilay", "Tommi Jaakkola"],
+    "venue": "In EMNLP,",
+    "year": 2016
+  }, {
+    "title": "Neural symbolic machines: Learning semantic parsers on freebase with weak supervision",
+    "authors": ["Chen Liang", "Jonathan Berant", "Quoc Le", "Kenneth D Forbus", "Ni Lao"],
+    "venue": "arXiv preprint arXiv:1611.00020,",
+    "year": 2016
+  }, {
+    "title": "Character-based neural machine translation",
+    "authors": ["Wang Ling", "Isabel Trancoso", "Chris Dyer", "Alan W Black"],
+    "venue": "arXiv preprint arXiv:1511.04586,",
+    "year": 2015
+  }, {
+    "title": "Coverage embedding models for neural machine translation",
+    "authors": ["Haitao Mi", "Baskaran Sankaran", "Zhiguo Wang", "Abe Ittycheriah"],
+    "venue": "In EMNLP,",
+    "year": 2016
+  }, {
+    "title": "Neural programmer: Inducing latent programs with gradient descent",
+    "authors": ["Arvind Neelakantan", "Quoc V Le", "Ilya Sutskever"],
+    "venue": "In ICLR,",
+    "year": 2016
+  }, {
+    "title": "Reinforcement Learning: An Introduction, volume 1",
+    "authors": ["Richard S Sutton", "Andrew G Barto"],
+    "year": 1998
+  }, {
+    "title": "A network-based end-to-end trainable task-oriented dialogue system",
+    "authors": ["Tsung-Hsien Wen", "Milica Gasic", "Nikola Mrksic", "Lina M Rojas-Barahona", "Pei-Hao Su", "Stefan Ultes", "David Vandyke", "Steve Young"],
+    "venue": "arXiv preprint arXiv:1604.04562,",
+    "year": 2016
+  }, {
+    "title": "Neural generative question answering",
+    "authors": ["Jun Yin", "Xin Jiang", "Zhengdong Lu", "Lifeng Shang", "Hang Li", "Xiaoming Li"],
+    "venue": "In IJCAI,",
+    "year": 2016
+  }, {
+    "title": "Neural enquirer: Learning to query tables with natural language",
+    "authors": ["Pengcheng Yin", "Zhengdong Lu", "Hang Li", "Ben Kao"],
+    "venue": "In IJCAI,",
+    "year": 2016
+  }],
+  "id": "SP:6963247a086c7563e9d2ad1019c592df2190edd9",
+  "authors": [{
+    "name": "LANGUAGE QUERIES",
+    "affiliations": []
+  }, {
+    "name": "Lili Mou",
+    "affiliations": []
+  }, {
+    "name": "Zhengdong Lu",
+    "affiliations": []
+  }, {
+    "name": "Hang Li",
+    "affiliations": []
+  }, {
+    "name": "Zhi Jin",
+    "affiliations": []
+  }],
+  "abstractText": "In this paper, we propose to combine neural execution and symbolic execution to query a table with natural languages. Our approach makes use the differentiability of neural networks and transfers (imperfect) knowledge to the symbolic executor before reinforcement learning. Experiments show our approach achieves high learning efficiency, high execution efficiency, high interpretability, as well as high performance.1"
+}

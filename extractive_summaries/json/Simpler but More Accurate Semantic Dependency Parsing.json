@@ -1,0 +1,201 @@
+{
+  "sections": [{
+    "text": "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Short Papers), pages 484–490 Melbourne, Australia, July 15 - 20, 2018. c©2018 Association for Computational Linguistics\n484"
+  }, {
+    "heading": "1 Introduction",
+    "text": "Syntactic dependency parsing is arguably the most popular method for automatically extracting the low-level relationships between words in a sentence for use in natural language understanding tasks. However, typical syntactic dependency frameworks are limited in the number and types of relationships that can be captured. For example, in the sentence Mary wants to buy a book, the word Mary is the subject of both want and buy—either or both relationships could be useful in a downstream task, but a tree-structured representation of this sentence (as in Figure 1a) can only represent one of them.1\nThe 2014 SemEval shared task on BroadCoverage Semantic Dependency Parsing (Oepen et al., 2014) introduced three new dependency representations that do away with the assumption of\n1Though efforts have been made to address this limitation; seeDe Marneffe et al. (2006); Nivre et al. (2016); Schuster and Manning (2016); Candito et al. (2017) for examples.\nstrict tree structure in favor of a richer graphstructured representation, allowing them to capture more linguistic information about a sentence. This opens up the possibility of providing more useful information to downstream tasks (Reddy et al., 2017; Schuster et al., 2017), but increases the difficulty of automatically extracting that information, since most previous work on parsing has focused on generating trees.\nDozat and Manning (2017) developed a successful syntactic dependency parsing system with few task-specific sources of complexity. In this paper, we extend that system so that it can train on and produce the graph-structured data of semantic dependency schemes. We also consider straightforward extensions of the system that are likely to increase performance over the straightforward baseline, including giving the system access to lemma embeddings and building in a characterlevel word embedding model. Finally, we briefly examine some of the design choices of that architecture, in order to assess which components are necessary for achieving the highest accuracy and which have little impact on final performance."
+  }, {
+    "heading": "2 Background",
+    "text": ""
+  }, {
+    "heading": "2.1 Semantic dependencies",
+    "text": "The 2014 SemEval (Oepen et al., 2014, 2015) shared task introduced three new semantic dependency formalisms, applied to the Penn Treebank (shown in Figure 1, compared to Universal Dependencies (Nivre et al., 2016)): DELPH-IN MRS, or DM (Flickinger et al., 2012; Oepen and Lønning, 2006); Predicate-Argument Structures, or PAS (Miyao and Tsujii, 2004); and Prague Semantic Dependencies, or PSD (Hajic et al., 2012). Whereas syntactic dependencies generally annotate functional relationships between words—such as subject and object—semantic dependencies aim\nto reflect semantic relationships—such as agent and patient (cf. semantic role labeling (Gildea and Jurafsky, 2002)). The SemEval semantic dependency schemes are also directed acyclic graphs (DAGs) rather than trees, allowing them to annotate function words as being heads without lengthening paths between content words (as in 1b)."
+  }, {
+    "heading": "2.2 Related work",
+    "text": "Our approach to semantic dependency parsing is primarily inspired by the success of Dozat and Manning (2017) and Dozat et al. (2017) at syntactic dependency parsing and Peng et al. (2017) at semantic dependency parsing. In Dozat and Manning (2017) and Peng et al. (2017), parsing involves first using a multilayer bidirectional LSTM over word and part-of-speech tag embeddings. Parsing is then done using directly-optimized selfattention over recurrent states to attend to each word’s head (or heads), and labeling is done with an analgous multi-class classifier.\nPeng et al.’s (2017) system uses a max-margin classifer on top of a BiLSTM, with the score for each graph coming from several sources. First, it scores each word as either taking dependents or not. For each ordered pair of words, it scores the arc from the first word to the second. Lastly, it scores each possible labeled arc between the two words. The graph that maximizes these scores may not be consistent, with an edge coming from a non-predicate, for example, so they enforce hard constraints in order to prune away invalid semantic graphs. Decisions are not independent, so in order to find the highest-scoring graph that follows these constraints, they use the AD3 decoding algorithm (Martins et al., 2011).\nDozat and Manning’s (2017) approach to syntactic dependency parsing is similar, but avoids the possibility of generating invalid trees by fully factorizing the system. Rather than summing the scores from multiple modules and then finding the valid structure that maximizes that sum, the sys-\ntem makes parsing and labeling decisions sequentially, choosing the labels for each edge only after the edges in the tree have been finalized by an MST algorithm.\nWang et al. (2018) take a different approach in their recent work, using a transition-based parser built on stack-LSTMs (Dyer et al., 2015). They extend Choi and McCallum’s (2013) transition system for producing non-projective trees so that it can produce arbitrary DAGs and they modify the stack-LSTM architecture slightly to make the network more powerful."
+  }, {
+    "heading": "3 Approach",
+    "text": ""
+  }, {
+    "heading": "3.1 Basic approach",
+    "text": "We can formulate the semantic dependency parsing task as labeling each edge in a directed graph, with null being the label given to pairs with no edge between them. Using only one module that labels each edge in this way would be an unfactorized approach. We can, however, factorize it into two modules: one that predicts whether or not a directed edge (wj , wi) exists between two words, and another that predicts the best label for each potential edge.\nOur approach closely follows that of Dozat and Manning (2017). As with many successful recent parsers, we concatenate word and POS tag2 embeddings, and feed them into a multilayer bidirectional LSTM to get contextualized word representations.3\nxi = e (word) i ⊕ e (tag) i (1) R = BiLSTM(X) (2)\n2We use the POS tags (and later, lemmas) provided with each dataset.\n3We follow the convention of representing scalars in lowercase italics a, vectors in lowercase bold a, matrices in uppercase italics A, and tensors in uppercase bold A. We maintain this convention when indexing and stacking, so ai is row i of matrix A and A contains the sequence of vectors (a1, . . . ,an).\nFor each of the two modules, we use single-layer feedforward networks (FNN) to split the top recurrent states into two parts—a head representation, as in Eq. (5, 6) and a dependent representation, as in Eq. (7, 8). This allows us to reduce the recurrent size to avoid overfitting in the classifer without weakening the LSTM’s capacity. We can then use bilinear or biaffine classifiers in Eq. (3, 4)—which are generalizations of linear classifiers to include multiplicative interactions between two vectors—to predict edges and labels.4\nBilin(x1,x2) = x>1 Ux2 (3) Biaff(x1,x2) = x>1 Ux2 +W (x1 ⊕ x2) + b (4)\nh (edge-head) i = FNN (edge-head)(ri) (5) h (label-head) i = FNN (label-head)(ri) (6)\nh (edge-dep) i = FNN (edge-dep)(ri) (7) h (label-dep) i = FNN (label-dep)(ri) (8)\ns (edge) i,j = Biaff (edge) ( h (edge-dep) i ,h (edge-head) j ) (9)\ns (label) i,j = Biaff (label) ( h (label-dep) i ,h (label-head) j ) (10)\ny ′(edge) i,j = {si,j ≥ 0} (11) y ′(label) i,j = argmax si,j (12)\nThe tensor U can optionally be diagonal (such that ui,k,j = 0 wherever i 6= j) to conserve parameters. The unlabeled parser scores every edge between pairs of words in the sentence—these scores can be decoded into a graph by keeping only edges that received a positive score. The labeler scores every label for each pair of words, so we simply assign each predicted edge its highest-scoring label and discard the rest. We can train the system by summing the losses from the two modules, backpropagating error to the labeler only through edges with a non-null gold label. This system is shown graphically in Figure 2. We find that sometimes the loss for one module overwhelms the loss for the other, causing the system to underfit. Thus we add a tunable interpolation constant λ ∈ (0, 1) to even out the two losses.\n` = λ`(label) + (1− λ)`(edge) (13)\nWorth noting is that the removal of the maximum spanning tree algorithm and change from softmax cross-entropy to sigmoid cross-entropy in\n4For the labeled parser, U will be (d×c×d)-dimensional, where c is the number of labels. For the unlabeled parser, U will be (d× 1× d)-dimensional, so that si,j will be a single score.\nthe unlabeled parser represent the only changes needed to allow the original syntactic parser to generate fully graph-structured semantic dependency output. Note also that this system is general enough that it could be used for any graphstructured dependency scheme, including the enhanced dependencies of the Universal Dependencies formalism (which allows cyclic graphs)."
+  }, {
+    "heading": "3.2 Augmentations",
+    "text": "Ballesteros et al. (2016), Dozat et al. (2017), and Ma et al. (2018) find that character-level word embedding models improve performance for syntactic dependency parsing, so we also want to explore the impact it has on semantic dependency parsing. Dozat et al. (2017) confirm that their syntactic parser performs better with POS tags, which leads us to examine whether word lemmas—another form of low-level lexical information—might also improve dependency parsing performance."
+  }, {
+    "heading": "4 Results",
+    "text": ""
+  }, {
+    "heading": "4.1 Hyperparameters",
+    "text": "We tuned the hyperparameters for our basic system (with no character embeddings or lemmas) fairly extensively on the DM development data. The hyperparameter configuration for our final system is given in Table 2. All input embeddings (word, pretrained, POS, etc.) were concatenated. We used 100-dimensional pretrained GloVe embeddings (Pennington et al., 2014), but linearly transformed them to be 125-dimensional. Only words or lemmas that occurred 7 times or more were included in the word and lemma embedding matrix—including less frequent words appeared to facilitate overfitting. Character-level word embeddings were generated using a one-layer unidirectional LSTM that convolved over three character embeddings at a time, whose end state was linearly transformed to be 100-dimensional. The core BiL-\nSTM was three layers deep. The different types of word embeddings—word, GloVe, and characterlevel—were dropped simultaneously, but independently from POS and lemma embeddings (which were dropped independently from each other). Dropped embeddings were replaced with learned <DROP> tokens. LSTMs used same-mask recurrent dropout (Gal and Ghahramani, 2016). The systems were trained with batch sizes of 3000 tokens for up to 75,000 training steps, terminating early after 10,000 steps pass with no improve-\nment in validation accuracy. The L2 regularization penalty was so small that it likely had little impact."
+  }, {
+    "heading": "4.2 Performance",
+    "text": "We use biaffine classifiers, with no nonlinearities, and a diagonal tensor in the label classifier but not the edge classifier. The system trains at a speed of about 300 sequences/second on an nVidia Titan X and parses about 1,000 sequences/second. Du et al. (2015) and Almeida and Martins (2015) are the systems that won the 2015 shared task (closed track). PTS17: Basic represents the single-task versions of Peng et al. (2017), which they make multitask across the three datasets in Freda3 by adding frustratingly easy domain adaptation (Daumé III, 2007; Kim et al., 2016) and a third-order decoding mechanism. WCGL18 is Wang et al.’s (2018) transition-based system. Table 1 compares our performance with these systems. Our fully factorized basic system already substantially outperforms Peng et al.’s single-task baseline and also beats out their much more complex multi-task approach. Simply adding in either a character-level word embedding model (similar to Dozat et al.’s (2017)) or a lemma embedding matrix likewise improves performance quite a bit, and including both together generally pushes performance even higher. Many infrequent words were excluded from the frequent token embedding matrix, so it makes sense that the system should improve when provided more lexical information that’s harder to overfit on.\nSurprisingly, the PAS dataset seems not to benefit substantially from lemma or character embeddings. It has been noted that PAS is the easiest of the three datasets to achieve good performance for;\nso one possible explanation is that 94% LF1 may simply be near the ceiling of what can be achieved for the dataset. Alternatively, the main difference bewteen PAS as DM/PSD is that PAS includes semantically vacuous function words in its representation. Because function words are extremely frequent, it’s possible that they are being disproportionately represented in the loss or LF1 score. Using a hinge loss (like Peng et al. (2017)) instead of a cross-entropy loss might help, since the system would stop focusing on potentially “easy” functional predicates once it learned to predict their argument structures confidently, allowing it to put more resources into modeling more challenging phenomena."
+  }, {
+    "heading": "4.3 Variations",
+    "text": "We also consider the impact that slight variations on basic architecture have on final performance in Figure 3. We train twenty models on the DM treebank for each variation we consider, reducing the number of training steps but keeping all other hyperparameters constant. Rank-sum tests (Lehmann et al., 1975) reveal that the basic system outperforms variants with no hidden layers in the edge classifier (W=339; p<.001) or the label classifier (W=307; p<.01). Using a diagonal tensor U in the unlabeled parser also significantly hurts performance (W=388; p<.001), likely being too underpowered. While the other variations (especially the unfactorized and ReLU systems) appeared to make a difference during hyperparameter tuning, they were not significant here.\nThe improved performance of deeper systems\n(replicating Dozat and Manning (2017)) likely justifies the added complexity. On the other hand, the choice between biaffine and bilinear classifiers comes down largely to aesthetics. This is perhaps unsurprising since the change from biaffine to bilinear represents only a small decrease in overall power. Unusually, using no nonlinearity in the hidden layers in Eqs. (7–6) works as well as ReLU—in fact, using ReLU in the unlabeled parser marginally reduced performance (W=269; p=.063). Overall, the parser displayed considerable invariance to architecture changes. Since our system is significantly larger and more heavily regularized than the systems we compare against, this suggests that unglamorous, lowlevel hyperparameters—such as hidden sizes and dropout rates—are more critical to system performance than high-level architecture enhancements."
+  }, {
+    "heading": "5 Discussion",
+    "text": "We minimally extended a simple syntactic dependency parser to produce graph-structured dependencies. Without any further augmentations, our carefully-tuned system achieves state-of-theart performance, highlighting the importance of finding the best hyperparameter configuration (and by extention, building fast systems that can be trained quickly). Additionally, we can see that a multitask system relying on a complex decoding algorithm to prune away invalid graph structures isn’t necessary for achieving the level of parsing performance a simple system can achieve (though it could push performance even higher). We also find easier or independently motivated ways to improve accuracy—taking advantage of provided lemma or subtoken information provides a boost comparable to one found by drastically increasing system complexity.\nFurther, we observe a high-performing graphbased parser can be adapted to different types of dependency graphs (projective tree, nonprojective tree, directed graph) with only small changes without obviously hurting accuracy. By contrast, transition-based parsers—which were originally designed for parsing projective constituency trees (Nivre, 2003; Aho and Ullman, 1972)—require whole new transition sets or even data structures to generate arbitrary graphs. We feel that this points to graph-based parsers being the most natural way to produce dependency graphs with different structural restrictions."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "The theory of parsing, translation, and compiling, volume 1",
+    "authors": ["Alfred V Aho", "Jeffrey D Ullman."],
+    "venue": "Prentice Hall.",
+    "year": 1972
+  }, {
+    "title": "Lisbon: Evaluating turbosemanticparser on multiple languages and out-of-domain data",
+    "authors": ["Mariana SC Almeida", "André FT Martins."],
+    "venue": "Proceedings of the 9th International Workshop on Semantic Evaluation (SemEval 2015). pages 970–973.",
+    "year": 2015
+  }, {
+    "title": "Training with exploration improves a greedy stack-LSTM parser",
+    "authors": ["Miguel Ballesteros", "Yoav Goldberg", "Chris Dyer", "Noah A Smith."],
+    "venue": "Proceedings of the conference on empirical methods in natural language processing .",
+    "year": 2016
+  }, {
+    "title": "Enhanced ud dependencies with neutralized diathesis alternation",
+    "authors": ["Marie Candito", "Bruno Guillaume", "Guy Perrier", "Djamé Seddah."],
+    "venue": "Depling 2017-Fourth International Conference on Dependency Linguistics.",
+    "year": 2017
+  }, {
+    "title": "Transition-based dependency parsing with selectional branching",
+    "authors": ["Jinho D Choi", "Andrew McCallum."],
+    "venue": "Proceedings of the 51st Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers).",
+    "year": 2013
+  }, {
+    "title": "Frustratingly easy domain adaptation",
+    "authors": ["Hal Daumé III."],
+    "venue": "ACL 2007 page 256.",
+    "year": 2007
+  }, {
+    "title": "Generating typed dependency parses from phrase structure parses",
+    "authors": ["Marie-Catherine De Marneffe", "Bill MacCartney", "Christopher D Manning"],
+    "venue": "In Proceedings of LREC",
+    "year": 2006
+  }, {
+    "title": "Deep biaffine attention for neural dependency parsing",
+    "authors": ["Timothy Dozat", "Christopher D. Manning."],
+    "venue": "ICLR 2017 .",
+    "year": 2017
+  }, {
+    "title": "Stanford’s graph-based neural dependency parser at the conll 2017 shared task",
+    "authors": ["Timothy Dozat", "Peng Qi", "Christopher D Manning."],
+    "venue": "CoNLL pages 20–30.",
+    "year": 2017
+  }, {
+    "title": "Peking: Building semantic dependency graphs with a hybrid parser",
+    "authors": ["Yantao Du", "Fan Zhang", "Xun Zhang", "Weiwei Sun", "Xiaojun Wan."],
+    "venue": "Proceedings of the 9th International Workshop on Semantic Evaluation (SemEval 2015). pages 927–931.",
+    "year": 2015
+  }, {
+    "title": "Transitionbased dependency parsing with stack long shortterm memory",
+    "authors": ["Chris Dyer", "Miguel Ballesteros", "Wang Ling", "Austin Matthews", "Noah A Smith."],
+    "venue": "Proceedings of the conference on empirical methods in natural language processing .",
+    "year": 2015
+  }, {
+    "title": "Deepbank",
+    "authors": ["Dan Flickinger", "Yi Zhang", "Valia Kordoni."],
+    "venue": "a dynamically annotated treebank of the wall street journal. In Proceedings of the 11th International Workshop on Treebanks and Linguistic Theories. pages 85–96.",
+    "year": 2012
+  }, {
+    "title": "Dropout as a bayesian approximation: Representing model uncertainty in deep learning",
+    "authors": ["Yarin Gal", "Zoubin Ghahramani."],
+    "venue": "International Conference on Machine Learning .",
+    "year": 2016
+  }, {
+    "title": "Automatic labeling of semantic roles",
+    "authors": ["Daniel Gildea", "Daniel Jurafsky."],
+    "venue": "Computational linguistics 28(3):245–288.",
+    "year": 2002
+  }, {
+    "title": "Announcing prague czech-english dependency treebank 2.0",
+    "authors": ["Jan Hajic", "Eva Hajicová", "Jarmila Panevová", "Petr Sgall", "Ondrej Bojar", "Silvie Cinková", "Eva Fucı́ková", "Marie Mikulová", "Petr Pajas", "Jan Popelka"],
+    "venue": "In LREC",
+    "year": 2012
+  }, {
+    "title": "Frustratingly easy neural domain adaptation",
+    "authors": ["Young-Bum Kim", "Karl Stratos", "Ruhi Sarikaya."],
+    "venue": "Proceedings of COLING 2016, the 26th International Conference on Computational Linguistics: Technical Papers. pages 387–396.",
+    "year": 2016
+  }, {
+    "title": "Stackpointer networks for dependency parsing",
+    "authors": ["Xuezhe Ma", "Zecong Hu", "Jingzhou Liu", "Nanyun Peng", "Graham Neubig", "Eduard Hovy."],
+    "venue": "ACL .",
+    "year": 2018
+  }, {
+    "title": "Dual decomposition with many overlapping components",
+    "authors": ["André FT Martins", "Noah A Smith", "Pedro MQ Aguiar", "Mário AT Figueiredo."],
+    "venue": "Proceedings of the Conference on Empirical Methods in Natural Language Processing. Association for",
+    "year": 2011
+  }, {
+    "title": "Deep linguistic analysis for the accurate identification of predicate-argument relations",
+    "authors": ["Yusuke Miyao", "Jun’ichi Tsujii"],
+    "venue": "In Proceedings of the 20th international conference on Computational Linguistics",
+    "year": 2004
+  }, {
+    "title": "An efficient algorithm for projective dependency parsing",
+    "authors": ["Joakim Nivre."],
+    "venue": "Proceedings of the 8th International Workshop on Parsing Technologies (IWPT . Citeseer.",
+    "year": 2003
+  }, {
+    "title": "Universal dependencies v1: A multilingual treebank collection",
+    "authors": ["Joakim Nivre", "Marie-Catherine de Marneffe", "Filip Ginter", "Yoav Goldberg", "Jan Hajic", "Christopher D Manning", "Ryan McDonald", "Slav Petrov", "Sampo Pyysalo", "Natalia Silveira"],
+    "year": 2016
+  }, {
+    "title": "Semeval 2015 task 18: Broad-coverage semantic dependency parsing",
+    "authors": ["Stephan Oepen", "Marco Kuhlmann", "Yusuke Miyao", "Daniel Zeman", "Silvie Cinková", "Dan Flickinger", "Jan Hajic", "Zdenka Uresova."],
+    "venue": "Proceedings of the 9th International Work-",
+    "year": 2015
+  }, {
+    "title": "Semeval 2014 task 8: Broad-coverage semantic dependency parsing",
+    "authors": ["Stephan Oepen", "Marco Kuhlmann", "Yusuke Miyao", "Daniel Zeman", "Dan Flickinger", "Jan Hajic", "Angelina Ivanova", "Yi Zhang."],
+    "venue": "In",
+    "year": 2014
+  }, {
+    "title": "Discriminant-based mrs banking",
+    "authors": ["Stephan Oepen", "Jan Tore Lønning."],
+    "venue": "Proceedings of the 5th International Conference on Language Resources and Evaluation. pages 1250–1255.",
+    "year": 2006
+  }, {
+    "title": "Deep multitask learning for semantic dependency parsing",
+    "authors": ["Hao Peng", "Sam Thomson", "Noah A Smith."],
+    "venue": "ACL. volume 1, pages 2037–2048.",
+    "year": 2017
+  }, {
+    "title": "Glove: Global vectors for word representation",
+    "authors": ["Jeffrey Pennington", "Richard Socher", "Christopher D Manning."],
+    "venue": "Proceedings of the Empiricial Methods in Natural Language Processing (EMNLP 2014)",
+    "year": 2014
+  }, {
+    "title": "Universal semantic parsing",
+    "authors": ["Siva Reddy", "Oscar Täckström", "Slav Petrov", "Mark Steedman", "Mirella Lapata."],
+    "venue": "arXiv preprint arXiv:1702.03196 .",
+    "year": 2017
+  }, {
+    "title": "Enhanced English Universal Dependencies: An improved representation for natural language understanding tasks",
+    "authors": ["Sebastian Schuster", "Christopher D. Manning."],
+    "venue": "Proceedings of the Tenth International Conference on Language Resources and Eval-",
+    "year": 2016
+  }, {
+    "title": "2017. Paris and Stanford at EPE 2017: Downstream evaluation of graphbased dependency representations",
+    "authors": ["Sebastian Schuster", "Éric Villemonte de la Clergerie", "Marie Candito", "Benoı̂t Sagot", "Christopher D. Manning", "Djamé Seddah"],
+    "year": 2017
+  }, {
+    "title": "A neural transition-based approach for semantic dependency graph parsing",
+    "authors": ["Yuxuan Wang", "Wanxiang Che", "Jiang Guo", "Ting Liu."],
+    "venue": "AAAI .",
+    "year": 2018
+  }],
+  "id": "SP:5c48590463c3c1998c179f8177706366a9be7488",
+  "authors": [{
+    "name": "Timothy Dozat",
+    "affiliations": []
+  }, {
+    "name": "Christopher D. Manning",
+    "affiliations": []
+  }],
+  "abstractText": "While syntactic dependency annotations concentrate on the surface or functional structure of a sentence, semantic dependency annotations aim to capture betweenword relationships that are more closely related to the meaning of a sentence, using graph-structured representations. We extend the LSTM-based syntactic parser of Dozat and Manning (2017) to train on and generate these graph structures. The resulting system on its own achieves stateof-the-art performance, beating the previous, substantially more complex stateof-the-art system by 0.6% labeled F1. Adding linguistically richer input representations pushes the margin even higher, allowing us to beat it by 1.9% labeled F1.",
+  "title": "Simpler but More Accurate Semantic Dependency Parsing"
+}

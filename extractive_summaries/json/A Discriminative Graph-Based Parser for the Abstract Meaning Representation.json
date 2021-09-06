@@ -1,0 +1,275 @@
+{
+  "sections": [{
+    "text": "Proceedings of the 52nd Annual Meeting of the Association for Computational Linguistics, pages 1426–1436, Baltimore, Maryland, USA, June 23-25 2014. c©2014 Association for Computational Linguistics\nA Discriminative Graph-Based Parser for the Abstract Meaning Representation\nJeffrey Flanigan Sam Thomson Jaime Carbonell Chris Dyer Noah A. Smith Language Technologies Institute\nCarnegie Mellon University Pittsburgh, PA 15213, USA\n{jflanigan,sthomson,jgc,cdyer,nasmith}@cs.cmu.edu\nAbstract\nAbstract Meaning Representation (AMR) is a semantic formalism for which a growing set of annotated examples is available. We introduce the first approach to parse sentences into this representation, providing a strong baseline for future improvement. The method is based on a novel algorithm for finding a maximum spanning, connected subgraph, embedded within a Lagrangian relaxation of an optimization problem that imposes linguistically inspired constraints. Our approach is described in the general framework of structured prediction, allowing future incorporation of additional features and constraints, and may extend to other formalisms as well. Our open-source system, JAMR, is available at: http://github.com/jflanigan/jamr"
+  }, {
+    "heading": "1 Introduction",
+    "text": "Semantic parsing is the problem of mapping natural language strings into meaning representations. Abstract Meaning Representation (AMR) (Banarescu et al., 2013; Dorr et al., 1998) is a semantic formalism in which the meaning of a sentence is encoded as a rooted, directed, acyclic graph. Nodes represent concepts, and labeled directed edges represent the relationships between them–see Figure 1 for an example AMR graph. The formalism is based on propositional logic and neo-Davidsonian event representations (Parsons, 1990; Davidson, 1967). Although it does not encode quantifiers, tense, or modality, the set of semantic phenomena included in AMR were selected with natural language applications—in particular, machine translation—in mind.\nIn this paper we introduce JAMR, the first published system for automatic AMR parsing. The\nsystem is based on a statistical model whose parameters are trained discriminatively using annotated sentences in the AMR Bank corpus (Banarescu et al., 2013). We evaluate using the Smatch score (Cai and Knight, 2013), establishing a baseline for future work.\nThe core of JAMR is a two-part algorithm that first identifies concepts using a semi-Markov model and then identifies the relations that obtain between these by searching for the maximum spanning connected subgraph (MSCG) from an edge-labeled, directed graph representing all possible relations between the identified concepts. To solve the latter problem, we introduce an apparently novel O(|V |2 log |V |) algorithm that is similar to the maximum spanning tree (MST) algorithms that are widely used for dependency parsing (McDonald et al., 2005). Our MSCG algorithm returns the connected subgraph with maximal sum of its edge weights from among all connected subgraphs of the input graph. Since AMR imposes additional constraints to ensure semantic well-formedness, we use Lagrangian relaxation (Geoffrion, 1974; Fisher, 2004) to augment the MSCG algorithm, yielding a tractable iterative algorithm that finds the optimal solution subject to these constraints. In our experiments, we have found this algorithm to converge 100% of the time for the constraint set we use.\nThe approach can be understood as an alternative to parsing approaches using graph transducers such as (synchronous) hyperedge replacement grammars (Chiang et al., 2013; Jones et al., 2012; Drewes et al., 1997), in much the same way that spanning tree algorithms are an alternative to using shift-reduce and dynamic programming algorithms for dependency parsing.1 While a detailed\n1To date, a graph transducer-based semantic parser has not been published, although the Bolinas toolkit (http://www.isi.edu/publications/ licensed-sw/bolinas/) contains much of the necessary infrastructure.\n1426\ncomparison of these two approaches is beyond the scope of this paper, we emphasize that—as has been observed with dependency parsing—a diversity of approaches can shed light on complex problems such as semantic parsing."
+  }, {
+    "heading": "2 Notation and Overview",
+    "text": "Our approach to AMR parsing represents an AMR parse as a graph G = 〈V,E〉; vertices and edges are given labels from sets LV and LE , respectively. G is constructed in two stages. The first stage identifies the concepts evoked by words and phrases in an input sentence w = 〈w1, . . . , wn〉, each wi a member of vocabulary W . The second stage connects the concepts by adding LE-labeled edges capturing the relations between concepts, and selects a root in G corresponding to the focus of the sentence w.\nConcept identification (§3) involves segmenting w into contiguous spans and assigning to each span a graph fragment corresponding to a concept from a concept set denoted F (or to ∅ for words that evoke no concept). In §5 we describe how F is constructed. In our formulation, spans are contiguous subsequences of w. For example, the\nwords “New York City” can evoke the fragment represented by\n(c / city :name (n / name\n:op1 \"New\" :op2 \"York\" :op3 \"City\"))))\nWe use a sequence labeling algorithm to identify concepts.\nThe relation identification stage (§4) is similar to a graph-based dependency parser. Instead of finding the maximum-scoring tree over words, it finds the maximum-scoring connected subgraph that preserves concept fragments from the first stage, links each pair of vertices by at most one edge, and is deterministic2 with respect to a special set of edge labels L∗E ⊂ LE . The set L∗E consists of the labels ARG0–ARG5, and does not include labels such as MOD or MANNER, for example. Linguistically, the determinism constraint enforces that predicates have at most one semantic argument of each type; this is discussed in more detail in §4.\nTo train the parser, spans of words must be labeled with the concept fragments they evoke. Although AMR Bank does not label concepts with the words that evoke them, it is possible to build an automatic aligner (§5). The alignments are used to construct the concept lexicon and to train the concept identification and relation identification stages of the parser (§6). Each stage is a discriminatively-trained linear structured predictor with rich features that make use of part-ofspeech tagging, named entity tagging, and dependency parsing.\nIn §7, we evaluate the parser against goldstandard annotated sentences from the AMR Bank corpus (Banarescu et al., 2013) under the Smatch score (Cai and Knight, 2013), presenting the first published results on automatic AMR parsing."
+  }, {
+    "heading": "3 Concept Identification",
+    "text": "The concept identification stage maps spans of words in the input sentence w to concept graph fragments from F , or to the empty graph fragment ∅. These graph fragments often consist of just one labeled concept node, but in some cases they are larger graphs with multiple nodes and edges.3\n2By this we mean that, at each node, there is at most one outgoing edge with that label type.\n3About 20% of invoked concept fragments are multiconcept fragments.\nConcept identification is illustrated in Figure 2 using our running example, “The boy wants to visit New York City.”\nLet the concept lexicon be a mapping clex : W ∗ → 2F that provides candidate graph fragments for sequences of words. (The construction of F and clex is discussed below.) Formally, a concept labeling is (i) a segmentation of w into contiguous spans represented by boundaries b, giving spans 〈wb0:b1 ,wb1:b2 , . . .wbk−1:bk〉, with b0 = 0 and bk = n, and (ii) an assignment of each phrase wbi−1:bi to a concept graph fragment ci ∈ clex (wbi−1:bi) ∪ ∅.\nOur approach scores a sequence of spans b and a sequence of concept graph fragments c, both of arbitrary length k, using the following locally decomposed, linearly parameterized function:\nscore(b, c;θ) = ∑k\ni=1 θ >f(wbi−1:bi , bi−1, bi, ci)\n(1) where f is a feature vector representation of a span and one of its concept graph fragments in context. The features are:\n• Fragment given words: Relative frequency estimates of the probability of a concept graph fragment given the sequence of words in the span. This is calculated from the concept-word alignments in the training corpus (§5). • Length of the matching span (number of to-\nkens). • NER: 1 if the named entity tagger marked the\nspan as an entity, 0 otherwise. • Bias: 1 for any concept graph fragment from F\nand 0 for ∅. Our approach finds the highest-scoring b and c using a dynamic programming algorithm: the zeroth-order case of inference under a semiMarkov model (Janssen and Limnios, 1999). Let S(i) denote the score of the best labeling of the first i words of the sentence, w0:i; it can be calculated using the recurrence:\nS(0) = 0\nS(i) = max j:0≤j<i,\nc∈clex(wj:i)∪∅\n{ S(j) + θ>f(wj:i, j, i, c) }\nThe best score will be S(n), and the best scoring concept labeling can be recovered using backpointers, as in typical implementations of the Viterbi algorithm. Runtime is O(n2).\nclex is implemented as follows. When clex is called with a sequence of words, it looks up the sequence in a table that contains, for every word sequence that was labeled with a concept fragment in the training data, the set of concept fragments it was labeled with. clex also has a set of rules for generating concept fragments for named entities and time expressions. It generates a concept fragment for any entity recognized by the named entity tagger, as well as for any word sequence matching a regular expression for a time expression. clex returns the union of all these concept fragments."
+  }, {
+    "heading": "4 Relation Identification",
+    "text": "The relation identification stage adds edges among the concept subgraph fragments identified in the first stage (§3), creating a graph. We frame the task as a constrained combinatorial optimization problem.\nConsider the fully dense labeled multigraph D = 〈VD, ED〉 that includes the union of all labeled vertices and labeled edges in the concept graph fragments, as well as every possible labeled edge u `−→ v, for all u, v ∈ VD and every ` ∈ LE .4\nWe require a subgraph G = 〈VG, EG〉 that respects the following constraints:\n1. Preserving: all graph fragments (including labels) from the concept identification phase are subgraphs of G.\n2. Simple: for any two vertices u and v ∈ VG,EG includes at most one edge between u and v. This constraint forbids a small number of perfectly valid graphs, for example for sentences such as “John hurt himself”; however, we see that< 1% of training instances violate the constraint. We found in preliminary experiments that including the constraint increases overall performance.5\n3. Connected: G must be weakly connected (every vertex reachable from every other vertex, ignoring the direction of edges). This constraint follows from the formal definition of AMR and is never violated in the training data.\n4. Deterministic: For each node u ∈ VG, and for each label ` ∈ L∗E , there is at most one outgoing edge in EG from u with label `. As discussed in §2, this constraint is linguistically motivated. 4To handle numbered OP labels, we pre-process the training data to convert OPN to OP, and post-process the output by numbering the OP labels sequentially.\n5In future work it might be treated as a soft constraint, or the constraint might be refined to specific cases.\nOne constraint we do not include is acyclicity, which follows from the definition of AMR. In practice, graphs with cycles are rarely produced by JAMR. In fact, none of the graphs produced on the test set violate acyclicity.\nGiven the constraints, we seek the maximumscoring subgraph. We define the score to decompose by edges, and with a linear parameterization:\nscore(EG;ψ) = ∑ e∈EG ψ >g(e) (2)\nThe features are shown in Table 1. Our solution to maximizing the score in Eq. 2, subject to the constraints, makes use of (i) an algorithm that ignores constraint 4 but respects the others (§4.1); and (ii) a Lagrangian relaxation that iteratively adjusts the edge scores supplied to (i) so as to enforce constraint 4 (§4.2)."
+  }, {
+    "heading": "4.1 Maximum Preserving, Simple, Spanning, Connected Subgraph Algorithm",
+    "text": "The steps for constructing a maximum preserving, simple, spanning, connected (but not necessarily deterministic) subgraph are as follows. These steps ensure the resulting graph G satisfies the constraints: the initialization step ensures the preserving constraint is satisfied, the pre-processing step ensures the graph is simple, and the core algorithm ensures the graph is connected.\n1. (Initialization) Let E(0) be the union of the concept graph fragments’ weighted, labeled, directed edges. Let V denote its set of vertices. Note that 〈V,E(0)〉 is preserving (constraint 4), as is any graph that contains it. It is also simple (constraint 4), assuming each concept graph fragment is simple.\n2. (Pre-processing) We form the edge set E by including just one edge from ED between each pair of nodes:\n• For any edge e = u `−→ v in E(0), include e in E, omitting all other edges between u and v.\n• For any two nodes u and v, include only the highest scoring edge between u and v.\nNote that without the deterministic constraint, we have no constraints that depend on the label of an edge, nor its direction. So it is clear that the edges omitted in this step could not be part of the maximum-scoring solution, as they could be replaced by a higher scoring edge without violating any constraints.\nNote also that because we have kept exactly one edge between every pair of nodes, 〈V,E〉 is simple and connected.\n3. (Core algorithm) Run Algorithm 1, MSCG, on 〈V,E〉 and E(0). This algorithm is a (to our knowledge novel) modification of the minimum spanning tree algorithm of Kruskal (1956). Note that the directions of edges do not matter for MSCG.\nSteps 1–2 can be accomplished in one pass through the edges, with runtime O(|V |2). MSCG can be implemented efficiently in O(|V |2 log |V |) time, similarly to Kruskal’s algorithm, using a disjoint-set data structure to keep track of connected components.6 The total asymptotic runtime complexity is O(|V |2 log |V |).\nThe details of MSCG are given in Algorithm 1. In a nutshell, MSCG first adds all positive edges to the graph, and then connects the graph by greedily adding the least negative edge that connects two previously unconnected components. Theorem 1. MSCG finds a maximum spanning, connected subgraph of 〈V,E〉 Proof. We closely follow the original proof of correctness of Kruskal’s algorithm. We first show by induction that, at every iteration of MSCG, there exists some maximum spanning, connected subgraph that contains G(i) = 〈V,E(i)〉:\n6For dense graphs, Prim’s algorithm (Prim, 1957) is asymptotically faster (O(|V |2)). We conjecture that using Prim’s algorithm instead of Kruskall’s to connect the graph could improve the runtime of MSCG.\ninput : weighted, connected graph 〈V,E〉 and set of edges E(0) ⊆ E to be preserved output: maximum spanning, connected subgraph of 〈V,E〉 that preserves E(0) let E(1) = E(0) ∪ {e ∈ E | ψ>g(e) > 0}; create a priority queue Q containing {e ∈ E | ψ>g(e) ≤ 0} prioritized by scores; i = 1; while Q nonempty and 〈V,E(i)〉 is not yet spanning and connected do\ni = i+ 1; E(i) = E(i−1); e = arg maxe′∈Qψ>g(e′); remove e from Q; if e connects two previously unconnected components of 〈V,E(i)〉 then\nadd e to E(i)\nend end return G = 〈V,E(i)〉;\nAlgorithm 1: MSCG algorithm.\nBase case: ConsiderG(1), the subgraph containing E(0) and every positive edge. Take any maximum preserving spanning connected subgraph M of 〈V,E〉. We know that such an M exists because 〈V,E〉 itself is a preserving spanning connected subgraph. Adding a positive edge to M would strictly increase M ’s score without disconnecting M , which would contradict the fact that M is maximal. Thus M must contain G(1).\nInduction step: By the inductive hypothesis, there exists some maximum spanning connected\nsubgraph M = 〈V,EM 〉 that contains G(i). Let e be the next edge added to E(i) by MSCG. If e is in EM , then E(i+1) = E(i) ∪ {e} ⊆ EM , and the hypothesis still holds. Otherwise, since M is connected and does not contain e, EM ∪ {e} must have a cycle containing e. In addition, that cycle must have some edge e′ that is not in E(i). Otherwise, E(i) ∪ {e} would contain a cycle, and e would not connect two unconnected components of G(i), contradicting the fact that e was chosen by MSCG.\nSince e′ is in a cycle in EM ∪ {e}, removing it will not disconnect the subgraph, i.e. (EM∪{e})\\ {e′} is still connected and spanning. The score of e is greater than or equal to the score of e′, otherwise MSCG would have chosen e′ instead of e. Thus, 〈V, (EM ∪{e}) \\ {e′}〉 is a maximum spanning connected subgraph that containsE(i+1), and the hypothesis still holds.\nWhen the algorithm completes, G = 〈V,E(i)〉 is a spanning connected subgraph. The maximum spanning connected subgraph M that contains it cannot have a higher score, because G contains every positive edge. Hence G is maximal."
+  }, {
+    "heading": "4.2 Lagrangian Relaxation",
+    "text": "If the subgraph resulting from MSCG satisfies constraint 4 (deterministic) then we are done. Otherwise we resort to Lagrangian relaxation (LR). Here we describe the technique as it applies to our task, referring the interested reader to Rush and Collins (2012) for a more general introduction to Lagrangian relaxation in the context of structured prediction problems.\nIn our case, we begin by encoding a graph G = 〈VG, EG〉 as a binary vector. For each edge e in the fully dense multigraph D, we associate a bi-\nnary variable ze = 1{e ∈ EG}, where 1{P} is the indicator function, taking value 1 if the proposition P is true, 0 otherwise. The collection of ze form a vector z ∈ {0, 1}|ED|.\nDeterminism constraints can be encoded as a set of linear inequalities. For example, the constraint that vertex u has no more than one outgoing ARG0 can be encoded with the inequality:∑ v∈V 1{u ARG0−−−→ v ∈ EG} = ∑ v∈V z u ARG0−−−→v ≤ 1.\nAll of the determinism constraints can collectively be encoded as one system of inequalities:\nAz ≤ b, with each row Ai inA and its corresponding entry bi in b together encoding one constraint. For the previous example we have a row Ai that has 1s in the columns corresponding to edges outgoing from u with label ARG0 and 0’s elsewhere, and a corresponding element bi = 1 in b.\nThe score of graph G (encoded as z) can be written as the objective function φ>z, where φe = ψ>g(e). To handle the constraint Az ≤ b, we introduce multipliers µ ≥ 0 to get the Lagrangian relaxation of the objective function:\nLµ(z) = maxz (φ>z + µ>(b−Az)), z∗µ = arg maxz Lµ(z).\nAnd the dual objective:\nL(z) = min µ≥0 Lµ(z),\nz∗ = arg maxz L(z).\nConveniently, Lµ(z) decomposes over edges:\nLµ(z) = maxz (φ>z + µ>(b−Az)) = maxz (φ>z− µ>Az) = maxz ((φ−A>µ)>z).\nSo for any µ, we can find z∗µ by assigning edges the new Lagrangian adjusted weights φ − A>µ and reapplying the algorithm described in §4.1. We can find z∗ by projected subgradient descent, by starting with µ = 0, and taking steps in the direction:\n−∂Lµ ∂µ (z∗µ) = Az ∗ µ.\nIf any components of µ are negative after taking a step, they are set to zero.\nL(z) is an upper bound on the unrelaxed objective function φ>z, and is equal to it if and only if the constraints Az ≤ b are satisfied. If L(z∗) = φ>z∗, then z∗ is also the optimal solution to the constrained solution. Otherwise, there exists a duality gap, and Lagrangian relaxation has failed. In that case we still return the subgraph encoded by z∗, even though it might violate one or more constraints. Techniques from integer programming such as branch-and-bound or cutting-planes methods could be used to find an optimal solution when LR fails (Das et al., 2012), but we do not use these techniques here. In our experiments, with a stepsize of 1 and max number of steps as 500, Lagrangian relaxation succeeds 100% of the time in our data."
+  }, {
+    "heading": "4.3 Focus Identification",
+    "text": "In AMR, one node must be marked as the focus of the sentence. We notice this can be accomplished within the relation identification step: we add a special concept node root to the dense graph D, and add an edge from root to every other node, giving each of these edges the label FOCUS. We require that root have at most one outgoing FOCUS edge. Our system has two feature types for this edge: the concept it points to, and the shortest dependency path from a word in the span to the root of the dependency tree."
+  }, {
+    "heading": "5 Automatic Alignments",
+    "text": "In order to train the parser, we need alignments between sentences in the training data and their annotated AMR graphs. More specifically, we need to know which spans of words invoke which concept fragments in the graph. To do this, we built an automatic aligner and tested its performance on a small set of alignments we annotated by hand.\nThe automatic aligner uses a set of rules to greedily align concepts to spans. The list of rules is given in Table 2. The aligner proceeds down the list, first aligning named-entities exactly, then fuzzy matching named-entities, then date-entities, etc. For each rule, an entire pass through the AMR graph is done. The pass considers every concept in the graph and attempts to align a concept fragment rooted at that concept if the rule can apply. Some rules only apply to a particular type of concept fragment, while others can apply to any concept. For example, rule 1 can apply to any NAME concept and its OP children. It searches the sentence\nfor a sequence of words that exactly matches its OP children and aligns them to the NAME and OP children fragment.\nConcepts are considered for alignment in the order they are listed in the AMR annotation (left to right, top to bottom). Concepts that are not aligned in a particular pass may be aligned in subsequent passes. Concepts are aligned to the first matching span, and alignments are mutually exclusive. Once aligned, a concept in a fragment is never realigned.7 However, more concepts can be attached to the fragment by rules 8–14.\nWe use WordNet to generate candidate lemmas, and we also use a fuzzy match of a concept, defined to be a word in the sentence that has the longest string prefix match with that concept’s label, if the match length is ≥ 4. If the match length is < 4, then the concept has no fuzzy match. For example the fuzzy match for ACCUSE-01 could be “accusations” if it is the best match in the sentence. WordNet lemmas and fuzzy matches are only used if the rule explicitly uses them. All tokens and concepts are lowercased before matches or fuzzy matches are done.\nOn the 200 sentences of training data we aligned by hand, the aligner achieves 92% precision, 89% recall, and 90% F1 for the alignments."
+  }, {
+    "heading": "6 Training",
+    "text": "We now describe how to train the two stages of the parser. The training data for the concept identification stage consists of (X,Y ) pairs:\n• Input: X , a sentence annotated with named entities (person, organization, location, misciscellaneous) from the Illinois Named Entity Tagger (Ratinov and Roth, 2009), and part-ofspeech tags and basic dependencies from the Stanford Parser (Klein and Manning, 2003; de Marneffe et al., 2006). • Output: Y , the sentence labeled with concept\nsubgraph fragments.\nThe training data for the relation identification stage consists of (X,Y ) pairs:\n7As an example, if “North Korea” shows up twice in the AMR graph and twice in the input sentence, then the first “North Korea” concept fragment listed in the AMR gets aligned to the first “North Korea” mention in the sentence, and the second fragment to the second mention (because the first span is already aligned when the second “North Korea” concept fragment is considered, so it is aligned to the second matching span).\n• Input: X , the sentence labeled with graph fragments, as well as named enties, POS tags, and basic dependencies as in concept identification. • Output: Y , the sentence with a full AMR\nparse.8\nAlignments are used to induce the concept labeling for the sentences, so no annotation beyond the automatic alignments is necessary.\nWe train the parameters of the stages separately using AdaGrad (Duchi et al., 2011) with the perceptron loss function (Rosenblatt, 1957; Collins, 2002). We give equations for concept identification parameters θ and features f(X,Y ). For a sentence of length k, and spans b labeled with a sequence of concept fragments c, the features are:\nf(X,Y ) = ∑k\ni=1 f(wbi−1:bi , bi−1, bi, ci)\nTo train with AdaGrad, we process examples in the training data ((X1, Y 1), . . . , (XN , Y N )) one at a time. At time t, we decode (§3) to get Ŷ t and compute the subgradient:\nst = f(Xt, Ŷ t)− f(Xt, Y t)\nWe then update the parameters and go to the next example. Each component i of the parameter vector gets updated like so:\nθt+1i = θ t i − η√∑t t′=1 s t′ i sti\nη is the learning rate which we set to 1. For relation identification training, we replace θ and f(X,Y ) in the above equations with ψ and\ng(X,Y ) = ∑\ne∈EG g(e).\nWe ran AdaGrad for ten iterations for concept identification, and five iterations for relation identification. The number of iterations was chosen by early stopping on the development set."
+  }, {
+    "heading": "7 Experiments",
+    "text": "We evaluate our parser on the newswire section of LDC2013E117 (deft-amr-release-r3-proxy.txt). Statistics about this corpus and our train/dev./test splits are given in Table 3.\n8Because the alignments are automatic, some concepts may not be aligned, so we cannot compute their features. We remove the unaligned concepts and their edges from the full AMR graph for training. Thus some graphs used for training may in fact be disconnected.\nFor the performance of concept identification, we report precision, recall, and F1 of labeled spans using the induced labels on the training and test data as a gold standard (Table 4). Our concept identifier achieves 84% F1 on the test data. Precision is roughly the same between train and test, but recall is worse on test, implicating unseen concepts as a significant source of errors on test data.\nWe evaluate the performance of the full parser using Smatch v1.0 (Cai and Knight, 2013), which counts the precision, recall and F1 of the concepts and relations together. Using the full pipeline (concept identification and relation identification stages), our parser achieves 58% F1 on the test data (Table 5). Using gold concepts with the relation identification stage yields a much higher Smatch score of 80% F1. As a comparison, AMR Bank annotators have a consensus inter-annotator agreement Smatch score of 83% F1. The runtime of our system is given in Figure 3.\nThe large drop in performance of 22% F1 when moving from gold concepts to system concepts suggests that joint inference and training for the two stages might be helpful."
+  }, {
+    "heading": "8 Related Work",
+    "text": "Our approach to relation identification is inspired by graph-based techniques for non-projective syntactic dependency parsing. Minimum spanning tree algorithms—specifically, the optimum branching algorithm of Chu and Liu (1965) and Edmonds (1967)—were first used for dependency parsing by McDonald et al. (2005). Later ex-\ntensions allow for higher-order (non–edge-local) features, often making use of relaxations to solve the NP-hard optimization problem. Mcdonald and Pereira (2006) incorporated second-order features, but resorted to an approximate algorithm. Others have formulated the problem as an integer linear program (Riedel and Clarke, 2006; Martins et al., 2009). TurboParser (Martins et al., 2013) uses AD3 (Martins et al., 2011), a type of augmented Lagrangian relaxation, to integrate third-order features into a CLE backbone. Future work might extend JAMR to incorporate additional linguistically motivated constraints and higher-order features.\nThe task of concept identification is similar in form to the problem of Chinese word segmentation, for which semi-Markov models have successfully been used to incorporate features based on entire spans (Andrew, 2006).\nWhile all semantic parsers aim to transform natural language text to a formal representation of its meaning, there is wide variation in the meaning representations and parsing techniques used. Space does not permit a complete survey, but we note some connections on both fronts.\nInterlinguas (Carbonell et al., 1992) are an important precursor to AMR. Both formalisms are intended for use in machine translation, but AMR has an admitted bias toward the English language.\nFirst-order logic representations (and extensions using, e.g., the λ-calculus) allow variable quantification, and are therefore more powerful. In recent research, they are often associated with combinatory categorial grammar (Steedman, 1996). There has been much work on statistical models for CCG parsing (Zettlemoyer and Collins, 2005; Zettlemoyer and Collins, 2007; Kwiatkowski et al., 2010, inter alia), usually using\nchart-based dynamic programming for inference. Natural language interfaces for querying databases have served as another driving application (Zelle and Mooney, 1996; Kate et al., 2005; Liang et al., 2011, inter alia). The formalisms used here are richer in logical expressiveness than AMR, but typically use a smaller set of concept types—only those found in the database.\nIn contrast, semantic dependency parsing—in which the vertices in the graph correspond to the words in the sentence—is meant to make semantic parsing feasible for broader textual domains. Alshawi et al. (2011), for example, use shift-reduce parsing to map sentences to natural logical form.\nAMR parsing also shares much in common with tasks like semantic role labeling and framesemantic parsing (Gildea and Jurafsky, 2002; Punyakanok et al., 2008; Das et al., 2014, inter alia). In these tasks, predicates are often disambiguated to a canonical word sense, and roles are filled by spans (usually syntactic constituents). They consider each predicate separately, and produce a disconnected set of shallow predicate-argument structures. AMR, on the other hand, canonicalizes both predicates and arguments to a common concept label space. JAMR reasons about all concepts jointly to produce a unified representation of the meaning of an entire sentence."
+  }, {
+    "heading": "9 Conclusion",
+    "text": "We have presented the first published system for automatic AMR parsing, and shown that it provides a strong baseline based on the Smatch evaluation metric. We also present an algorithm for finding the maximum, spanning, connected subgraph and show how to incorporate extra constraints with Lagrangian relaxation. Our featurebased learning setup allows the system to be easily extended by incorporating new feature sources."
+  }, {
+    "heading": "Acknowledgments",
+    "text": "The authors gratefully acknowledge helpful correspondence from Kevin Knight, Ulf Hermjakob, and André Martins, and helpful feedback from Nathan Schneider, Brendan O’Connor, Waleed Ammar, and the anonymous reviewers. This work was sponsored by the U. S. Army Research Laboratory and the U. S. Army Research Office under contract/grant number W911NF-10-1-0533 and DARPA grant FA8750-12-2-0342 funded under the DEFT program."
+  }],
+  "year": 2014,
+  "references": [{
+    "title": "Deterministic statistical mapping of sentences to underspecified semantics",
+    "authors": ["Hiyan Alshawi", "Pi-Chuan Chang", "Michael Ringgaard."],
+    "venue": "Proc. of ICWS.",
+    "year": 2011
+  }, {
+    "title": "A hybrid markov/semi-markov conditional random field for sequence segmentation",
+    "authors": ["Galen Andrew."],
+    "venue": "Proc. of EMNLP.",
+    "year": 2006
+  }, {
+    "title": "Abstract meaning representation for sembanking",
+    "authors": ["Laura Banarescu", "Claire Bonial", "Shu Cai", "Madalina Georgescu", "Kira Griffitt", "Ulf Hermjakob", "Kevin Knight", "Philipp Koehn", "Martha Palmer", "Nathan Schneider."],
+    "venue": "Proc. of the Linguistic Annota-",
+    "year": 2013
+  }, {
+    "title": "Smatch: an evaluation metric for semantic feature structures",
+    "authors": ["Shu Cai", "Kevin Knight."],
+    "venue": "Proc. of ACL.",
+    "year": 2013
+  }, {
+    "title": "The KANT perspective: A critique of pure transfer (and pure interlingua, pure transfer",
+    "authors": ["Jaime G. Carbonell", "Teruko Mitamura", "Eric H. Nyberg."],
+    "venue": ". . ). In Proc. of the Fourth International Conference on Theoretical and Methodological Issues",
+    "year": 1992
+  }, {
+    "title": "Parsing graphs with hyperedge replacement grammars",
+    "authors": ["David Chiang", "Jacob Andreas", "Daniel Bauer", "Karl Moritz Hermann", "Bevan Jones", "Kevin Knight."],
+    "venue": "Proc. of ACL.",
+    "year": 2013
+  }, {
+    "title": "On the shortest arborescence of a directed graph",
+    "authors": ["Y.J. Chu", "T.H. Liu."],
+    "venue": "Science Sinica, 14:1396– 1400.",
+    "year": 1965
+  }, {
+    "title": "Discriminative training methods for hidden Markov models: Theory and experiments with perceptron algorithms",
+    "authors": ["Michael Collins."],
+    "venue": "Proc. of EMNLP.",
+    "year": 2002
+  }, {
+    "title": "An exact dual decomposition algorithm for shallow semantic parsing with constraints",
+    "authors": ["Dipanjan Das", "André F.T. Martins", "Noah A. Smith."],
+    "venue": "Proc. of the Joint Conference on Lexical and Computational Semantics.",
+    "year": 2012
+  }, {
+    "title": "Frame-semantic parsing",
+    "authors": ["Dipanjan Das", "Desai Chen", "André F.T. Martins", "Nathan Schneider", "Noah A. Smith."],
+    "venue": "Computational Linguistics, 40(1):9–56.",
+    "year": 2014
+  }, {
+    "title": "The logical form of action sentences",
+    "authors": ["Donald Davidson."],
+    "venue": "Nicholas Rescher, editor, The Logic of Decision and Action, pages 81–120. Univ. of Pittsburgh Press.",
+    "year": 1967
+  }, {
+    "title": "Generating typed dependency parses from phrase structure parses",
+    "authors": ["Marie-Catherine de Marneffe", "Bill MacCartney", "Christopher D. Manning."],
+    "venue": "Proc. of LREC.",
+    "year": 2006
+  }, {
+    "title": "A thematic hierarchy for efficient generation from lexical-conceptual structure",
+    "authors": ["Bonnie Dorr", "Nizar Habash", "David Traum."],
+    "venue": "David Farwell, Laurie Gerber, and Eduard Hovy, editors, Machine Translation and the Information Soup: Proc. of",
+    "year": 1998
+  }, {
+    "title": "Hyperedge replacement graph grammars",
+    "authors": ["Frank Drewes", "Hans-Jörg Kreowski", "Annegret Habel."],
+    "venue": "Handbook of Graph Grammars, pages 95– 162. World Scientific.",
+    "year": 1997
+  }, {
+    "title": "Adaptive subgradient methods for online learning and stochastic optimization",
+    "authors": ["John Duchi", "Elad Hazan", "Yoram Singer."],
+    "venue": "Journal of Machine Learning Research, 12:2121–2159, July.",
+    "year": 2011
+  }, {
+    "title": "Optimum branchings",
+    "authors": ["Jack Edmonds."],
+    "venue": "National Bureau of Standards.",
+    "year": 1967
+  }, {
+    "title": "The Lagrangian relaxation method for solving integer programming problems",
+    "authors": ["Marshall L. Fisher."],
+    "venue": "Management Science, 50(12):1861–1871.",
+    "year": 2004
+  }, {
+    "title": "Lagrangean relaxation for integer programming",
+    "authors": ["Arthur M Geoffrion."],
+    "venue": "Springer.",
+    "year": 1974
+  }, {
+    "title": "Automatic labeling of semantic roles",
+    "authors": ["Daniel Gildea", "Daniel Jurafsky."],
+    "venue": "Computational Linguistics, 28(3):245–288.",
+    "year": 2002
+  }, {
+    "title": "SemiMarkov Models and Applications",
+    "authors": ["Jacques Janssen", "Nikolaos Limnios."],
+    "venue": "Springer, October.",
+    "year": 1999
+  }, {
+    "title": "Semantics-based machine translation with hyperedge replacement grammars",
+    "authors": ["Bevan Jones", "Jacob Andreas", "Daniel Bauer", "Karl Moritz Hermann", "Kevin Knight."],
+    "venue": "Proc. of COLING.",
+    "year": 2012
+  }, {
+    "title": "Learning to transform natural to formal languages",
+    "authors": ["Rohit J. Kate", "Yuk Wah Wong", "Raymond J. Mooney."],
+    "venue": "Proc. of AAAI.",
+    "year": 2005
+  }, {
+    "title": "Accurate unlexicalized parsing",
+    "authors": ["Dan Klein", "Christopher D. Manning."],
+    "venue": "Proc. of ACL.",
+    "year": 2003
+  }, {
+    "title": "On the shortest spanning subtree of a graph and the traveling salesman problem",
+    "authors": ["Joseph B. Kruskal."],
+    "venue": "Proc. of the American Mathematical Society, 7(1):48.",
+    "year": 1956
+  }, {
+    "title": "Inducing probabilistic CCG grammars from logical form with higherorder unification",
+    "authors": ["Tom Kwiatkowski", "Luke Zettlemoyer", "Sharon Goldwater", "Mark Steedman."],
+    "venue": "Proc. of EMNLP.",
+    "year": 2010
+  }, {
+    "title": "Learning dependency-based compositional semantics",
+    "authors": ["Percy Liang", "Michael I. Jordan", "Dan Klein."],
+    "venue": "Proc. of ACL.",
+    "year": 2011
+  }, {
+    "title": "Concise integer linear programming formulations for dependency parsing",
+    "authors": ["André F.T. Martins", "Noah A. Smith", "Eric P. Xing."],
+    "venue": "Proc. of ACL.",
+    "year": 2009
+  }, {
+    "title": "Dual decomposition with many overlapping components",
+    "authors": ["André F.T. Martins", "Noah A. Smith", "Pedro M.Q. Aguiar", "Mário A.T. Figueiredo."],
+    "venue": "Proc. of EMNLP.",
+    "year": 2011
+  }, {
+    "title": "Turning on the turbo: Fast third-order non-projective Turbo parsers",
+    "authors": ["André F.T. Martins", "Miguel Almeida", "Noah A. Smith."],
+    "venue": "Proc. of ACL.",
+    "year": 2013
+  }, {
+    "title": "Online learning of approximate dependency parsing algorithms",
+    "authors": ["Ryan Mcdonald", "Fernando Pereira."],
+    "venue": "Proc. of EACL, page 81–88.",
+    "year": 2006
+  }, {
+    "title": "Non-projective dependency parsing using spanning tree algorithms",
+    "authors": ["Ryan McDonald", "Fernando Pereira", "Kiril Ribarov", "Jan Hajič."],
+    "venue": "Proc. of EMNLP.",
+    "year": 2005
+  }, {
+    "title": "Events in the Semantics of English: A study in subatomic semantics",
+    "authors": ["Terence Parsons."],
+    "venue": "MIT Press.",
+    "year": 1990
+  }, {
+    "title": "Shortest connection networks and some generalizations",
+    "authors": ["Robert C. Prim."],
+    "venue": "Bell System Technology Journal, 36:1389–1401.",
+    "year": 1957
+  }, {
+    "title": "The importance of syntactic parsing and inference in semantic role labeling",
+    "authors": ["Vasin Punyakanok", "Dan Roth", "Wen-tau Yih."],
+    "venue": "Computational Linguistics, 34(2):257–287.",
+    "year": 2008
+  }, {
+    "title": "Design challenges and misconceptions in named entity recognition",
+    "authors": ["Lev Ratinov", "Dan Roth."],
+    "venue": "Proc. of CoNLL.",
+    "year": 2009
+  }, {
+    "title": "Incremental integer linear programming for non-projective dependency parsing",
+    "authors": ["Sebastian Riedel", "James Clarke."],
+    "venue": "Proc. of EMNLP.",
+    "year": 2006
+  }, {
+    "title": "The perceptron–a perceiving and recognizing automaton",
+    "authors": ["Frank Rosenblatt."],
+    "venue": "Technical Report 85460-1, Cornell Aeronautical Laboratory.",
+    "year": 1957
+  }, {
+    "title": "A tutorial on dual decomposition and Lagrangian relaxation for inference in natural language processing",
+    "authors": ["Alexander M. Rush", "Michael Collins."],
+    "venue": "Journal of Artificial Intelligence Research, 45(1):305—-362.",
+    "year": 2012
+  }, {
+    "title": "Surface structure and interpretation",
+    "authors": ["Mark Steedman."],
+    "venue": "Linguistic inquiry monographs. MIT Press.",
+    "year": 1996
+  }, {
+    "title": "Learning to parse database queries using inductive logic programming",
+    "authors": ["John M. Zelle", "Raymond J. Mooney."],
+    "venue": "Proc. of AAAI.",
+    "year": 1996
+  }, {
+    "title": "Learning to map sentences to logical form: Structured classification with probabilistic categorial grammars",
+    "authors": ["Luke S. Zettlemoyer", "Michael Collins."],
+    "venue": "Proc. of UAI.",
+    "year": 2005
+  }, {
+    "title": "Online learning of relaxed CCG grammars for parsing to logical form",
+    "authors": ["Luke S. Zettlemoyer", "Michael Collins."],
+    "venue": "In Proc. of EMNLP-CoNLL.",
+    "year": 2007
+  }],
+  "id": "SP:8228b66f13537c46eacf91bfc0adae7af6ee28c8",
+  "authors": [{
+    "name": "Jeffrey Flanigan",
+    "affiliations": []
+  }, {
+    "name": "Sam Thomson",
+    "affiliations": []
+  }, {
+    "name": "Jaime Carbonell",
+    "affiliations": []
+  }, {
+    "name": "Chris Dyer",
+    "affiliations": []
+  }, {
+    "name": "Noah A. Smith",
+    "affiliations": []
+  }],
+  "abstractText": "Abstract Meaning Representation (AMR) is a semantic formalism for which a growing set of annotated examples is available. We introduce the first approach to parse sentences into this representation, providing a strong baseline for future improvement. The method is based on a novel algorithm for finding a maximum spanning, connected subgraph, embedded within a Lagrangian relaxation of an optimization problem that imposes linguistically inspired constraints. Our approach is described in the general framework of structured prediction, allowing future incorporation of additional features and constraints, and may extend to other formalisms as well. Our open-source system, JAMR, is available at:Meaning Representation (AMR) is a semantic formalism for which a growing set of annotated examples is available. We introduce the first approach to parse sentences into this representation, providing a strong baseline for future improvement. The method is based on a novel algorithm for finding a maximum spanning, connected subgraph, embedded within a Lagrangian relaxation of an optimization problem that imposes linguistically inspired constraints. Our approach is described in the general framework of structured prediction, allowing future incorporation of additional features and constraints, and may extend to other formalisms as well. Our open-source system, JAMR, is available at: http://github.com/jflanigan/jamr",
+  "title": "A Discriminative Graph-Based Parser for the Abstract Meaning Representation"
+}

@@ -1,0 +1,288 @@
+{
+  "sections": [{
+    "text": "Proceedings of NAACL-HLT 2018, pages 1011–1023 New Orleans, Louisiana, June 1 - 6, 2018. c©2018 Association for Computational Linguistics"
+  }, {
+    "heading": "1 Introduction",
+    "text": "Natural language processing applications often count on the availability of word representations trained on large textual data as a means to alleviate problems such as data sparsity and lack of linguistic resources (Collobert et al., 2011; Socher et al., 2011; Tu et al., 2017; Bowman et al., 2015).\nTraditional approaches to inducing word representations circumvent the need for explicit semantic annotation by capitalising on some form of indirect semantic supervision. A typical example is to fit a binary classifier to detect whether or not a target word is likely to co-occur with neighbouring words (Mikolov et al., 2013). If the binary classifier represents a word as a continuous vector, that vector will be trained to be discriminative of the contexts it co-occurs with, and thus words in similar contexts will have similar representations.\nCode available from https://github.com/ uva-slpl/embedalign\nMR and WA contributed equally.\nThe underlying assumption is that context (e.g. neighbouring words) stands for the meaning of the target word (Harris, 1954; Firth, 1957). The success of this distributional hypothesis hinges on the definition of context and different models are based on different definitions. Importantly, the nature of the context determines the range of linguistic properties the representations may capture (Levy and Goldberg, 2014b). For example, Levy and Goldberg (2014a) propose to use syntactic context derived from dependency parses. They show that their representations are much more discriminative of syntactic function than models based on immediate neighbourhood (Mikolov et al., 2013).\nIn this work, we take lexical translation as indirect semantic supervision (Diab and Resnik, 2002). Effectively we make two assumptions. First, that every word has a foreign equivalent that stands for its meaning. Second, that we can find this equivalent in translation data through lexical alignments.1 For that we induce both a latent mapping between words in a bilingual sentence pair and distributions over latent word representations.\nTo summarise our contributions:\n• we model a joint distribution over sentence pairs that generates data from latent word representations and latent lexical alignments;\n• we embed words in context mining positive correlations from translation data;\n• we find that foreign observations are necessary for generative training, but test time predictions can be made monolingually;\n• we apply our model to a range of semantic natural language processing tasks showing its usefulness.\n1These assumptions are not new to the community, but in this work they lead to a novel model which reaches more applications. §4 expands on the relation to other uses of bilingual data for word representation.\n1011"
+  }, {
+    "heading": "2 EMBEDALIGN",
+    "text": "In a nutshell, we model a distribution over pairs of sentences expressed in two languages, namely, a language of interest L1, and an auxiliary language L2 which our model uses to mine some learning signal. Our model, EMBEDALIGN, is governed by a simple generative story:\n1. sample a length m for a sentence in L1 and a length n for a sentence in L2;\n2. generate a sequence z1, . . . , zm of ddimensional random embeddings by sampling independently from a standard Gaussian prior;\n3. generate a word observation xi in the vocabulary of L1 conditioned on the random embedding zi;\n4. generate a sequence ai, . . . , an of n random alignments—each maps from a position aj in xm1 to a position j in the L2 sentence;\n5. finally, generate an observation yj in the vocabulary of L2 conditioned on the random embedding zaj that stands for xaj .\nThe model is parameterised by neural networks and parameters are estimated to maximise a lowerbound on log-likelihood of joint observations. In the following, we present the model formally (§2.1), discuss efficient training (§2.2), and concrete architectures (§2.3)."
+  }, {
+    "heading": "2.1 Probabilistic model",
+    "text": "Notation We use block capitals (e.g. X) for random variables, lowercase letters (e.g. x) for assignments, and the shorthand Xm1 for a sequence X1, . . . , Xm. Boldface letters are reserved for deterministic vectors (e.g. v) and matrices (e.g. W).\nFinally, E[f(Z);α] denotes the expected value of f(z) under a density q(z|α).\nWe model a joint distribution over bilingual parallel data, i.e., L1–L2 sentence pairs. An observation is a pair of random sequences 〈Xm1 , Y n1 〉, where a random variable X (Y ) takes on values in the vocabulary of L1 (L2). For ease of exposition, the length m (n) of each sequence is assumed observed throughout. The L1 sentence is generated one word at a time from a random sequence of latent embeddings Zm1 , each Z taking on values in Rd. The L2 sentence is generated one word at a time given a random sequence of latent alignments An1 , where Aj ∈ {1, . . . ,m} is the position in the L1 sentence to which yj aligns.2\nFor i ∈ {1, . . . ,m} and j ∈ {1, . . . , n} the generative story is\nZi ∼ N (0, I) (1a) Xi|zi ∼ Cat(f(zi; θ)) (1b) Aj |m ∼ U(1/m) (1c) Yj |zm1 , aj ∼ Cat(g(zaj ; θ)) (1d)\nand Figure 1 is a graphical depiction of our model. We map from latent embeddings to categorical distributions over either vocabulary using a neural network whose parameters are deterministic and collectively denote by θ (the generative parameters). The marginal likelihood of a sentence pair is shown in Equation (2).\nPθ(x m 1 , y n 1 |m,n) = ∫ p(zm1 ) m∏\ni=1\nPθ(xi|zi)\n× n∏\nj=1\nm∑\naj=1\nP (aj |m)Pθ(yj |zaj )dzm1 (2)\nDue to the conditional independences of our model, it is trivial to marginalise lexical alignments for any given latent embeddings zm1 , but marginalising the embeddings themselves is intractable. Thus, we employ amortised mean field variational inference using the inference model\nqφ(z m 1 |xm1 ) ,\nm∏\ni=1\nN (zi|ui, diag(si si)) (3)\nwhere each factor is a diagonal Gaussian. We map from xm1 to a sequence u m 1 of independent posterior\n2We pad L1 sentences with NULL to account for untranslatable L2 words (Brown et al., 1993). Instead, Schulz et al. (2016) generate untranslatable words from L2 context—an alternative we leave for future work.\nmean (or location) vectors, where ui , µ(hi;φ), as well as a sequence sm1 of independent standard deviation (or scale) vectors, where si , σ(hi;φ), and hm1 = enc(x m 1 ;φ) is a deterministic encoding of the L1 sequence (we discuss concrete architectures in §2.3). All mappings are realised by neural networks whose parameters are collectively denoted by φ (the variational parameters). Note that we choose to approximate the posterior without conditioning on yn1 . This allows us to use the inference model for monolingual prediction in absence of L2 data.\nVariational φ and generative θ parameters are jointly point-estimated to attain a local optimum of the evidence lowerbound (Jordan et al., 1999):\nlogPθ(x m 1 , y n 1 |m,n) ≥\nm∑\ni=1\nE [logPθ(xi|Zi);ui, si]\n+\nn∑\nj=1\nE  log m∑\naj=1\nP (aj |m)Pθ(yj |Zaj );um1 , sm1\n \n− m∑\ni=1\nKL [N (ui,diag(si si))||N (0, I)] .\n(4) The variational family is location-scale, thus we can rely on stochastic optimisation (Robbins and Monro, 1951) and automatic differentiation (Baydin et al., 2015) with reparameterised gradient estimates (Kingma and Welling, 2014; Rezende et al., 2014; Titsias and Lázaro-Gredilla, 2014). Moreover, because the Gaussian density is an exponential family, the KL terms in (4) are available in closed-form (Kingma and Welling, 2014, Appendix B)."
+  }, {
+    "heading": "2.2 Efficient training",
+    "text": "The likelihood terms in the ELBO (4) require evaluating two softmax layers over rather large vocabularies. This makes training prohibitively slow and calls for efficient approximation. We employ an approximation proposed by Botev et al. (2017) termed complementary sum sampling (CSS), which we review in this section.\nConsider the likelihood term logP (X = x|z) that scores an observation x given a sampled embedding z—we use serif font x to distinguish a particular observation from an arbitrary event x ∈ X in the support. The exact class probability\nP (X = x|z) = exp(u(z, x))∑ x∈X exp(u(z, x))\n(5)\nrequires a normalisation over the complete support. CSS works by splitting the support into two sets, a set C that is explicitly summed over and must include the positive class x, and another set N that is a subset of the complement set X \\C. We obtain an estimate for the normaliser ∑\nx∈C exp(u(z, x)) +\n∑ x∈N κ(x) exp(u(z, x)) (6)\nby importance- or Bernoulli-sampling from the support using a proposal distribution Q(X), where κ(x) corrects for bias asN tends to the entire complement set. In this paper, we design C and N per training mini-batch: we take C to consist of all unique words in a mini-batch of training samples and N to consist of 103 negative classes uniformly sampled from the complement set X \\ C, in which case κ(x) = 10−3|X \\ C|.3\nCSS makes it particularly easy to approximate likelihood terms such as those with respect to L2 in Equation (4). Because those terms depend on a marginalisation over alignments, an approximation must give support to all words in the sequence yn1 . With CSS this is extremely simple, we just need to make sure all unique words in yn1 are in the set C—which our mini-batch procedure does guarantee. Botev et al. (2017) show that CSS is rather stable and superior to the most popular softmax approximations. Besides being simple to implement, CSS also addresses a few problems with other approximations. To name a few: unlike importance sampling approximations, CSS converges to the exact softmax with bounded computation (it takes as many samples as there are classes). Unlike hierarchical softmax, CSS only affects training, that is, at test time we simply use the entire support instead of the approximation.\nWithout a softmax approximation, inference for our model would take time proportional to O(m× vx +m× vy +m× n) where vx (vy) corresponds to the size of the vocabulary of L1 (L2). The first term (m× vx) corresponds to projecting from m latent embeddings to m categorical distributions over the vocabulary of L1. The second term (m× vy) corresponds to projecting the same m latent embeddings to m categorical distributions over the vocabulary of L2. Finally, the third term (m × n) is due to marginalisation of alignments.\n3We sample uniformly from the complement set until we have 103 unique classes. We realise this operation outside the computation graph providing C and N as inputs to each training iteration, but a GPU-based solution is also possible.\nNote, however, that with the CSS approximation we drop the dependency on vocabulary sizes (as the combined sizes of C and N is an independent constant). Moreover, if inference is performed on GPU, the squared term (m×n ≈ m2) is amortised due to parallelism. Thus, while training our model is somewhat slower than monolingual models of word representation, which typically run in O(m), it is not at all impracticably slower."
+  }, {
+    "heading": "2.3 Architectures",
+    "text": "Here we present the neural network architectures that parameterise the different generative and variational components of §2.1. Refer to Appendix B for an illustration.\nGenerative model We have two generative components, namely, a categorical distribution over the vocabulary of L1 and another over the vocabulary of L2. We predict the parameter (event probabilities) of each distribution with an affine transformation of a latent embedding followed by the softmax nonlinearity to ensure normalisation:\nf(zi; θ) = softmax (W1zi + b1) (7a)\ng(zaj ; θ) = softmax ( W2zaj + b2 ) (7b)\nwhere W1 ∈ Rvx×d, b1 ∈ Rvx , W2 ∈ Rvy×d, b2 ∈ Rvy , and vx (vy) is the size of the vocabulary of L1 (L2). With the approximation of §2.2, we replace the L1 softmax layer (7a) by exp ( z>i cx + bx ) normalised by the CSS estimate (6) at training, and similarly for the L2 softmax layer (7b). In that case, we have parameters for cx, cy ∈ Rd—deterministic embeddings for x and y, respectively—as well as bias terms bx, by ∈ R. Inference model We predict approximate posterior parameters using two independent transformations\nui = M1hi + d1 (8a)\nsi = softplus(M2hi + d2) (8b)\nof a shared representation hi ∈ Rdx of the ith word in the L1 sequence xm1 —where M1,M2 ∈ Rd×dx are projection matrices, d1,d2 ∈ Rd are bias vectors, and the softplus nonlinearity ensures that standard deviations are non-negative. To obtain the deterministic encoding hm1 , we employ two different architectures: (1) a bag-of-words (BOW) encoder, where hi is a deterministic projection of xi onto Rdx ; and (2) a bidirectional (BIRNN) encoder, where hi is the element-wise sum of two\nLSTM hidden states (ith step) that process the sequence in opposite directions. We use 128 units for deterministic embeddings, and 100 units for LSTMs (Hochreiter and Schmidhuber, 1997) and latent representations (i.e. d = 100)."
+  }, {
+    "heading": "3 Experiments",
+    "text": "We start the section describing the data used to estimate our model’s parameters as well as details about the optimiser. The remainder of the section presents results on various benchmarks.\nTraining data We train our model on bilingual parallel data. In particular, we use parliament proceedings (Europarl-v7) (Koehn, 2005) from two language pairs: English-French and EnglishGerman.4 We employed very minimal preprocessing, namely, tokenisation and lowercasing using scripts from MOSES (Koehn et al., 2007), and have discarded sentences longer than 50 tokens. Table 1 lists more information about the training data, including the English-French Giga web corpus (Bojar et al., 2014) which we use in §3.4.5\nOptimiser For all architectures, we use the Adam optimiser (Kingma and Ba, 2014) with a learning rate of 10−3. Except where explicitly indicated, we\n• train our models for 30 epochs using mini batches of 100 sentence pairs;\n• use validation alignment error rate for model selection;\n• train every model 10 times with random Glorot initialisation (Glorot and Bengio, 2010) and report mean and standard deviation;\n• anneal the KL terms using the following schedule: we use a scalar α from 0 to 1 with additive steps of size 10−3 every 500 updates.\n4The proposed model is not limited to these language pairs. 5As we investigate various configurations and train every model 10 times to inspect variance in results, we conduct most of the experiments on the more manageable Europarl.\nThis means that at the beginning of the training, we allow the model to overfit to the likelihood terms, but towards the end we are optimising the true ELBO (Bowman et al., 2016).\nIt is also important to highlight that we do not employ regularisation techniques (such as batch normalisation, dropout, or L2 penalty) for they did not seem to yield consistent results."
+  }, {
+    "heading": "3.1 Word alignment",
+    "text": "Since our model leverages learning signal from parallel data by marginalising latent lexical alignments, we use alignment error rate to double check whether the model learns sensible word correspondences. Intrinsic assessment of word alignment quality requires manual annotation. For EnglishFrench, we use the NAACL English-French handaligned data (37 sentence pairs for validation and 447 for test) (Mihalcea and Pedersen, 2003). For English-German, we use the data by Padó and Lapata (2006) (98 sentence pairs for validation and 987 for test). Alignment quality is then measured in terms of alignment error rate (AER) (Och and Ney, 2000)—an F-measure over predicted alignment links. For prediction we condition on the posterior means E[Zm1 ] which is just the predicted variational means um1 and select the L1 position for which P (yj , aj |um1 ) is maximum (a form of approximate Viterbi alignment).\nWe start by analysing validation results and selecting amongst a few variants of EMBEDALIGN. We investigate the use of annealing and the use of a\nbidirectional encoder in the variational approximation. Table 2 (3) lists ↓AER for EN-FR (EN-DE) as well as accuracy of word prediction. It is clear that both annealing (systems decorated with subscript α) and bidirectional representations improve the results across the board. In the rest of the paper we still investigate whether or not recurrent encoders help, but we always report results based on annealing.\nIn order to establish baselines for our models we report IBM models 1 and 2 (Brown et al., 1993). In a nutshell, IBM models 1 and 2 both estimate the conditional P (yj |xm1 ) =∑m\naj=1 P (aj |m)P (yj |xaj ) by marginalisation of latent lexical alignments. The only difference between the two models is the prior over alignments, which is uniform for IBM1 and categorical for IBM2. An important difference between IBM models and EMBEDALIGN concerns the lexical distribution. IBM models are parameterised with independent categorical parameters, while our model instead is parameterised by a neural network. IBM models condition on a single categorical event xaj , namely, the word aligned to. Our model instead conditions on the latent embedding zaj that stands for the word aligned to.\nIn order to establish even stronger conditional alignment models, we embed the conditioning words and replace IBM1’s independent parameters by a neural network (single hidden layer MLP). We call this model a neural IBM1 (or NIBM for short). Note that in an IBM model, the sequence xm1 is never modelled, therefore we can condition on it without restrictions. For that reason, we also experiment with a bidirectional LSTM encoder and condition lexical distributions on its hidden states.\nTable 4 shows AER for test predictions. First observe that neural models outperform classic IBM1 by far, some of them even approach IBM2’s performance. Next, observe that bidirectional encodings make NIBM much stronger at inducing good word-\nto-word correspondences. EMBEDALIGN cannot catch up with NIBM, but that is not necessarily surprising. Note that NIBM is a conditional model, thus it can use all of its capacity to better explain L2 data. EMBEDALIGN, on the other hand, has to find a compromise between generating both streams of the data. To make that point a bit more obvious, Table 5 (6) lists accuracy of word prediction for EN-FR (EN-DE). Note that, without sacrificing L2 accuracy, and sometimes even improving it, EMBEDALIGN achieves very high L1 accuracy. This still does not imply that induced representations have captured aspects of lexical semantics such as word senses. All this means is that we have induced features that are jointly good at reconstructing both streams of the data one word at time. Of course it is tempting to conclude that our models must be capturing some useful generalisations. For that, the next sections will investigate a range of semantic NLP tasks."
+  }, {
+    "heading": "3.2 Lexical substitution task",
+    "text": "The English lexical substitution task (LST) consists in selecting a substitute word for a target word in context (McCarthy and Navigli, 2009). In the most traditional variant of the task, systems are presented with a list of potential candidates and this list must be sorted by relatedness.\nDataset The LST dataset includes 201 target words present in 10 sentences/contexts each, along with a manually annotated list of potential replacements. The data are split in 300 instances for validation and 1, 710 for test. Systems are evaluated by\ncomparing the predicted ranking to the manual one in terms of generalised average precision (GAP) (Melamud et al., 2015).\nPrediction We use EMBEDALIGN to encode each candidate (in context) as a posterior Gaussian density. Note that this task dispenses with inferences about L2. Each candidate is compared to the target word in context through a measure of overlap between their inferred densities—we take KL divergence. We then rank candidates using this measure.\nTable 7 lists GAP scores for variants of EMBEDALIN (bottom section) as well as some baselines and other established methods (top section). For comparison, we also compute GAP by sorting candidates in terms of cosine similarity, in which case we take the Gaussian mean as a summary of the density. The top section of the table contains systems reported by Melamud et al. (2015) (RANDOM and SKIPGRAM) and by Brazinskas et al. (2017) (BSG). Note that both SKIPGRAM (Mikolov et al., 2013) and BSG were trained on the very large ukWaC English corpus (Ferraresi et al., 2008). SKIPGRAM is known to perform remarkably well regardless of its apparent insensitivity to context (in terms of design). BSG is a close relative of our model which gives SKIPGRAM a Bayesian treatment (also by means of amortised variational inference) and is by design sensitive to context in a manner similar to EMBEDALIGN, that is, through its inferred posteriors.\nOur first observation is that cosine seems to outperform KL slightly. Others have shown that KL can be used to predict directional entailment (Vilnis and McCallum, 2014; Brazinskas et al., 2017), since LST is closer to paraphrasing than to entailment directionality may be a distractor, but we\nleave it as a rather speculative point. One additional point worth highlighting: the middle section of Table 7. ENBoW and ENBiRNN show what happens when we do not give EMBEDALIGN L2 supervision at training. That is, imagine the model of Figure 1 without the bottom plate. In that case, the model representations overfit for L1 word-byword prediction. Without the need to predict any notion of context (monolingual or otherwise), the representations drift away from semantic-driven generalisations and fail at lexical substitution."
+  }, {
+    "heading": "3.3 Sentence Evaluation",
+    "text": "Conneau et al. (2017) developed a framework to evaluate unsupervised sentence level representations trained on large amounts of data on a range of supervised NLP tasks. We assess our induced representations using their framework on the following benchmarks evaluated on classification ↑accuracy (MRPC is further evaluated on ↑F1) MR classification of positive or negative movie\nreviews;\nSST fined-grained labelling of movie reviews from the Stanford sentiment treebank (SST);\nTREC classification of questions into k-classes; CR classification of positive or negative product\nreviews;\nSUBJ classification of a sentence into subjective or objective;\nMPQA classification of opinion polarity; SICK-E textual entailment classification; MRPC paraphrase identification in the Microsoft\nparaphrase corpus;\nas well as the following benchmarks evaluated on the indicated correlation metric(s)\nSICK-R semantic relatedness between two sentences (↑Pearson);\nSST-14 semantic textual similarity (↑Pearson/Spearman).\nPrediction We use EMBEDALIGN to annotate every word in the training set of the benchmarks above with the posterior mean embedding in context. We then average embeddings in a sentence and give that as features to a logistic regression classifier trained with 5-fold cross validation.6\nFor comparison, we report a SKIPGRAM model (here indicated as W2VEC) as well as a model that uses the encoder of a neural machine translation system (NMT) trained on English-French Europarl data. In both cases, we report results by Conneau et al. (2017). Table 8 shows the results for all benchmarks.7 We report EMBEDALIGN trained on either EN-FR or EN-DE. The last line (COMBO) shows what happens if we train logistic regression on the concatenation of embeddings inferred by both EMBEDALIGN models, that is, EN-FR and EN-DE. Note that these two systems perform sometimes better sometimes worse depending on the benchmark. There is no clear pattern, but differences may well come from some qualitative difference in the induced latent space. It is a known fact that different languages realise lexical ambiguities differently, thus representations induced towards different languages are likely to capture different generalisations.8 As COMBO results show, the representations induced from different corpora are somewhat complementary. That same observation has guided paraphrasing models based on pivoting (Bannard and Callison-Burch, 2005). Once more we report a monolingual variant of EMBEDALIGN (indicated by EN) in an attempt to illustrate how crucial the\n6http://scikit-learn.org/stable/ 7In Appendix A we provide bar plots marked with error bars (2 standard deviations). 8We also acknowledge that our treatment of German is likely suboptimal due to the lack of subword features, as it can also be seen in AER results.\ntranslation signal is."
+  }, {
+    "heading": "3.4 Word similarity",
+    "text": "Word similarity benchmarks are composed of word pairs which are manually ranked out of context. For completeness, we also tried evaluating our embeddings in such benchmarks despite our work being focussed on applications where context matters.\nPrediction To assign an embedding for a word type, we infer Gaussian posteriors for all training instances of that type in context and aggregate the posterior means through an average (effectively collapsing all instances).\nTo cover the vocabulary of the typical benchmark, we have to use a much larger bilingual collection than Europarl. Based on the results of §3.1, we decided to proceed with English-French only— recall that models based on that pair performed better in terms of AER. Results in this section are based on EMBEDALIGN (with bidirectional variational encoder) trained on the Giga web corpus (see Table 1 for statistics). Due to the scale of the experiment, we report on a single run.\nWe trained on Giga with the same hyperparameters that we trained on Europarl, however, for 3 epochs instead of 30 (with this dataset an epoch amounts to 183, 000 updates). Again, we performed model selection on AER. Table 9 shows the results for several datasets using the framework of Faruqui and Dyer (2014a). Note that EMBEDALIGN was designed to make use of context information, thus this evaluation setup is a bit unnatural for our model. Still, it outperforms SKIPGRAM on 5 out of 13 benchmarks, in particular, on SIMLEX-999, whose relevance has been argued by Upadhyay et al. (2016). We also remark that this model achieves 0.25 test AER and 45.16 test GAP on lexical substitution—a considerable improvement compared to models trained on Europarl and reported in Tables 4 (AER) and 7 (GAP)."
+  }, {
+    "heading": "4 Related work",
+    "text": "Our model is inspired by lexical alignment models such as IBM1 (Brown et al., 1993), however, we generate words yn1 from a latent vector representation zm1 of x m 1 , rather than directly from the observation xm1 . IBM1 takes L1 sequences as conditioning context and does not model their distribution. Instead, we propose a joint model, where L1 sentences are generated from latent embeddings.\nThere is a vast literature on exploiting multilingual context to strengthen the notion of synonymy captured by monolingual models. Roughly, the literature splits into two groups, namely, approaches that derive additional features and/or training objectives based on pre-trained alignments (Klementiev et al., 2012; Faruqui and Dyer, 2014b; Luong et al., 2015; Šuster et al., 2016), and approaches that promote a joint embedding space by working with sentence level representations that dispense with explicit alignments (Hermann and Blunsom, 2014; AP et al., 2014; Gouws et al., 2015; Hill et al., 2014).\nThe work of Kočiský et al. (2014) is closer to ours in that they also learn embeddings by marginalising alignments, however, their model is conditional—much like IBM models—and their embeddings are not part of the probabilistic model, but rather part of the architecture design. The joint formulation allows our latent embeddings to harvest learning signal from L2while still being driven by the learning signal from L1—in a conditional model the representations can become specific to alignment deviating from the purpose of well representing the original language. In §3 we show substantial evidence that our model performs better when using both learning signals.\nVilnis and McCallum (2014) first propose to map words into Gaussian densities instead of point estimates for better word representation. For example, a distribution can capture asymmetric relations that\na point estimate cannot. Brazinskas et al. (2017) recast the skip-gram model as a conditional variational auto-encoder. They induce a Gaussian density for each occurrence of a word in context, and for that their model is the closest to ours. Additionally, they estimate a Gaussian prior per word type thus representing both types and occurrences. Unlike our model, the Bayesian skip-gram is not trained generatively by reconstructing the data, but rather discriminatively by prediction of overlapping sets of neighbouring words."
+  }, {
+    "heading": "5 Discussion",
+    "text": "We have presented a generative model of word representation that learns from positive correlations implicitly expressed in translation data. In order to make these correlations surface, we induce and marginalise latent lexical alignments.\nEmbedding models such as CBOW and skipgram (Mikolov et al., 2013) are essentially speaking supervised classifiers. This means they depend on somewhat artificial strategies to derive labelled data from monolingual corpora—words far from the central word still have co-occurred with it even though they are taken as negative evidence. Training our proposed model does not require a heuristic notion of negative training data. However, the model is also based on a somewhat artificial assumption: L1 words do not necessarily need to have an L2 equivalent and, even when they do, this equivalent need not be realised as a single word.\nWe have shown with extensive experiments that our model can induce representations useful to several tasks including but not limited to alignment (the task it most obviously relates to). We observed interesting results on semantic natural language processing benchmarks such as natural language inference, lexical substitution, paraphrasing, and sentiment classification.\nWe are currently expanding the notion of distributional context to multiple auxiliary foreign languages at once. This seems to only require minor changes to the generative story and could increase the model’s disambiguation power dramatically. Another direction worth exploring is to extend the model’s hierarchy with respect to how parallel sentences are generated. For example, modelling sentence level latent variables may capture global constraints and expose additional correlations to the model."
+  }, {
+    "heading": "Acknowledgments",
+    "text": "We thank Philip Schulz for comments on an earlier version of this paper as well as the anonymous NAACL reviewers. One of the Titan Xp cards used for this research was donated by the NVIDIA Corporation. This work was supported by the Dutch Organization for Scientific Research (NWO) VICI Grant nr. 277-89-002."
+  }, {
+    "heading": "A Multiple runs sentence evaluation",
+    "text": "Figure 2 shows multiple runs of our proposed model on sentence evaluation. The first figure reports the mean and two standard deviations (error bars) for benchmarks based on accuracy (ACC), the second figure reports benchmarks based on F1, and finally the third figure reports benchmarks based on correlation metrics Spearman (S) and Pearson (P)."
+  }, {
+    "heading": "B Architecture",
+    "text": "Figure 3 shows the architecture for the inference and generative models in EMBEDALIGN, with BiRNN encoder (h)."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "An autoencoder approach to learning bilingual word representations",
+    "authors": ["Sarath Chandar AP", "Stanislas Lauly", "Hugo Larochelle", "Mitesh Khapra", "Balaraman Ravindran", "Vikas C Raykar", "Amrita Saha."],
+    "venue": "Advances in Neural",
+    "year": 2014
+  }, {
+    "title": "Paraphrasing with bilingual parallel corpora",
+    "authors": ["Colin Bannard", "Chris Callison-Burch."],
+    "venue": "Proceedings of the 43rd Annual Meeting on Association for Computational Linguistics. Association for Computational Lin-",
+    "year": 2005
+  }, {
+    "title": "Automatic differentiation in machine learning: a survey",
+    "authors": ["Atilim Gunes Baydin", "Barak A Pearlmutter", "Alexey Andreyevich Radul", "Jeffrey Mark Siskind."],
+    "venue": "arXiv preprint arXiv:1502.05767 .",
+    "year": 2015
+  }, {
+    "title": "Complementary sum sampling for likelihood approximation in large scale classification",
+    "authors": ["Aleksandar Botev", "Bowen Zheng", "David Barber."],
+    "venue": "Artificial Intelligence and Statistics. pages 1030–1038.",
+    "year": 2017
+  }, {
+    "title": "A large annotated corpus for learning natural language inference",
+    "authors": ["Samuel R. Bowman", "Gabor Angeli", "Christopher Potts", "Christopher D. Manning."],
+    "venue": "Proceedings of the 2015 Conference on Empirical Methods in",
+    "year": 2015
+  }, {
+    "title": "Generating sentences from a continuous space",
+    "authors": ["Samuel R. Bowman", "Luke Vilnis", "Oriol Vinyals", "Andrew M. Dai", "Rafal Józefowicz", "Samy Bengio."],
+    "venue": "Proceedings of the 20th SIGNLL Conference on Computational Natu-",
+    "year": 2016
+  }, {
+    "title": "Embedding words as distributions with a bayesian skip-gram model",
+    "authors": ["Arthur Brazinskas", "Serhii Havrylov", "Ivan Titov."],
+    "venue": "Arxiv: 1711.11027 .",
+    "year": 2017
+  }, {
+    "title": "The mathematics of statistical machine translation: parameter estimation",
+    "authors": ["Peter F. Brown", "Vincent J. Della Pietra", "Stephen A. Della Pietra", "Robert L. Mercer."],
+    "venue": "Computational Linguistics 19(2):263–311.",
+    "year": 1993
+  }, {
+    "title": "Natural language processing (almost) from scratch",
+    "authors": ["Ronan Collobert", "Jason Weston", "Léon Bottou", "Michael Karlen", "Koray Kavukcuoglu", "Pavel Kuksa."],
+    "venue": "J. Mach. Learn. Res. 12:2493–2537.",
+    "year": 2011
+  }, {
+    "title": "Supervised learning of universal sentence representations from natural language inference data",
+    "authors": ["Alexis Conneau", "Douwe Kiela", "Holger Schwenk", "Loic Barrault", "Antoine Bordes."],
+    "venue": "arXiv preprint arXiv:1705.02364 .",
+    "year": 2017
+  }, {
+    "title": "An unsupervised method for word sense tagging using parallel corpora",
+    "authors": ["Mona Diab", "Philip Resnik."],
+    "venue": "Proceedings of 40th Annual Meeting of the Association for Computational Linguistics. Association for Compu-",
+    "year": 2002
+  }, {
+    "title": "Community evaluation and exchange of word vectors",
+    "authors": ["Manaal Faruqui", "Chris Dyer"],
+    "year": 2014
+  }, {
+    "title": "Improving vector space word representations using multilingual correlation",
+    "authors": ["Manaal Faruqui", "Chris Dyer."],
+    "venue": "Proceedings of the 14th Conference of the European Chapter of the Association for Com-",
+    "year": 2014
+  }, {
+    "title": "Introducing and evaluating ukwac, a very large web-derived corpus of english",
+    "authors": ["Adriano Ferraresi", "Eros Zanchetta", "Marco Baroni", "Silvia Bernardini."],
+    "venue": "In Proceedings of the 4th Web as Corpus Workshop (WAC-4.",
+    "year": 2008
+  }, {
+    "title": "A synopsis of linguistic theory 1930-1955",
+    "authors": ["J.R. Firth."],
+    "venue": "Studies in Linguistic Analysis pages 1–32.",
+    "year": 1957
+  }, {
+    "title": "Understanding the difficulty of training deep feedforward neural networks",
+    "authors": ["Xavier Glorot", "Yoshua Bengio."],
+    "venue": "Yee Whye Teh and Mike Titterington, editors, Proceedings of the Thirteenth International Conference on Artifi-",
+    "year": 2010
+  }, {
+    "title": "Bilbowa: Fast bilingual distributed representations without word alignments",
+    "authors": ["Stephan Gouws", "Yoshua Bengio", "Greg Corrado."],
+    "venue": "Francis Bach and David Blei, editors, Proceedings of the 32nd Interna-",
+    "year": 2015
+  }, {
+    "title": "Distributional structure",
+    "authors": ["Zellig S. Harris."],
+    "venue": "Word 10(23):146–162.",
+    "year": 1954
+  }, {
+    "title": "Multilingual models for compositional distributed semantics",
+    "authors": ["Karl Moritz Hermann", "Phil Blunsom."],
+    "venue": "Proceedings of 1020",
+    "year": 2014
+  }, {
+    "title": "Embedding word similarity with neural machine translation",
+    "authors": ["Felix Hill", "Kyunghyun Cho", "Sebastien Jean", "Coline Devin", "Yoshua Bengio."],
+    "venue": "arXiv preprint arXiv:1412.6448 .",
+    "year": 2014
+  }, {
+    "title": "Long short-term memory",
+    "authors": ["Sepp Hochreiter", "Jürgen Schmidhuber."],
+    "venue": "Neural Comput. 9(8):1735–1780. https://doi.org/10. 1162/neco.1997.9.8.1735.",
+    "year": 1997
+  }, {
+    "title": "An introduction to variational methods for graphical models",
+    "authors": ["MichaelI. Jordan", "Zoubin Ghahramani", "TommiS. Jaakkola", "LawrenceK. Saul."],
+    "venue": "Machine Learning 37(2):183– 233.",
+    "year": 1999
+  }, {
+    "title": "Adam: A method for stochastic optimization",
+    "authors": ["Diederik P. Kingma", "Jimmy Ba."],
+    "venue": "CoRR abs/1412.6980.",
+    "year": 2014
+  }, {
+    "title": "Autoencoding variational bayes",
+    "authors": ["Diederik P. Kingma", "Max Welling."],
+    "venue": "International Conference on Learning Representations.",
+    "year": 2014
+  }, {
+    "title": "Inducing crosslingual distributed representations of words",
+    "authors": ["Alexandre Klementiev", "Ivan Titov", "Binod Bhattarai."],
+    "venue": "Proceedings of COLING 2012. The COLING 2012 Organizing Committee, Mumbai, India, pages",
+    "year": 2012
+  }, {
+    "title": "Europarl: A Parallel Corpus for Statistical Machine Translation",
+    "authors": ["Philipp Koehn."],
+    "venue": "Conference Proceedings: the tenth Machine Translation Summit. AAMT, AAMT, Phuket, Thailand, pages 79–86. http://mt-archive.",
+    "year": 2005
+  }, {
+    "title": "Moses: Open source toolkit for statistical machine translation",
+    "authors": ["Evan Herbst"],
+    "venue": "In Proceedings of the 45th Annual Meeting of the ACL on Interactive",
+    "year": 2007
+  }, {
+    "title": "Learning Bilingual Word Representations by Marginalizing Alignments",
+    "authors": ["Tomáš Kočiský", "Karl Moritz Hermann", "Phil Blunsom."],
+    "venue": "Proceedings of ACL.",
+    "year": 2014
+  }, {
+    "title": "Dependency-based word embeddings",
+    "authors": ["Omer Levy", "Yoav Goldberg."],
+    "venue": "Proceedings of the 52nd Annual Meeting of the Association for Computational Linguistics (Volume 2: Short Papers). Association",
+    "year": 2014
+  }, {
+    "title": "Linguistic regularities in sparse and explicit word representations",
+    "authors": ["Omer Levy", "Yoav Goldberg."],
+    "venue": "Proceedings of the Eighteenth Conference on Computational Natural Language Learning. Association for Compu-",
+    "year": 2014
+  }, {
+    "title": "Bilingual word representations with monolingual quality in mind",
+    "authors": ["Thang Luong", "Hieu Pham", "Christopher D Manning."],
+    "venue": "Proceedings of the 1st Workshop on Vector Space Modeling for Natural Language Processing.",
+    "year": 2015
+  }, {
+    "title": "The english lexical substitution task",
+    "authors": ["Diana McCarthy", "Roberto Navigli."],
+    "venue": "Language Resources and Evaluation 43(2):139–159.",
+    "year": 2009
+  }, {
+    "title": "A simple word embedding model for lexical substitution",
+    "authors": ["Oren Melamud", "Omer Levy", "Ido Dagan."],
+    "venue": "Proceedings of the 1st Workshop on Vector Space Modeling for Natural Language Processing, VS@NAACL-HLT",
+    "year": 2015
+  }, {
+    "title": "An evaluation exercise for word alignment",
+    "authors": ["Rada Mihalcea", "Ted Pedersen."],
+    "venue": "Proceedings of the HLT-NAACL 2003 Workshop on Building and Using Parallel Texts: Data Driven Machine Translation",
+    "year": 2003
+  }, {
+    "title": "Distributed representations of words and phrases and their compositionality",
+    "authors": ["Tomas Mikolov", "Ilya Sutskever", "Kai Chen", "Greg S Corrado", "Jeff Dean."],
+    "venue": "C.J.C. Burges, L. Bottou, M. Welling, Z. Ghahramani, and K.Q.",
+    "year": 2013
+  }, {
+    "title": "Improved statistical alignment models",
+    "authors": ["Franz Josef Och", "Hermann Ney."],
+    "venue": "38th Annual Meeting of the Association for Computational Linguistics, Hong Kong, China, October 1-8, 2000..",
+    "year": 2000
+  }, {
+    "title": "Optimal constituent alignment with edge covers for semantic projection",
+    "authors": ["Sebastian Padó", "Mirella Lapata."],
+    "venue": "Proceedings of the 21st International Conference on Computational Linguistics and 44th Annual Meet-",
+    "year": 2006
+  }, {
+    "title": "Stochastic backpropagation and approximate inference in deep generative models",
+    "authors": ["Danilo Jimenez Rezende", "Shakir Mohamed", "Daan Wierstra."],
+    "venue": "Proceedings of the 31th International Conference on Machine Learn-",
+    "year": 2014
+  }, {
+    "title": "A stochastic approximation method",
+    "authors": ["Herbert Robbins", "Sutton Monro."],
+    "venue": "The Annals of Mathematical Statistics 22(3):400–407.",
+    "year": 1951
+  }, {
+    "title": "Word alignment without null words. In Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 2: Short Papers)",
+    "authors": ["Philip Schulz", "Wilker Aziz", "Khalil Sima’an"],
+    "year": 2016
+  }, {
+    "title": "Doubly stochastic variational bayes for nonconjugate inference",
+    "authors": ["Michalis Titsias", "Miguel Lázaro-Gredilla."],
+    "venue": "Proceedings of the 31st International Conference on Machine Learning (ICML-14). pages 1971–1979.",
+    "year": 2014
+  }, {
+    "title": "Learning to embed words in context for syntactic tasks",
+    "authors": ["Lifu Tu", "Kevin Gimpel", "Karen Livescu."],
+    "venue": "Proceedings of the 2nd Workshop on Representation Learning for NLP. Association for Computa-",
+    "year": 2017
+  }, {
+    "title": "Cross-lingual models of word embeddings: An empirical comparison",
+    "authors": ["Shyam Upadhyay", "Manaal Faruqui", "Chris Dyer", "Dan Roth."],
+    "venue": "Proceedings of the 54th Annual Meeting of the Association for Computational Linguis-",
+    "year": 2016
+  }, {
+    "title": "Word representations via gaussian embedding",
+    "authors": ["Luke Vilnis", "Andrew McCallum."],
+    "venue": "arXiv preprint arXiv:1412.6623 .",
+    "year": 2014
+  }, {
+    "title": "Bilingual learning of multi-sense embeddings with discrete autoencoders",
+    "authors": ["Simon Šuster", "Ivan Titov", "Gertjan van Noord."],
+    "venue": "Proceedings of the 2016 Conference of the North American Chapter of the Association",
+    "year": 2016
+  }],
+  "id": "SP:f153736bf1ff3af7b86eed0271382119ce181ee3",
+  "authors": [{
+    "name": "Miguel Rios",
+    "affiliations": []
+  }, {
+    "name": "Wilker Aziz",
+    "affiliations": []
+  }, {
+    "name": "Khalil Sima’an",
+    "affiliations": []
+  }],
+  "abstractText": "This work exploits translation data as a source of semantically relevant learning signal for models of word representation. In particular, we exploit equivalence through translation as a form of distributional context and jointly learn how to embed and align with a deep generative model. Our EMBEDALIGN model embeds words in their complete observed context and learns by marginalisation of latent lexical alignments. Besides, it embeds words as posterior probability densities, rather than point estimates, which allows us to compare words in context using a measure of overlap between distributions (e.g. KL divergence). We investigate our model’s performance on a range of lexical semantics tasks achieving competitive results on several standard benchmarks including natural language inference, paraphrasing, and text similarity.",
+  "title": "Deep Generative Model for Joint Alignment and Word Representation"
+}

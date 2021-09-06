@@ -1,0 +1,206 @@
+{
+  "sections": [{
+    "text": "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 2824–2829 Brussels, Belgium, October 31 - November 4, 2018. c©2018 Association for Computational Linguistics\n2824"
+  }, {
+    "heading": "1 Introduction",
+    "text": "Identifying entities in text is a vital component in language understanding, facilitating knowledge base construction (Riedel et al., 2013), question answering (Bordes et al., 2015), and search. Identifying these entities are particularly important in biomedical data. While large scale Named Entity Recognition (NER) datasets exist in news and web data (Tjong Kim Sang and De Meulder, 2003; Hovy et al., 2006), biomedical NER datasets are typically smaller and contain only one or two types per dataset. Ultimately, we would like to identify all entity types present across the union of the label sets during inference while leveraging all the available annotations to train our models.\nWhile one may train a single model across the union of all the datasets available, this training\nprocedure assumes that all labels (from the union of the tag set) are correctly annotated in every training instance – which is incorrect. On the other hand, training separate models on each available dataset does not take advantage of shared statistical strength from the multiple sources of information, and requires resolution of the conflicting predictions output by the different models.\nTo remedy these problems, we propose methods to train a joint model across the multiple tag-sets of the different datasets, sharing statistical strength by using a single feature encoder across datasets while respecting the incompleteness of the labels during training. Thus, our single model can take full advantage of all the available annotated resources and predict the full set of relevant types given a piece of text.\nIn experiments on three datasets, we show our methods outperform models that do not consider the incomplete annotations. We also show that jointly training on multiple datasets improves performance further and achieves state-of-the-art performance on the Biocreative V CDR dataset."
+  }, {
+    "heading": "2 Model",
+    "text": "Our models build on state-of-the-art NER systems (Lample et al., 2016) based on bi-directional Long Short Term Memory (BiLSTM) feature extractors fed into a conditional random field (CRF).\nThe data consists of input sequence of tokens x = {x1, . . . , xT } where each token is a sequence of characters xt = {c1, . . . , cKt}. The output consists of labels for each token in the sequence y = {y1, . . . , yT }. Labeling is done using the BILOU tagging scheme, following previous observations that it outperforms the BIO tagging scheme (Ratinov and Roth, 2009). We have D such datasets of input tokens and output labels."
+  }, {
+    "heading": "2.1 Feature Encoder BiLSTM",
+    "text": "Our model takes a sequence of tokens from a single abstract as input. Tokens are generated using byte-pair encodings (BPE) (Gage, 1994; Sennrich et al., 2016), which have recently been shown to be effective for tokenization of biological texts by addressing the issue of rare or out-of-vocabulary tokens (Verga et al., 2018). BPE starts from white space tokenization and breaks down the tokens further. Because all of the evaluations are on the span level rather than the token level, the use of BPE does not impact any numerical performance. Each token t produced from BPE is mapped to a d dimensional word embedding w.\nCharacter level features have been shown to improve NER accuracy (Lafferty et al., 2001; Lample et al., 2016; Passos et al., 2014). We encode characters in a word using another BiLSTM, similar to Lample et al. (2016), and obtain a character based embedding for every word by concatenating the last hidden state of the forward and backward character LSTM. We concatenate this character based embedding with the d-dimensional word embedding and input it to the word-level BiLSTM. This feature representation is then projected to the label dimension L using a linear layer, giving a matrix of scores [fil] where fil is the score for predicting label l ∈ [L] for token i ∈ [T ]."
+  }, {
+    "heading": "2.2 Conditional Random Field (CRF)",
+    "text": "BiLSTM-CRF models used for named entity recognition add a CRF layer (Lafferty et al., 2001)\non the output representations from the BiLSTM model described. The CRF layer scores all possible labelings to give a probability of the correct label sequence under the model. Given an input sequence of tokens x = {x1, . . . , xT } and the output matrix of scores [fil], the score for an output labeling y = {y1, . . . , yT } is given by: s(x,y) = ∑T t=1 ( Ayt−1,yt + ft,yt ) , where A is an L × L matrix of parameters for transitioning between output labels. The CRF then generates the likelihood for the correct labeling by normalizing this score over all possible output labelings:\nlogP (y|x) = s(x,y)− logsumexp y′\ns(x,y′) (1)\nThe log normalization term here is: logsumexp\ny′ s(x,y′) = log\n∑ y′ exp s(x,y ′)\nwhere the sum goes over all possible labelings y′ of the sequence and is computed efficiently using dynamic programming (Lafferty et al., 2001)."
+  }, {
+    "heading": "2.3 Tagging Multiple Datasets",
+    "text": "One way to tag multiple datasets is to concatenate all the datasets with all the output labels and train a single BiLSTM-CRF model. However, this assumes that each text snippet is completely annotated across the label sets, which is not true. We now discuss two models which do not make this assumption."
+  }, {
+    "heading": "2.3.1 Multiple CRFs",
+    "text": "We first propose one simple method to get around the assumption of complete annotation – train separate CRFs for the label set of each dataset. In particular, to share statistical strengths on the input tokens, we share the BiLSTM feature encoder across the datasets but use separate CRF layers for each of the datasets. This is a multi-task learning model (Caruana, 1998) and is expected to perform better than the naive model as it no longer makes the strict assumption of complete annotation (by using separate CRFs), and shares statistical strength across datasets. However, given a new abstract to tag, this model will generate multiple possible labelings from the different CRFs. Moreover, the labelings output by the different CRFs may be inconsistent, and how to combine these multiple labelings is not obvious. We propose and evaluate a simple heuristic procedure for merging the outputs of the different CRF predictions. Whenever the different CRF predictions disagree on a span\nof tokens, we choose the prediction from the CRF that has higher marginal probability of predicting that span of tokens (Alg. 1 in supplementary)."
+  }, {
+    "heading": "2.3.2 EM Marginal CRF",
+    "text": "We also propose an alternative principled approach that does not require a heuristic merging process. In order to label D datasets with some disjoint labels, we only consider the probability of the “observed labels” and allow the “unobserved” tokens to be free. Thus, when tagging dataset i ∈ [D], we treat the non-entity tokens as potentially taking any entity type label from any of the other datasets as well as the ‘O’ label.\nFor a particular input x of length T from a dataset i ∈ [D] with label set Si, let y be the gold output label. Let E ⊂ [T ] be the index of tokens with any entity type label in Si and N ⊂ [T ] be the index of tokens with ‘O’ label, and let yE be the output sequence corresponding to indices in E, and similarly yN be the output sequence for indices in N . Then, from (1), we get the likelihood Pi(yE ∪ yN|x), and a naive CRF trained on the concatenation of all the data will maximize this probability. However, since we cannot make the complete annotation assumption, we should instead maximize only the marginal probability of the observed entities on the dataset i, Pi(yE|x), allowing yN to take any values from the labels of the other datasets: ∪Dj 6=iSj . Thus,\nlogPi(yE|x) = log ∑\nyN∈∪j 6=iSj\nPi(yE,yN|x)\nlogPi(yE|x) = logsumexp yN∈∪j 6=iSj s(x,yE ,yN )− logZ\nwhere logZ is the log normalization term which is the same as in (1). Note that since the normalization term is the same here as for a standard CRF, we can still use the same dynamic programming algorithm as for a regular CRF to compute this logZ. Now, in order to compute the first term, we note that it is similar to the computation required to compute logZ – whereas logZ is obtained by summing over all possible output sequences, this term is obtained by summing over all possible output sequences which have indices in E fixed to the correct label and indices in N taking values from ∪j 6=iSj . Thus, this can be computed using the same dynamic programming algorithm (Tsuboi et al., 2008), and the implementation of training this model is compatible with modern automatic differentiation libraries."
+  }, {
+    "heading": "3 Experimental Results",
+    "text": "We perform experiments on two benchmark Biocreative datasets as well as the recently introduced MedMentions data (Murty et al., 2018). Our experiments consider three types of models. The single CRF model naively concatenates all training datasets together and assumes complete labeling, multi CRF has a single Bi-LSTM feature encoder with a separate CRF for each dataset (Section 2.3.1), and EM CRF has a single feature encoder and a single CRF trained with EM marginalization (Section 2.3.2). For full dataset statistics and specific implementation details see supplementary material."
+  }, {
+    "heading": "3.1 Biocreative V / VI",
+    "text": "Biocreative V Chemical Disease Relation (CDR): consists of 1,500 titles and abstracts from PubMed, human annotated with chemical and disease mentions (Li et al., 2016), and has been used in previous NER evluations (Fries et al., 2017; Leaman and Lu, 2016). Biocreative VI ChemProt (CP): consists of 2,432 PubMed titles and abstracts, and contains human annotated mentions of both chemicals and proteins (Krallinger et al., 2017)1.\nOur results are shown in Table 1. The top portion of the table shows models trained on single datasets, and the bottom portion shows models trained on both CDR and CP. Comparing the top and bottom portions of the table, we can see that models trained on both CP and CDR outperform training on either in isolation. Further, we see in the bottom section that our EM CRF outperforms the single CRF model and is generally better than the multi CRF model."
+  }, {
+    "heading": "3.2 Adding Additional Data",
+    "text": "Weakly Labeled data The addition of weakly labeled data has been used recently to improve the performance of relation extraction systems (Peng et al., 2016; Verga et al., 2018). In these approaches, titles and abstracts from PubMed are annotated using Pubtator, a state of the art entity tagging and linking/normalization system (Wei et al., 2013). We use the same weakly labeled data from Verga et al. (2018).\nResults when adding in the additional weakly labeled data is shown in Table 2. Our models\n1To the best of our knowledge, there is no benchmark result for this dataset\nimprove further, outperforming the state-of-the-art TaggerOne model (Leaman and Lu, 2016)."
+  }, {
+    "heading": "3.3 MedMentions",
+    "text": "MedMentions (Murty et al., 2018) is a recently introduced large dataset of PubMed abstracts containing entity linked mentions of many different semantic types. We used this data to create an artificially extreme example where two training sets contain 9 and 10 entity types each. The two type sets are fully disjoint (further details in supplementary).\nIn Table 3, we see that the single CRF model performs very poorly in this extreme setting due to the large amount of missing annotations. The multi CRF and EM CRF both perform well and come close to the performance of a single CRF trained on the full data, which is approximately twice as much annotated data."
+  }, {
+    "heading": "4 Related Work",
+    "text": "Until recently, feature engineered machine learning models were the highest performing approaches to NER (Ratinov and Roth, 2009; Passos et al., 2014). More recently, neural network based approaches have become state-of-the-art (Lample et al., 2016; Strubell et al., 2017; Peters et al., 2017). In BioNLP, many highest performing systems still use engineered features fed into a CRF (Wei et al., 2015; Leaman et al., 2015; Leaman and Lu, 2016). In addition to the two datasets we explored in this work, there are several other popular bio NER datasets for chemicals (Krallinger et al., 2015), species (Wang et al., 2010), diseases\n(Doğan et al., 2014), and genes (Tanabe et al., 2005).\nIn concurrent work, Wang et al. (2018) train a model very similar to our multi-CRF model on multiple biological NER datasets with non-fully overlapping labels. Additionally, they experiment with different ways of sharing the parameters of the BiLSTM encoder. We believe this work is complementary to ours, and in many ways deals with a simpler subset of the tasks we address. Wang et al. assumes complete labeling in each of their datasets, and does not attempt to merge the final results of the multiple CRFS. On the other hand, we focus on the problem of cohesively labeling a dataset with the joint set of the different label sets, either directly through the EM model or by the merging process of the multi-CRF model.\nOur method of training via marginal likelihood is the same as Tsuboi et al. (2008), who trained CRF models for Japanese word segmentation and POS tagging where only partial annotations of sentences are available. In comparison, we use the marginal likelihood training in conjunction with state-of-the art deep learning models for NER and use it to tag across multiple disjoint labels sets."
+  }, {
+    "heading": "5 Conclusions and Future Work",
+    "text": "We’ve introduced a method for training NER models on multiple datasets containing disjoint label sets. We show experimentally that this joint training improves performance and that our EM CRF methods outperform models using a single CRF.\nOne interesting problem that our models do not account for is the existence of overlapping and non-continuous entity spans. Particularly when annotating using disjoint label sets, a token could belong to multiple entity spans from different label sets. We are interested in investigating this problem in future work."
+  }, {
+    "heading": "Acknowledgments",
+    "text": "This work was supported in part by the Center for Intelligent Information Retrieval and the Center for Data Science, in part by the Chan Zuckerberg Initiative under the project Scientific Knowledge Base Construction., and in part by the National Science Foundation under Grant No. IIS1514053. Any opinions, findings and conclusions or recommendations expressed in this material are those of the authors and do not necessarily reflect those of the sponsor."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Large-scale simple question answering with memory networks",
+    "authors": ["Antoine Bordes", "Nicolas Usunier", "Sumit Chopra", "Jason Weston."],
+    "venue": "arXiv preprint arXiv:1506.02075.",
+    "year": 2015
+  }, {
+    "title": "Multitask learning",
+    "authors": ["Rich Caruana."],
+    "venue": "Learning to learn, pages 95–133. Springer.",
+    "year": 1998
+  }, {
+    "title": "Ncbi disease corpus: a resource for disease name recognition and concept normalization",
+    "authors": ["Rezarta Islamaj Doğan", "Robert Leaman", "Zhiyong Lu."],
+    "venue": "Journal of biomedical informatics, 47:1–10.",
+    "year": 2014
+  }, {
+    "title": "Swellshark: A generative model for biomedical named entity recognition without labeled data",
+    "authors": ["Jason Fries", "Sen Wu", "Alex Ratner", "Christopher Ré."],
+    "venue": "arXiv preprint arXiv:1704.06360.",
+    "year": 2017
+  }, {
+    "title": "A new algorithm for data compression",
+    "authors": ["Philip Gage."],
+    "venue": "The C Users Journal, 12(2):23–38.",
+    "year": 1994
+  }, {
+    "title": "Ontonotes: the 90% solution",
+    "authors": ["Eduard Hovy", "Mitchell Marcus", "Martha Palmer", "Lance Ramshaw", "Ralph Weischedel."],
+    "venue": "Proceedings of the human language technology conference of the NAACL, Companion Volume: Short Papers, pages 57–60. Associ-",
+    "year": 2006
+  }, {
+    "title": "Overview of the biocreative vi chemical-protein interaction track",
+    "authors": ["Astrid Laegreid", "Marius Doornenbal", "Julen Oyarzabal", "Analia Loureno", "Alfonso Valencia."],
+    "venue": "Proceedings of the BioCreative VI Workshop, page 140.",
+    "year": 2017
+  }, {
+    "title": "The chemdner corpus of chemicals and drugs and its annotation",
+    "authors": ["Martin Krallinger", "Obdulia Rabal", "Florian Leitner", "Miguel Vazquez", "David Salgado", "Zhiyong Lu", "Robert Leaman", "Yanan Lu", "Donghong Ji", "Daniel M Lowe"],
+    "year": 2015
+  }, {
+    "title": "Conditional random fields: Probabilistic models for segmenting and labeling sequence data",
+    "authors": ["John Lafferty", "Andrew McCallum", "Fernando CN Pereira"],
+    "year": 2001
+  }, {
+    "title": "Neural architectures for named entity recognition",
+    "authors": ["Guillaume Lample", "Miguel Ballesteros", "Sandeep Subramanian", "Kazuya Kawakami", "Chris Dyer."],
+    "venue": "arXiv preprint arXiv:1603.01360.",
+    "year": 2016
+  }, {
+    "title": "Taggerone: joint named entity recognition and normalization with semi-markov models",
+    "authors": ["Robert Leaman", "Zhiyong Lu."],
+    "venue": "Bioinformatics, 32(18):2839–2846.",
+    "year": 2016
+  }, {
+    "title": "tmchem: a high performance approach for chemical named entity recognition and normalization",
+    "authors": ["Robert Leaman", "Chih-Hsuan Wei", "Zhiyong Lu."],
+    "venue": "Journal of cheminformatics, 7(1):S3.",
+    "year": 2015
+  }, {
+    "title": "Biocreative v cdr task corpus: a resource for chemical disease relation extraction",
+    "authors": ["Jiao Li", "Yueping Sun", "Robin J Johnson", "Daniela Sciaky", "Chih-Hsuan Wei", "Robert Leaman", "Allan Peter Davis", "Carolyn J Mattingly", "Thomas C Wiegers", "Zhiyong Lu"],
+    "year": 2016
+  }, {
+    "title": "Hierarchical Losses and New Resources for Fine-grained Entity Typing and Linking",
+    "authors": ["Shikhar Murty", "Patrick Verga", "Luke Vilnis", "Irena Radovanovic", "Andrew McCallum."],
+    "venue": "The 56th Annual Meeting of the Association for Computational Lin-",
+    "year": 2018
+  }, {
+    "title": "Lexicon infused phrase embeddings for named entity resolution",
+    "authors": ["Alexandre Passos", "Vineet Kumar", "Andrew McCallum."],
+    "venue": "CoNLL-2014, page 78.",
+    "year": 2014
+  }, {
+    "title": "Improving chemical disease relation extraction with rich features and weakly labeled data",
+    "authors": ["Yifan Peng", "Chih-Hsuan Wei", "Zhiyong Lu."],
+    "venue": "Journal of cheminformatics, 8(1):53.",
+    "year": 2016
+  }, {
+    "title": "Semi-supervised sequence tagging with bidirectional language models",
+    "authors": ["Matthew E Peters", "Waleed Ammar", "Chandra Bhagavatula", "Russell Power."],
+    "venue": "arXiv preprint arXiv:1705.00108.",
+    "year": 2017
+  }, {
+    "title": "Design challenges and misconceptions in named entity recognition",
+    "authors": ["Lev Ratinov", "Dan Roth."],
+    "venue": "Proceedings of the Thirteenth Conference on Computational Natural Language Learning, pages 147– 155. Association for Computational Linguistics.",
+    "year": 2009
+  }, {
+    "title": "Relation extraction with matrix factorization and universal schemas",
+    "authors": ["Sebastian Riedel", "Limin Yao", "Andrew McCallum", "Benjamin M Marlin."],
+    "venue": "Proceedings of the 2013 Conference of the North American Chapter of the Association for Computational",
+    "year": 2013
+  }, {
+    "title": "Neural machine translation of rare words with subword units",
+    "authors": ["Rico Sennrich", "Barry Haddow", "Alexandra Birch."],
+    "venue": "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics, pages 1715–1725.",
+    "year": 2016
+  }, {
+    "title": "Fast and Accurate Entity Recognition with Iterated Dilated Convolutions",
+    "authors": ["Emma Strubell", "Patrick Verga", "David Belanger", "Andrew McCallum."],
+    "venue": "Conference on Empirical Methods in Natural Language Processing (EMNLP), Copenhagen, Den-",
+    "year": 2017
+  }, {
+    "title": "Genetag: a tagged corpus for gene/protein named entity recognition",
+    "authors": ["Lorraine Tanabe", "Natalie Xie", "Lynne H Thom", "Wayne Matten", "W John Wilbur."],
+    "venue": "BMC bioinformatics, 6(1):S3.",
+    "year": 2005
+  }, {
+    "title": "Introduction to the conll-2003 shared task: Language-independent named entity recognition",
+    "authors": ["Erik F Tjong Kim Sang", "Fien De Meulder."],
+    "venue": "Proceedings of the seventh conference on Natural language learning at HLT-NAACL 2003-Volume 4,",
+    "year": 2003
+  }, {
+    "title": "Training conditional random fields using incomplete annotations",
+    "authors": ["Yuta Tsuboi", "Hisashi Kashima", "Hiroki Oda", "Shinsuke Mori", "Yuji Matsumoto."],
+    "venue": "Proceedings of the 22nd International Conference on Computational Linguistics-Volume 1, pages 897–",
+    "year": 2008
+  }, {
+    "title": "Simultaneously Self-attending to All Mentions for Full-Abstract Biological Relation Extraction",
+    "authors": ["Patrick Verga", "Emma Strubell", "Andrew McCallum."],
+    "venue": "Annual Conference of the North American Chapter of the Association for Computational Lin-",
+    "year": 2018
+  }, {
+    "title": "Disambiguating the species of biomedical named entities using natural language parsers",
+    "authors": ["Xinglong Wang", "Jun’ichi Tsujii", "Sophia Ananiadou"],
+    "year": 2010
+  }, {
+    "title": "Cross-type biomedical named entity recognition with deep multi-task learning",
+    "authors": ["Xuan Wang", "Yu Zhang", "Xiang Ren", "Yuhao Zhang", "Marinka Zitnik", "Jingbo Shang", "Curtis Langlotz", "Jiawei Han."],
+    "venue": "arXiv preprint arXiv:1801.09851.",
+    "year": 2018
+  }, {
+    "title": "Pubtator: a web-based text mining tool for assisting biocuration",
+    "authors": ["Chih-Hsuan Wei", "Hung-Yu Kao", "Zhiyong Lu."],
+    "venue": "Nucleic Acids Research, 41.",
+    "year": 2013
+  }, {
+    "title": "Gnormplus: an integrative approach for tagging genes, gene families, and protein domains",
+    "authors": ["Chih-Hsuan Wei", "Hung-Yu Kao", "Zhiyong Lu."],
+    "venue": "BioMed research international, 2015.",
+    "year": 2015
+  }],
+  "id": "SP:5eee280d8cba0956ec410a7cdccc49d1611a6168",
+  "authors": [{
+    "name": "Nathan Greenberg",
+    "affiliations": []
+  }, {
+    "name": "Trapit Bansal",
+    "affiliations": []
+  }, {
+    "name": "Patrick Verga",
+    "affiliations": []
+  }, {
+    "name": "Andrew McCallum",
+    "affiliations": []
+  }],
+  "abstractText": "Extracting typed entity mentions from text is a fundamental component to language understanding and reasoning. While there exist substantial labeled text datasets for multiple subsets of biomedical entity types—such as genes and proteins, or chemicals and diseases— it is rare to find large labeled datasets containing labels for all desired entity types together. This paper presents a method for training a single CRF extractor from multiple datasets with disjoint or partially overlapping sets of entity types. Our approach employs marginal likelihood training to insist on labels that are present in the data, while filling in “missing labels”. This allows us to leverage all the available data within a single model. In experimental results on the Biocreative V CDR (chemicals/diseases), Biocreative VI ChemProt (chemicals/proteins) and MedMentions (19 entity types) datasets, we show that joint training on multiple datasets improves NER F1 over training in isolation, and our methods achieve state-of-the-art results.",
+  "title": "Marginal Likelihood Training of BiLSTM-CRF for Biomedical Named Entity Recognition from Disjoint Label Sets"
+}

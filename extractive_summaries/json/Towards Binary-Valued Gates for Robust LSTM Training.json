@@ -1,0 +1,306 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Recurrent neural networks (RNNs) (Hochreiter, 1998) are widely used in sequence modeling tasks, such as language modeling (Kim et al., 2016; Jozefowicz et al., 2016), speech recognition (Zhang et al., 2016), time series prediction (Xingjian et al., 2015), machine translation (Wu et al., 2016; Britz et al., 2017; He et al., 2016), image captioning (Vinyals et al., 2015; Xu et al., 2015), and image generation (Villegas et al., 2017).\nTo address the long-term dependency and gradient vanish-\nThe work was done while the first author was visiting Microsoft Research Asia. 1Key Laboratory of Machine Perception, MOE, School of EECS, Peking University 2Microsoft Research 3Center for Data Science, Peking University, Beijing Institute of Big Data Research. Correspondence to: Tao Qin <taoqin@microsoft.com>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\ning problem of conventional RNNs, long short-term memory (LSTM) (Gers et al., 1999; Hochreiter & Schmidhuber, 1997b) networks were proposed, which introduce gate functions to control the information flow in a recurrent unit: a forget gate function to determine how much previous information should be excluded for the current step, an input gate function to find relevant signals to be absorbed into the hidden context, and an output gate function for prediction and decision making. For ease of optimization, in practical implementation, one usually uses the element-wise sigmoid function to mimic the gates, whose outputs are soft values between 0 and 1.\nBy using such gates with many more parameters, LSTM usually performs much better than conventional RNNs. However, when looking deep into the unit, we empirically find that the values of the gates are not that meaningful as the design logic. For example, in Figure 1, the distributions of the forget gate values and input gate values are not sharp and most of the values are in the middle state (around 0.5), meaning that most of the gate values are ambiguous in LSTM. This phenomenon contradicts the design of both gates: to control whether or not to take the information from the previous timesteps or the new inputs. At the same time, several works (Murdoch & Szlam, 2017; Karpathy et al., 2015) show that most cell coordinates of LSTM are hard to find particular meanings.\nIn this paper, we propose to push the values of the gates to the boundary of their ranges (0, 1).1 Pushing the values of the gates to 0/1 has certain advantages. First, it well aligns with the original purpose of the development of gates: to get the information in or skip by “opening” or “closing” the gates during the recurrent computation, which reflects more accurate and clear linguistic and structural information. Second, similar to BitNet in image classification (Courbariaux et al., 2016), by pushing the activation function to be binarized, we can learn a model that is ready for further compression. Third, training LSTM towards binary-valued gates enables better generation of the learned model. According\n1The output of a gate function is usually a vector. For simplicity, in the paper, we say “pushing the output of the gate function to 0/1” when meaning “pushing each dimension of the output vector of the gate function to either 0 or 1”. We also say that each dimension of the output vector of the gate function is a gate, and say a gate is open/closed if its value is close to 1/0.\nto (Hochreiter & Schmidhuber, 1997a; Haussler et al., 1997; Keskar et al., 2016; Chaudhari et al., 2016), a model lying in a flat region of the loss surface is likely to generalize well, since any small perturbation to the model makes little fluctuation to the loss. Training LSTM towards binary-valued gates means seeking a set of parameters to make the values of the gates approaching zero or one, namely residing in the flat region of the sigmoid function, which corresponds to the flat region of the overall loss surface.\nTechnically, pushing the outputs of the gates towards such discrete values is challenging. A straightforward approach is to sharpen the sigmoid function by a small temperature. However, this is equivalent to rescaling the input and cannot guarantee the values of the learned gates to be close to 0 or 1. To tackle this challenge, in this paper, we leverage the Gumbel-Softmax estimator developed for variational methods (Jang et al., 2016; Maddison et al., 2016). The estimator generates approximated and differentiable samples for categorical latent variables in a stochastic computational graph, e.g., variational autoencoder. Specifically, during training, we apply the Gumbel-Softmax estimator to the gates to approximate the values sampled from the Bernoulli distribution given by the parameters, and train the LSTM model with standard backpropagation methods. We call the learned model Gumbel-Gate LSTM (G2-LSTM). We conduct experiments on language modeling and machine translation to verify our proposed method. We have the following observations from experimental results:\n• Our method restricts the gate outputs to be close to the boundary, and thus reduces the representation power. Surprisingly, there is no performance drop. Furthermore, our model achieves better or comparable results compared to the baseline model.\n• Our learned model is easy for further compression. We apply several model compression algorithms to the parameters in the gates, including low-precision approximation and low-rank approximation, and results\nshow that our compressed model can be even better than the baseline model without compression.\n• We investigate a set of samples and find that the gates in our learned model are meaningful and intuitively interpretable. We show our model can automatically learn the boundaries in the sentences.\nThe organization of the paper is as follows. We review related work in Section 2 and propose our learning algorithm in Section 3. Experiments are reported in Section 4 and future work is discussed in the last section."
+  }, {
+    "heading": "2. Background",
+    "text": ""
+  }, {
+    "heading": "2.1. Gumbel-Softmax Estimator",
+    "text": "Jang et al. (2016) and Maddison et al. (2016) develop a continuous relaxation of discrete random variables in stochastic computational graphs. The main idea of the method is that the multinomial distribution can be represented according to Gumbel-Max trick, thus can be approximated by GumbelSoftmax distribution. In detail, given a probability distribution over k categories with parameter π1, π2, . . . , πk, the Gumbel-Softmax estimator gives an approximate one-hot sample y with\nyi = exp((log πi + qi)/τ)∑k j=1 exp((log πj + qj)/τ) for i = 1, . . . , k, (1)\nwhere τ is the temperature and qi is independently sampled from Gumbel distribution: qi = − log(− logUi), Ui ∼ Uniform(0, 1).\nBy using the Gumbel-Softmax estimator, we can generate sample y = (y1, ..., yk) to approximate the categorical distribution. Furthermore, as the randomness q is independent of π (which is usually defined by a set of parameters), we can use reparameterization trick to optimize the model parameters using standard backpropagation algorithms. Gumbel-Softmax estimator has been adopted in\nseveral applications such as variation autoencoder (Jang et al., 2016), generative adversarial network (Kusner & Hernández-Lobato, 2016), and language generation (Subramanian et al., 2017). To the best of our knowledge, this is the first work to introduce the Gumbel-Softmax estimator in LSTM for robust training purpose."
+  }, {
+    "heading": "2.2. Loss surface and generalization",
+    "text": "The concept of sharp and flat minima has been first discussed in (Hochreiter & Schmidhuber, 1997a; Haussler et al., 1997). Intuitively, a flat minimum x of a loss f(·) corresponds to the point for which the value of function f varies slowly in a relatively large neighborhood of x. In contrast, a sharp minimum x is such that the function f changes rapidly in a small neighborhood of x. The sensitivity of the loss function at sharp minima negatively impacts the generalization ability of a trained model on new data. Recently, several papers discuss how to modify the training process and to learn a model in a flat region so as to obtain better generalization ability. Keskar et al. (2016) show by using small-batch training, the learned model is more likely to converge to a flat region rather than a sharp one. Chaudhari et al. (2016) propose a new objective function considering the local entropy and push the model to be optimized towards a wide valley."
+  }, {
+    "heading": "3. The Proposed Training Algorithm",
+    "text": "In this section, we present a new and robust training algorithm for LSTM by learning towards binary-valued gates."
+  }, {
+    "heading": "3.1. Long Short-Term Memory RNN",
+    "text": "Recurrent neural networks process an input sequence {x1, x2, . . . , xT } sequentially and construct a corresponding sequence of hidden states/representations {h1, h2, . . . , hT }. In single-layer recurrent neural networks, the hidden states {h1, h2, . . . , hT } are used for prediction or decision making. In deep (stacked) recurrent neural networks, the hidden states in layer k are used as inputs to layer k + 1.\nIn recurrent neural networks, each hidden state is trained (implicitly) to remember and emphasize task-relevant aspects of the preceding inputs, and to incorporate new inputs via a recurrent operator, T , which converts the previous hidden state and present input into a new hidden state, e.g.,\nht = T (ht−1, xt) = tanh(Whht−1 +Wxxt + b),\nwhere Wh, Wx and b are parameters.\nLong short-term memory RNN (LSTM) (Hochreiter & Schmidhuber, 1997b) is a carefully designed recurrent structure. In addition to the hidden state ht used as a transient representation of state at timestep t, LSTM introduces a memory cell ct, intended for internal long-term storage. ct\nand ht are computed via three gate functions. The forget gate function ft directly connects ct to the memory cell ct−1 of the previous timestep via an element-wise multiplication. Large values of the forget gates cause the cell to remember most (if not all) of its previous values. The other gates control the flow of information in input (it) and output (ot) of the cell. Each gate function has a weight matrix and a bias vector; we use subscripts f , i and o to denote parameters for the forget gate function, the input gate function and the output gate function respectively, e.g., the parameters for the forget gate function are denoted by Wxf ,Whf , and bf .\nWith the above notations, an LSTM is formally defined as\nit = σ(Wxixt +Whiht−1 + bi), (2) ft = σ(Wxfxt +Whfht−1 + bf ), (3) ot = σ(Wxoxt +Whoht−1 + bo), (4) gt = tanh(Wxgxt +Whght−1 + bg), (5) ct = ft ct−1 + it gt, (6) ht = ot tanh(ct), (7)\nwhere σ(·) represents the sigmoid function and is the element-wise product."
+  }, {
+    "heading": "3.2. Training LSTM Gates Towards Binary Values",
+    "text": "The LSTM unit requires much more parameters than the simple RNN unit. As we can see from Eqn. (2) - (7), a large percentage of the parameters are used to compute the gate (sigmoid) functions. If we can push the outputs of the gates to the saturation area of the sigmoid function (i.e., towards 0 or 1), the loss function with respect to the parameters in the gates will be flat: if the parameters in the gates perturb, the change to the output of the gates is small due to the sigmoid operator (see Figure 2), and then the change to the loss is little, which means the flat region of the loss. First, as such model is robust to small parameter changes, it is robust to different model compression methods, e.g., lowprecision compression or low-rank compression. Second, as discussed in (Chaudhari et al., 2016), minima in a flat region is more likely to generalize better, and thus toward binary-valued gates may lead to better test performance.\nHowever, the task of training towards binary-valued gates is quite challenging. One straightforward idea is to sharpen the sigmoid function by using a smaller temperature, i.e., fW,b(x) = σ((Wx+b)/τ), where τ < 1 is the temperature. However, it is computationally equivalent to fW ′,b′(x) = σ(W ′x + b′) by setting W ′ = W/τ and b′ = b/τ . Then using a small temperature is equivalent to rescale the initial parameters as well as the gradients to a larger range. Usually, using an initial point in a large range with a large learning rate will harm the optimization process, and apparently cannot guarantee the outputs to be close to the boundary after training.\nIn this work, we leverage the recently developed GumbelSoftmax trick. This trick is efficient in approximating discrete distributions, and is one of the widely used methods to learn discrete random variables in stochastic computational graphs. We first provide a proposition about the approximation ability of this trick for Bernoulli distribution, which will be used in our proposed algorithm.\nProposition 3.1. Assume σ(·) is the sigmoid function. Given α ∈ R and temperature τ > 0, we define random variable Dα ∼ B(σ(α)) where B(σ(α)) is the Bernoulli distribution with parameter σ(α), and define G(α, τ) =\nσ ( α+logU−log(1−U)\nτ\n) where U ∼ Uniform(0, 1). Then\nthe following inequalities hold for arbitrary ∈ (0, 1/2),\nP (Dα = 1)− (τ/4) log(1/ ) ≤ P (G(α, τ) ≥ 1− ) ≤ P (Dα = 1), (8)\nP (Dα = 0)− (τ/4) log(1/ ) ≤ P (G(α, τ) ≤ ) ≤ P (Dα = 0). (9)\nProof. Since σ−1(x) = log (\nx 1−x\n) , we have\nP (G(α, τ) ≥ 1− )\n= P\n( α+ logU − log(1− U)\nτ ≥ log(1/ − 1) ) = P (eα−τ log(1/ −1) ≥ (1− U)/U)\n= P ( U ≥ 1\n1 + eα−τ log(1/ −1) ) = σ(α− τ log(1/ − 1)).\nConsidering that sigmoid function is (1/4)-Lipschitz continuous and morotonically increasing, we have\nP (Dα = 1)− P (G(α, τ) ≥ 1− ) = σ(α)− σ(α− τ log(1/ − 1)) ≤ (τ/4) log(1/ − 1) ≤ (τ/4) log(1/ )\nand P (Dα = 1)− P (G(α, τ) ≥ 1− ) ≥ 0. We omit the proof for Eqn. (9) as it is almost identical to the proof of Eqn. (8).\nWe can see from the above proposition, the distribution of G(α, τ) can be considered as an approximation of Bernoulli distribution B(σ(α)). The rate of convergence is characterized by Eqn. (8) and (9). When the temperature τ approaches positive zero, we directly obtain the following property, which is also proved by Maddison et al. (2016),\nP ( lim τ→0+ G(α, τ) = 1 ) = P (Dα = 1),\nP ( lim τ→0+ G(α, τ) = 0 ) = P (Dα = 0). (10)\nWe apply this method into the computation of the gates. Imagine a one-dimensional gate σ(α(θ)) where α is a scalar parameterized by θ, and assume the model will produce a larger loss if the output of the gate is close to one, and produce a smaller loss if the gate value is close to zero. If we can repeatedly sample the output of the gate using G(α(θ), τ) = σ ( α(θ)+logU−log(1−U)\nτ\n) and estimate the\nloss, any gradient-based algorithm will push the parameter θ such that the output value of the gate is close to zero in order to minimize the expected loss. By this way, we can optimize towards the binary-valued gates.\nAs the gate function is usually a vector-valued function, we extend the notations into a general form: Given α ∈ Rd and τ > 0, we define G(α, τ) = σ ( α+logU−log(1−U)\nτ\n) , where\nU is a vector and each element ui in U is independently sampled from Uniform(0, 1), i = 1, 2, . . . , d.\nIn particular, we only push the outputs of input gates and forget gates towards binary values as the output gates usually need fine-granularity information for decision making which makes binary values less desirable. To justify this, we conducted similar experiments and observed a performance drop when pushing the output gates to 0/1 together with the input gates and the forget gates.\nWe call our proposed learning method Gumbel-Gate LSTM (G2-LSTM), which works as follows during training:\nit = G(Wxixt +Whiht−1 + bi, τ) (11) ft = G(Wxfxt +Whfht−1 + bf , τ) (12) ot = σ(Wxoxt +Whoht−1 + bo) (13) gt = tanh(Wxgxt +Whght−1 + bg) (14) ct = ft ct−1 + it gt (15) ht = ot tanh(ct). (16)\nIn the forward pass, we first independently sample values for U in each time step, then updateG2-LSTMs using Eqn. (11) - (16) and calculate the loss, e.g., negative log likelihood loss. In the backward pass, as G is continuous and differentiable with respect to the parameters and the loss is continuous and differentiable with respect to G, we can use any standard gradient-based method to update the model parameters."
+  }, {
+    "heading": "4. Experiments",
+    "text": ""
+  }, {
+    "heading": "4.1. Settings",
+    "text": "We tested the proposed training algorithm on two tasks – language modeling and machine translation.2"
+  }, {
+    "heading": "4.1.1. LANGUAGE MODELING",
+    "text": "Language modeling is a very basic task for LSTM. We used the Penn Treebank corpus that contains about 1 million words. The task is to train an LSTM model to correctly predict the next word conditioned on previous words. A model is evaluated by the prediction perplexity: smaller the perplexity, better the prediction.\nWe followed the practice in (Merity et al., 2017) to set up the model architecture for LSTM: a stacked three-layer LSTM with drop-connect (Wan et al., 2013) on recurrent weights and a variant of averaged stochastic gradient descent (ASGD) (Polyak & Juditsky, 1992) for optimization, with a 500-epoch training phase and a 500-epoch finetune phase. Our training code for G2-LSTM was also based on the code released by Merity et al. (2017). Since the temperature τ in G2-LSTM does not have significant effects on the results,\n2Codes for the experiments are available at https:// github.com/zhuohan123/g2-lstm\nwe set it to 0.9 and followed all other configurations in Merity et al. (2017). We added neural cache model (Grave et al., 2016) on the top of our trained language model to further improve the perplexity."
+  }, {
+    "heading": "4.1.2. MACHINE TRANSLATION",
+    "text": "We used two datasets for experiments on neural machine translation (NMT): (1) IWSLT’14 German→English translation dataset (Cettolo et al., 2014), which is widely adopted in machine learning community (Bahdanau et al., 2016; Wiseman & Rush, 2016a; Ranzato et al., 2015). The training/validation/test sets contain about 153K/7K/7K sentence pairs respectively, with words pre-processed into sub-word units using byte pair encoding (BPE) (Sennrich et al., 2016). We chose 25K most frequent sub-word units as the vocabulary for both German and English. (2) English→German translation dataset in WMT’14, which is also commonly used as a benchmark task to evaluate different NMT models (Bahdanau et al., 2014; Wu et al., 2016; Gehring et al., 2017; He et al., 2017). The training set contains 4.5M English→German sentence pairs, Newstest2014 is used as the test set, and the concatenation of Newstest2012 and Newstest2013 is used as the validation set. Similarly, BPE was used to form a vocabulary of most frequent 30K subword units for both languages. In both datasets, we removed\nthe sentences with more than 64 sub-word units in training.\nFor the German→English dataset, we adopted a stacked two-layer encoder-decoder framework. We set the size of word embedding and hidden state to 256. As the amount of data in the English→German dataset is much larger, we adopted a stacked three-layer encoder-decoder framework and set the size of word embedding and hidden state to 512 and 1024 respectively. The first layer of the encoder was bidirectional. We also used dropout in training stacked LSTM as in (Zaremba et al., 2014), with dropout value determined via validation set performance. For both experiments, we set the temperature τ for G2-LSTM to 0.9, the same as language modeling task. The mini-batch size was 32/64 for German→English/English→German respectively. All models were trained with AdaDelta (Zeiler, 2012) on one M40 GPU. Both gradient clipping norms were set to 2.0. We used tokenized case-insensitive and case-sensitive BLEU as evaluation measure for German→English/English→German respectively, following common practice.3 The beam size is set to 5 during the inference step."
+  }, {
+    "heading": "4.2. Experimental Results",
+    "text": "The experimental results are shown in Table 1 and 2. We compare our training method with two algorithms. For the first algorithm (we call it Baseline), we remove the Gumble-Softmax trick and train the model using standard optimization methods. For the second algorithm (we call it Sharpened Sigmoid), we use a sharpened sigmoid function as described in Section 3.2 by setting τ = 0.2 and check whether such trick can bring better performance.\nFrom the results, we can see that our learned models are competitive or better than all baseline models. In language modeling task, we outperform the baseline algorithms for 0.7/1.1 points (1.2/1.4 points without continuous cache pointer) in terms of test perplexity. For machine translation,\n3Calculated by the script at https://github.com/ moses-smt/mosesdecoder/blob/master/scripts/ generic/multi-bleu.perl\nwe outperform the baselines for 0.95/2.22 and 0.54/0.79 points in terms of BLEU score for German→English and English→German dataset respectively. Note that the only difference between G2-LSTM and the baselines is the training algorithm, while they adopt the same model structure. Thus, better results of G2-LSTM demonstrate the effectiveness of our proposed training method. This shows that restricting the outputs of the gates towards binary values doesn’t bring performance drop at all. On the contrary, the performances are even better. We conclude that such benefit may come from the better generalization ability.\nWe also list the performance of previous works in literature, which may adopt different model architectures or settings. For language modeling, we obtain better performance results compared to the previous works listed in the table. For German→English translation, the two-layer stacked encoder-decoder model we learned outperforms all previous works. For English→German translation, our result is worse than GNMT (Wu et al., 2016) as they used a stacked eight-layer model while we only used a three-layer one."
+  }, {
+    "heading": "4.3. Sensitivity Analysis",
+    "text": "We conducted a set of experiments to test how sensitive our learned models were when compressing their gate parameters. We considered two ways of compression as follows.\nLow-Precision Compression We compressed parameters in the input and forget gates to lower precision. Doing so the model can be compressed to a relatively small size. In particular, we applied round and clip operations to the parameters of the input and forget gates:\nroundr(x) = round(x/r) ∗ r, (17) clipc(x) = clip(x,−c, c). (18)\nWe tested two settings of low-precision compression. In the first setting (named as Round), we rounded the parameters using Eqn. (17). In this way, we reduced the support set of the parameters in the gates. In the second setting (named as Round & Clip), we further clipped the rounded value to a\nfixed range using Eqn. (18) and thus restricted the number of different values. As the two tasks are far different, we set the round parameter r = 0.2 and the clip parameter c = 0.4 for the task of language modeling, and set c = 1.0 and r = 0.5 for neural machine translation. As a result, parameters of input gates and forget gates in language modeling can only take values from (0.0,±0.2,±0.4), and (0.0,±0.5,±1.0) for machine translation.\nLow-Rank Compression We compressed parameter matrices of the input/forget gates to lower-rank matrices through singular value decomposition, which can reduce the model size and lead to faster matrix multiplication. Given that the hidden states of the task of language modeling were of much larger dimension than that of neural machine translation, we set rank = 64/128 for language modeling and rank = 16/32 for neural machine translation.\nWe summarize the results in Table 3-5. From Table 3, we can see that for language modeling both the baseline and our learned model are quite robust to low-precision compression, but our model is much more robust and significantly outperforms the baseline with low-rank approximation. Even setting rank = 64 (roughly 12× compression rate of the gates), we still get 56.0 perplexity, while the perplexity of the baseline model increases from 52.8 to 65.5, i.e., becoming 24% worse. For machine translation, our proposed method is always better than the baseline model, no matter for low-precision or low-rank compression. Even if setting rank = 16 (roughly 8×/32× compression rate of the gates for German→English and English→German respectively), we still get roughly comparable translation accuracy to the baseline model with full parameters. All results show\nthat the models trained with our proposed method are less sensitive to parameter compression."
+  }, {
+    "heading": "4.4. Visualization of the Gates",
+    "text": "In addition to comparing the final performances, we further looked inside the learned models and checked the gates.\nTo well verify the effectiveness of our proposed G2-LSTM, we did a set of experiments to show the values of gates learned by G2-LSTM are near the boundary and reasonable, based on the model learned from German→English translation task. We show the value distribution of the gates trained using classic LSTM and G2-LSTM. To achieve this, we sampled 10000 sentence pairs from the training set and fed them into the learned models. We got the output value vectors of the input/forget gates in the first layer of the decoder. We recorded the value of each element in the output vectors and plotted the distributions in Figure 1 and 3.\nFrom the figures, we can see that although both LSTM and G2-LSTM work reasonably well in practice, the output values of the gates are very different. In LSTM, the distributions of the gate values are relatively uniform and have no clear concentration. In contrast, the values of the input gates of G2-LSTM are concentrated in the region close to 1, which suggests that our learned model tries to keep most information from the input words; the values of the forget gates are concentrated in the boundary regions (i.e., either the region close to 0 or the region close to 1). This observation shows that our training algorithm meets our expectation and successfully pushes the gates to 0/1.\nBesides the overall distribution of gate values over a sam-\npled set of training data, here we provide a case study for sampled sentences. We calculated the average value of the output vector of the input and forget gate functions for each word. In particular, we focused on the average value of the input/forget gate functions in the first layer and check whether the averages are reasonable. We plot the heatmap of the English sentence part in Figure 4.\nFirst, we can see that our G2-LSTM does not drop information in the input gate function since the average values are relatively large for all words. In contrast, the average values of the input gates of LSTM are sometimes small (less than 0.5), even for the meaningful word like “wrong”. As those words are not included into LSTM, they cannot be effectively encoded and decoded, and thus lead to bad translation results. Second, for G2-LSTM, most of the words with small values for forget gates are function words (e.g., conjunctions and punctuations) or the boundaries in clauses. That is, our training algorithm indeed ensures the model to\nforget information on the boundaries in the sentences, and reset the hidden states with new inputs."
+  }, {
+    "heading": "5. Conclusion and Future Work",
+    "text": "In this paper, we designed a new training algorithm for LSTM by leveraging the recently developed GumbelSoftmax estimator. Our training algorithm can push the values of the input and forget gates to 0 or 1, leading to robust LSTM models. Experiments on language modeling and machine translation demonstrated the effectiveness of the proposed training algorithm.\nWe will explore following directions in the future. First, we will apply our algorithm to deeper models (e.g., 8+ layers) and test on larger datasets. Second, we have considered the tasks of language modeling and machine translation. We will study more applications such as question answering and text summarization."
+  }, {
+    "heading": "Acknowledgements",
+    "text": "This work was partially supported by National Basic Research Program of China (973 Program) (grant no. 2015CB352502), NSFC (61573026). We would like to thank Chen Xing and Qizhe Xie for helpful discussions, and the anonymous reviewers for their valuable comments on our paper."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Neural machine translation by jointly learning to align and translate",
+    "authors": ["D. Bahdanau", "K. Cho", "Y. Bengio"],
+    "venue": "arXiv preprint arXiv:1409.0473,",
+    "year": 2014
+  }, {
+    "title": "An actorcritic algorithm for sequence prediction",
+    "authors": ["D. Bahdanau", "P. Brakel", "K. Xu", "A. Goyal", "R. Lowe", "J. Pineau", "A. Courville", "Y. Bengio"],
+    "venue": "arXiv preprint arXiv:1607.07086,",
+    "year": 2016
+  }, {
+    "title": "Massive exploration of neural machine translation architectures",
+    "authors": ["D. Britz", "A. Goldie", "T. Luong", "Q. Le"],
+    "venue": "arXiv preprint arXiv:1703.03906,",
+    "year": 2017
+  }, {
+    "title": "Report on the 11th iwslt evaluation campaign, iwslt 2014",
+    "authors": ["M. Cettolo", "J. Niehues", "S. Stüker", "L. Bentivogli", "M. Federico"],
+    "venue": "In Proceedings of the International Workshop on Spoken Language Translation,",
+    "year": 2014
+  }, {
+    "title": "Entropy-sgd: Biasing gradient descent into wide valleys",
+    "authors": ["P. Chaudhari", "A. Choromanska", "S. Soatto", "Y. LeCun"],
+    "venue": "arXiv preprint arXiv:1611.01838,",
+    "year": 2016
+  }, {
+    "title": "Binarized neural networks: Training deep neural networks with weights and activations constrained to+ 1 or-1",
+    "authors": ["M. Courbariaux", "I. Hubara", "D. Soudry", "R. El-Yaniv", "Y. Bengio"],
+    "venue": "arXiv preprint arXiv:1602.02830,",
+    "year": 2016
+  }, {
+    "title": "A theoretically grounded application of dropout in recurrent neural networks",
+    "authors": ["Y. Gal", "Z. Ghahramani"],
+    "venue": "In Advances in neural information processing systems,",
+    "year": 2016
+  }, {
+    "title": "Convolutional sequence to sequence learning",
+    "authors": ["J. Gehring", "M. Auli", "D. Grangier", "D. Yarats", "Y.N. Dauphin"],
+    "venue": "arXiv preprint arXiv:1705.03122,",
+    "year": 2017
+  }, {
+    "title": "Learning to forget: Continual prediction with lstm",
+    "authors": ["F.A. Gers", "J. Schmidhuber", "F. Cummins"],
+    "year": 1999
+  }, {
+    "title": "Improving neural language models with a continuous cache",
+    "authors": ["E. Grave", "A. Joulin", "N. Usunier"],
+    "venue": "arXiv preprint arXiv:1612.04426,",
+    "year": 2016
+  }, {
+    "title": "Mutual information, metric entropy and cumulative relative entropy risk",
+    "authors": ["D. Haussler", "M Opper"],
+    "venue": "The Annals of Statistics,",
+    "year": 1997
+  }, {
+    "title": "Dual learning for machine translation",
+    "authors": ["D. He", "Y. Xia", "T. Qin", "L. Wang", "N. Yu", "T. Liu", "Ma", "W.-Y"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2016
+  }, {
+    "title": "Decoding with value networks for neural machine translation",
+    "authors": ["D. He", "H. Lu", "Y. Xia", "T. Qin", "L. Wang", "T. Liu"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2017
+  }, {
+    "title": "The vanishing gradient problem during learning recurrent neural nets and problem solutions",
+    "authors": ["S. Hochreiter"],
+    "venue": "International Journal of Uncertainty, Fuzziness and KnowledgeBased Systems,",
+    "year": 1998
+  }, {
+    "title": "Long short-term memory",
+    "authors": ["S. Hochreiter", "J. Schmidhuber"],
+    "venue": "Neural computation,",
+    "year": 1997
+  }, {
+    "title": "Tying word vectors and word classifiers: A loss framework for language modeling",
+    "authors": ["H. Inan", "K. Khosravi", "R. Socher"],
+    "venue": "arXiv preprint arXiv:1611.01462,",
+    "year": 2016
+  }, {
+    "title": "Categorical reparameterization with gumbel-softmax",
+    "authors": ["E. Jang", "S. Gu", "B. Poole"],
+    "venue": "arXiv preprint arXiv:1611.01144,",
+    "year": 2016
+  }, {
+    "title": "Exploring the limits of language modeling",
+    "authors": ["R. Jozefowicz", "O. Vinyals", "M. Schuster", "N. Shazeer", "Y. Wu"],
+    "venue": "arXiv preprint arXiv:1602.02410,",
+    "year": 2016
+  }, {
+    "title": "Visualizing and understanding recurrent networks",
+    "authors": ["A. Karpathy", "J. Johnson", "L. Fei-Fei"],
+    "venue": "arXiv preprint arXiv:1506.02078,",
+    "year": 2015
+  }, {
+    "title": "On large-batch training for deep learning: Generalization gap and sharp minima",
+    "authors": ["N.S. Keskar", "D. Mudigere", "J. Nocedal", "M. Smelyanskiy", "P.T.P. Tang"],
+    "venue": "arXiv preprint arXiv:1609.04836,",
+    "year": 2016
+  }, {
+    "title": "Characteraware neural language models",
+    "authors": ["Y. Kim", "Y. Jernite", "D. Sontag", "A.M. Rush"],
+    "venue": "In AAAI,",
+    "year": 2016
+  }, {
+    "title": "Zoneout: Regularizing rnns by randomly preserving hidden activations",
+    "authors": ["D. Krueger", "T. Maharaj", "J. Kramar", "M. Pezeshki", "N. Ballas", "N.R. Ke", "A. Goyal", "Y. Bengio", "A. Courville", "C. Pal"],
+    "year": 2016
+  }, {
+    "title": "Gans for sequences of discrete elements with the gumbel-softmax distribution",
+    "authors": ["M.J. Kusner", "J.M. Hernández-Lobato"],
+    "venue": "arXiv preprint arXiv:1611.04051,",
+    "year": 2016
+  }, {
+    "title": "Effective approaches to attention-based neural machine translation",
+    "authors": ["Luong", "M.-T", "H. Pham", "C.D. Manning"],
+    "venue": "arXiv preprint arXiv:1508.04025,",
+    "year": 2015
+  }, {
+    "title": "The concrete distribution: A continuous relaxation of discrete random variables",
+    "authors": ["C.J. Maddison", "A. Mnih", "Y.W. Teh"],
+    "venue": "arXiv preprint arXiv:1611.00712,",
+    "year": 2016
+  }, {
+    "title": "On the state of the art of evaluation in neural language models",
+    "authors": ["G. Melis", "C. Dyer", "P. Blunsom"],
+    "venue": "arXiv preprint arXiv:1707.05589,",
+    "year": 2017
+  }, {
+    "title": "Pointer sentinel mixture models",
+    "authors": ["S. Merity", "C. Xiong", "J. Bradbury", "R. Socher"],
+    "venue": "arXiv preprint arXiv:1609.07843,",
+    "year": 2016
+  }, {
+    "title": "Regularizing and optimizing lstm language models",
+    "authors": ["S. Merity", "N.S. Keskar", "R. Socher"],
+    "venue": "arXiv preprint arXiv:1708.02182,",
+    "year": 2017
+  }, {
+    "title": "Automatic rule extraction from long short term memory networks",
+    "authors": ["W.J. Murdoch", "A. Szlam"],
+    "venue": "arXiv preprint arXiv:1702.02540,",
+    "year": 2017
+  }, {
+    "title": "Acceleration of stochastic approximation by averaging",
+    "authors": ["B.T. Polyak", "A.B. Juditsky"],
+    "venue": "SIAM Journal on Control and Optimization,",
+    "year": 1992
+  }, {
+    "title": "Sequence level training with recurrent neural networks",
+    "authors": ["M. Ranzato", "S. Chopra", "M. Auli", "W. Zaremba"],
+    "venue": "arXiv preprint arXiv:1511.06732,",
+    "year": 2015
+  }, {
+    "title": "Neural machine translation of rare words with subword units",
+    "authors": ["R. Sennrich", "B. Haddow", "A. Birch"],
+    "venue": "In ACL,",
+    "year": 2016
+  }, {
+    "title": "Minimum risk training for neural machine translation",
+    "authors": ["S. Shen", "Y. Cheng", "Z. He", "W. He", "H. Wu", "M. Sun", "Y. Liu"],
+    "venue": "arXiv preprint arXiv:1512.02433,",
+    "year": 2015
+  }, {
+    "title": "Adversarial generation of natural language",
+    "authors": ["S. Subramanian", "S. Rajeswar", "F. Dutil", "C. Pal", "A. Courville"],
+    "venue": "ACL 2017,",
+    "year": 2017
+  }, {
+    "title": "Learning to generate long-term future via hierarchical prediction",
+    "authors": ["R. Villegas", "J. Yang", "Y. Zou", "S. Sohn", "X. Lin", "H. Lee"],
+    "venue": "arXiv preprint arXiv:1704.05831,",
+    "year": 2017
+  }, {
+    "title": "Show and tell: A neural image caption generator",
+    "authors": ["O. Vinyals", "A. Toshev", "S. Bengio", "D. Erhan"],
+    "venue": "In Proceedings of the IEEE conference on computer vision and pattern recognition,",
+    "year": 2015
+  }, {
+    "title": "Regularization of neural networks using dropconnect",
+    "authors": ["L. Wan", "M. Zeiler", "S. Zhang", "Y. Le Cun", "R. Fergus"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2013
+  }, {
+    "title": "Sequence-to-sequence learning as beam-search optimization",
+    "authors": ["S. Wiseman", "A.M. Rush"],
+    "venue": "In EMNLP, November",
+    "year": 2016
+  }, {
+    "title": "Sequence-to-sequence learning as beam-search optimization",
+    "authors": ["S. Wiseman", "A.M. Rush"],
+    "venue": "arXiv preprint arXiv:1606.02960,",
+    "year": 2016
+  }, {
+    "title": "Google’s neural machine translation system: Bridging the gap between human and machine translation",
+    "authors": ["Y. Wu", "M. Schuster", "Z. Chen", "Q.V. Le", "M. Norouzi", "W. Macherey", "M. Krikun", "Y. Cao", "Q. Gao", "K Macherey"],
+    "venue": "arXiv preprint arXiv:1609.08144,",
+    "year": 2016
+  }, {
+    "title": "Convolutional lstm network: A machine learning approach for precipitation nowcasting",
+    "authors": ["S. Xingjian", "Z. Chen", "H. Wang", "Yeung", "D.-Y", "Wong", "W.-K", "Woo", "W.-c"],
+    "venue": "In Advances in neural information processing systems,",
+    "year": 2015
+  }, {
+    "title": "Show, attend and tell: Neural image caption generation with visual attention",
+    "authors": ["K. Xu", "J. Ba", "R. Kiros", "K. Cho", "A. Courville", "R. Salakhudinov", "R. Zemel", "Y. Bengio"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2015
+  }, {
+    "title": "Recurrent neural network regularization",
+    "authors": ["W. Zaremba", "I. Sutskever", "O. Vinyals"],
+    "venue": "arXiv preprint arXiv:1409.2329,",
+    "year": 2014
+  }, {
+    "title": "Adadelta: an adaptive learning rate method",
+    "authors": ["M.D. Zeiler"],
+    "venue": "arXiv preprint arXiv:1212.5701,",
+    "year": 2012
+  }, {
+    "title": "Highway long short-term memory rnns for distant speech recognition",
+    "authors": ["Y. Zhang", "G. Chen", "D. Yu", "K. Yaco", "S. Khudanpur", "J. Glass"],
+    "venue": "In Acoustics, Speech and Signal Processing (ICASSP),",
+    "year": 2016
+  }, {
+    "title": "Neural architecture search with reinforcement learning",
+    "authors": ["B. Zoph", "Q.V. Le"],
+    "venue": "arXiv preprint arXiv:1611.01578,",
+    "year": 2016
+  }],
+  "id": "SP:7b8cf08e5e42a5fad3a75cdbad3f71d9e4b82d4e",
+  "authors": [{
+    "name": "Zhuohan Li",
+    "affiliations": []
+  }, {
+    "name": "Di He",
+    "affiliations": []
+  }, {
+    "name": "Fei Tian",
+    "affiliations": []
+  }, {
+    "name": "Wei Chen",
+    "affiliations": []
+  }, {
+    "name": "Tao Qin",
+    "affiliations": []
+  }, {
+    "name": "Liwei Wang",
+    "affiliations": []
+  }, {
+    "name": "Tie-Yan Liu",
+    "affiliations": []
+  }],
+  "abstractText": "Long Short-Term Memory (LSTM) is one of the most widely used recurrent structures in sequence modeling. It aims to use gates to control information flow (e.g., whether to skip some information or not) in the recurrent computations, although its practical implementation based on soft gates only partially achieves this goal. In this paper, we propose a new way for LSTM training, which pushes the output values of the gates towards 0 or 1. By doing so, we can better control the information flow: the gates are mostly open or closed, instead of in a middle state, which makes the results more interpretable. Empirical studies show that (1) Although it seems that we restrict the model capacity, there is no performance drop: we achieve better or comparable performances due to its better generalization ability; (2) The outputs of gates are not sensitive to their inputs: we can easily compress the LSTM unit in multiple ways, e.g., low-rank approximation and low-precision approximation. The compressed models are even better than the baseline models without compression.",
+  "title": "Towards Binary-Valued Gates for Robust LSTM Training"
+}

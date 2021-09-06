@@ -1,0 +1,246 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "A stochastic differential equation (SDE) defines a diffusion process, which evolves randomly over time, by describing its instantaneous behaviour. As such, SDEs are powerful modelling tools used extensively in fields such as econometrics (Black & Scholes, 1973; Eraker, 2001), biology (Gillespie, 2000; Golightly & Wilkinson, 2011), physics (van Kampen, 2007) and epidemiology (Fuchs, 2013).\nIt is only possible to work with analytic solutions to SDEs in special cases. Therefore it is common to use a numerical approximation, such as the Euler-Maruyama scheme. Here the diffusion process is defined only on a grid of time points, and the transition density between successive diffusion states is approximated as Gaussian. The approximation\n*Equal contribution 1School of Mathematics, Statistics and Physics, Newcastle University, Newcastle, UK 2School of Computing, Newcastle University, Newcastle, UK. Correspondence to: Tom Ryder <t.ryder2@newcastle.ac.uk>, Dennis Prangle <dennis.prangle@newcastle.ac.uk>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\nerror involved converges to zero as the grid becomes finer.\nEven under discretisation, statistical inference for SDEs observed at discrete times is challenging. The difficulty is that, along with unknown parameters θ in the description of the SDE, there is an unknown latent path of the diffusion process, x. An inference method must somehow deal with these high dimensional, highly structured latent variables.\nOur proposed method uses recent advances in variational inference to jointly infer θ and x. We introduce a flexible family of approximations to the posterior distribution and select the member closest to the true posterior. We use a standard mean-field approximation for the θ posterior, and introduce a novel recurrent neural network (RNN) approximation for the posterior of x conditional on θ. The RNN learns how to supply Gaussian state transitions between successive time points which closely match those for the intractable conditioned diffusion process.\nOur black-box variational inference method is a simple and fast way to produce approximate inference for any SDE system. We illustrate our method on Lotka-Volterra and epidemic examples, achieving accurate parameter estimates in just a few hours under default tuning choices. Although our parameter posteriors are over-concentrated, as in most variational methods, our approximation of the conditioned diffusion process is close to the true posterior. In comparison, existing Markov chain Monte Carlo (MCMC) methods (see Section 1.1) require more tuning choices and can take days to run (Whitaker et al., 2017a)."
+  }, {
+    "heading": "1.1. Related Work",
+    "text": "Variational inference Several authors have looked at variational inference for SDEs (Archambeau et al., 2008) or related problems such as Markov jump processes (Ruttor et al., 2010) and state space models (Archer et al., 2016; Quiroz et al., 2018). The novelty of our approach is to use: (1) stochastic optimisation rather than variational calculus; (2) a RNN-based variational approximation for the latent states instead of a mean-field or multivariate Gaussian approach. We expect (2) is especially relevant to sparsely observed SDEs, where the latent states between observations may have a particularly complex dependency structure.\nAnother approach (Moreno et al., 2016) is to perform vari-\national inference for the parameters only, using latent variables drawn from their prior in the ELBO estimate. Such latent states are typically a poor match to the observed data and so make a negligible contribution to the ELBO. To deal with the problem, close matches are upweighted. Our approach avoids this extra approximation by instead learning the posterior distribution of the latent variables.\nOur method can also be related to recent work on normalising flows as variational approximations (Rezende & Mohamed, 2015). As in that work, our variational approximation can be viewed as transforming a N(0, I) sample vector by successive linear transformations to an approximate posterior sample (of the diffusion states in our case). Our work uses SDE theory to select simple and cheap transformations which produce a particularly good approximation.\nMonte Carlo A popular approach in the Monte Carlo literature on SDEs is to introduce a bridge construct: an approximation to the discretised diffusion process conditional on the parameters and observations at a single time, derived using probability theory and various simplifying approximations. The goal is to produce a path bridging between two observation times. Combining successive bridges forms a complete diffusion path. Bridge constructs can be used to produce proposals within Monte Carlo algorithms such as MCMC (see e.g. Roberts & Stramer 2001; Golightly & Wilkinson 2008; Fuchs 2013; van der Meulen et al. 2017). However, designing a bridge construct with desirable features for a particular problem is a challenging and time consuming tuning choice. (Some particularly difficult regimes for bridge constructs are discussed in Section 5.) From this point of view, our contribution is to use machine learning to effectively automate the design of a bridge construct.\nAnother Monte Carlo approach is to perform approximate inference based on low dimensional summary statistics of the observations (Picchini, 2014). This results in a loss of information, which our approach avoids."
+  }, {
+    "heading": "2. Stochastic Differential Equations",
+    "text": "Consider an Itô process {Xt, t ≥ 0} satisfying the SDE\ndXt = α(Xt, θ)dt+ √ β(Xt, θ)dWt, X0 = x0. (1)\nHere Xt is a p-dimensional vector of random variables, α is a p-dimensional drift vector, β is a p× p positive definite diffusion matrix (with √ β representing a matrix square root) and Wt is a p-vector of standard and uncorrelated Brownian motion processes. The drift and diffusion depend on θ = (θ1, θ2, ..., θc)\n′, a vector of unknown parameters (which may also include the initial condition x0).\nWe assume that α(·) and β(·) are sufficiently regular that (1) has a weak non-explosive solution (Øksendal, 2003). In\nthis case, (1) defines a diffusion process. Such processes are always Markovian (i.e. memoryless).\nWe further assume partial noisy observations of the latent process. Suppose that there are d + 1 observation times t0, t1, . . . , td = T . In the simplest case, these times are equally spaced, separated by a time-step of ∆t. Let ytj be a vector of p0 observations at time tj , for some p0 ≤ p. Following Golightly & Wilkinson (2008), among others, we assume that\nytj = F ′Xtj + ωtj , ωtj indep∼ N(0,Σ), (2)\nwhere F is a constant p×p0 matrix, and Σ is a p0×p0 matrix which may be assumed known or the object of inference. For the latter case Σ should be a specified function of θ.\nUpon choosing a prior density p(θ), Bayesian inference proceeds via the parameter posterior p(θ|y), or alternatively the joint posterior p(θ, x|y).\nDiscretisation Few SDEs permit analytical solutions to (1) and instead it is common to use an approximation based on time discretisation. We therefore introduce intermediate time-points between observation times. For concreteness, we present our methods for the case of equally spaced observations with t0 = 0. (It is easy to adapt them to alternative specifications of time points, such as those required by irregularly-spaced observation times.) We introduce k − 1 time-points between successive observations, giving a regular grid of times τi = i∆τ for i = 0, 1, 2, . . . ,m = dk, with time-step ∆τ = ∆t/k. Note that i = 0, k, 2k, . . . , dk give the observation times. The role of k is to ensure the discretisation can be made arbitrarily accurate, at the expense of increased computational cost.\nWe work with the simplest discretisation, the EulerMaruyama scheme, in which transition densities between states at successive times are approximated as Gaussian\np ( xτi+1 |xτi , θ ) = ϕ ( xτi+1 − xτi ; α(xτi , θ)∆τ, β(xτi , θ)∆τ ) ,\n(3)\nwhere ϕ(·;µ, S) is the Gaussian density with mean µ and variance matrix S. A generative expression of this is\nxτi+1 = xτi + α(xτi , θ)∆τ + √ β(xτi , θ)∆τ zi+1, (4)\nwhere zi+1 is an independent N(0, Ip) realisation.\nDiscretisation is not guaranteed to preserve properties of the underlying SDE. An issue which is particularly relevant later is positivity. In many SDEs, such as population models, it is guaranteed that some components of Xt are always positive. However, in (4) xτi+1 is sampled from a Gaussian, which has unbounded support. Consequently, there is a non-zero probability of sampling negative values. This is problematic\nas the drift or diffusion function may be poorly behaved or undefined for such input. A simple solution to this problem is the use of a reflecting boundary (Skorokhod, 1961), for example by projecting invalid xτi+1 values back to the valid region (Dangerfield et al., 2012).\nPosterior The joint posterior under the Euler-Maruyama discretisation is\np(θ, x|y) ∝ p(θ)p(x|θ)p(y|x, θ), (5)\np(x|θ) = m−1∏ i=0 ϕ ( xτi+1 − xτi ; α(xτi , θ)∆τ,\nβ(xτi , θ)∆τ ) (6)\np(y|x, θ) = d∏ i=0 ϕ (yti ;F ′xti ,Σ) . (7)\nIn principle Monte Carlo algorithms can sample from (5). However this is difficult in practice due to its high dimension and complex dependency structure.\nConditioned processes Consider the process defined by conditioning (1) on an initial state, x0 and an exactly observed future state, xt1 . This conditioned process itself satisfies an SDE (see e.g. Rogers & Williams, 2013) with drift and diffusion\nα̂(xt, θ) = α(xt, θ) + β(xt, θ)∇xt log π (xt1 |xt, θ) , (8)\nβ̂(xt, θ) = β(xt, θ), (9)\nwhere π (xt1 |xt, θ) is the transition density of the unconditioned process. While this is intractable in most cases, the result motivates our choice of variational approximation later.\nIn some simple situations a discretised approximation of this conditioned process can be derived (see e.g. Papaspiliopoulos et al. 2013) in which the diffusion matrix is scaled down as the observation time is approached. Intuitively this is appealing: conditioned paths converge towards the observation, so nearby random deviations are smaller in scale. This motivates us to use a variational approximation in which the diffusion matrix is not constrained to follow (9), and instead is allowed to shrink."
+  }, {
+    "heading": "3. Approximate Bayesian Inference",
+    "text": "Suppose we have a likelihood p(y|θ) for parameters θ under observations y. Given a prior density p(θ) we wish to infer the posterior density p(θ|y) = p(θ)p(y|θ)/p(y). It is typically possible to numerically evaluate the unnormalised posterior p(θ, y) = p(θ)p(y|θ). Estimating the normalising constant p(y) = ∫ p(θ, y)dθ, known as the evidence, is useful for Bayesian model selection."
+  }, {
+    "heading": "3.1. Variational Inference",
+    "text": "Variational inference (VI) (see e.g. Blei et al., 2017) introduces a family of approximations to the posterior indexed by φ, q(θ;φ). Optimisation is then used to find φ minimising the Kullback-Leibler divergence KL(q(θ;φ)||p(θ|y)). This is equivalent to maximising the ELBO (evidence lower bound) (Jordan et al., 1999),\nEθ∼q(·;φ)[log p(θ, y)− log q(θ;φ)]. (10)\nThe optimal q(θ;φ) is an approximation to the posterior distribution. This is typically overconcentrated, unless the approximating family is rich enough to allow particularly close matches to the posterior.\nThe optimisation required by VI can be performed efficiently using the reparameterisation trick (Kingma & Welling, 2014; Rezende et al., 2014; Titsias & Lázaro-Gredilla, 2014). This requires expressing θ ∼ q(·;φ) as a non-centred parameterisation (Papaspiliopoulos et al., 2003). That is, writing θ as the output of an invertible deterministic function g( , φ) for some random variable with a fixed distribution. Then the ELBO can be written as\nL(φ) = E [log p(θ, y)− log q(θ;φ)], (11)\nwith an unbiased Monte-Carlo estimate\nL̂(φ) = 1 n n∑ i=1 [log p(θ(i), y)− log q(θ(i);φ)], (12)\nwhere θ(i) = g( (i), φ) and (1), . . . , (n) are independent samples. Assuming L̂ is differentiable with respect to φ, the gradient of (12) can be calculated using automatic differentiation, and the resulting unbiased estimator of∇L(φ) used in stochastic gradient descent or similar algorithms."
+  }, {
+    "heading": "3.2. Importance Sampling",
+    "text": "When variational inference outputs a good match to the posterior distribution, importance sampling (IS) (see e.g. Robert, 2004) can correct remaining inaccuracies and provide near-exact posterior inference. In more detail, select an importance density q(θ) which can easily be sampled from, and satisfies supp q(θ) ⊇ supp p(θ|y). IS samples θ(1), θ(2), . . . , θ(N) from q and calculates weights wi = p(θ\n(i), y)/q(θ(i)). Then, for any function h, an estimate of Eθ∼p(·|y)[h(θ)] is\nN∑ i=1 h(θ(i))wi / N∑ i=1 wi. (13)\nThis is consistent for large N , but in practice q should approximate the posterior for accurate estimation at a feasible cost. Also note that N−1 ∑N i=1 wi is an unbiased and consistent estimate of the evidence.\nA diagnostic for the quality of IS results is the effective sample size (ESS). This is defined as\nNeff = ( N∑ i=1 wi )2/ N∑ i=1 w2i . (14)\nFor most functions h, the variance of (13) approximately equals that of an idealised Monte Carlo estimate based on Neff independent samples from p(θ|y) (Liu, 1996). In practice we will use a variational approximation as the importance density, and the ESS to assess whether this is sufficiently good to produce accurate estimates. However, ESS values can be an unstable for poor importance densities (Vehtari et al., 2017) so later we also consider other problemspecific evidence for the quality of our results."
+  }, {
+    "heading": "4. Variational Inference for SDEs",
+    "text": "Our variational approximation to the posterior (5) is\nq(θ, x;φ) = q(θ;φθ)q(x|θ;φx). (15)\nThese factors represent approximations to p(θ|y) and p(x|θ, y) respectively, which are described below. Here φθ and φx are the variational parameters for the two factors, and φ is the collection of all variational parameters. Note our eventual choice of q(x|θ;φx) depends on several features of the data and model (see list in Section 4.5), but we suppress this in our notation for simplicity."
+  }, {
+    "heading": "4.1. Approximate Parameter Posterior",
+    "text": "For q(θ;φθ) we use the mean-field Gaussian approximation\nq(θ;φθ) = c∏ i=1 ϕ(θi;µi, s 2 i ), (16)\nwith φθ = (µ1, . . . , µc, s1, . . . , sc). Hence the components of θ are independent Gaussians. To express θ using a noncentred parameterisation, we write\nθ = gθ( 1, φθ) = S 1 + µ. (17)\nwhere ∼ N(0, Ic), S = diag(s1, . . . , sc) and µ = (µ1, . . . , µc).\nIt may be necessary to transform θ to an alternative parameterisation ϑ so that a Gaussian approximation is appropriate e.g. log-transforming parameters constrained to be positive.\nMean-field approximations are imperfect, often producing underdispersed estimates of the posterior (see e.g. Blei et al., 2017), and more sophisticated approximations (e.g. Rezende & Mohamed, 2015) could be used here instead. However mean-field approximations suffice to give good parameter estimation in our examples."
+  }, {
+    "heading": "4.2. Approximate Conditioned Diffusion Process",
+    "text": "Motivated by the result that a diffusion process conditioned on an exact observation is itself an SDE (see Section 2), we base q(x|θ;φx) upon a discretised diffusion. A generative definition is\nxτi+1 = h ( xτi + α̃(xτi , y, θ, τi;φx)∆τ\n+ √ β̃(xτi , y, θ, τi;φx)∆τzi+1 ) ,\n(18)\nwhere α̃ and β̃ are drift and diffusion functions. Taking h as the identity function gives a discretised diffusion process. However often we use h to impose positivity constraints on some components of x – see Section 4.3.\nThe resulting variational density q(x|θ;φx) is\nm−1∏ i=0 ϕ ( xτi+1 − xτi ; α̃(xτi , y, θ, τi;φx)∆τ,\nβ̃(xτi , y, θ, τi;φx)∆τ ) |det Ji|.\n(19)\nwhere Ji is the Jacobian matrix associated with the transformation h in (18). To express x with a non-centred parameterisation, let 2 ∼ N(0, Ipm) be the flattened vector of (z1, z2, . . . , zm) realisations. Then apply (18) repeatedly. Let the outcome be represented by the function\nx = gx( 2, θ, φx). (20)\nWe use a neural network, with parameters φx, to serve as our functions α̃ and β̃. At time τi it acts as follows. The network’s input is several features (described in Section 4.5) computed from: the current diffusion state xτi , the observations y, the parameters θ and the current time τi. The network outputs a drift vector and diffusion matrix (see Section 4.5 for details of the latter), which are used to sample xτi+1 from (18). This state forms part of the neural network input at time τi+1. So the network just discussed forms a cell of an overall recurrent neural network (RNN) structure for q(x|θ;φx). Note that long-term memory features are not required as we wish to produce a diffusion process, which is memoryless."
+  }, {
+    "heading": "4.3. Ensuring Positivity",
+    "text": "In practice, we take h in (18) to be a function which applies the identity function to unconstrained components of the diffusion state, and the function softplus(z) = log(1 + ez) to components with positivity constraints. This function produces strictly positive outputs while having little effect on positive inputs above 2. The latter property means our variational approximation usually remains similar to a discretised\ndiffusion process. Alternative transformations could be used if state values below 2 were believed to be common, potentially with tuning parameters so a suitable shape could be learned. However, this was not necessary for our examples.\nPreliminary work found this transformation approach to enforcing positivity was much easier to implement in the variational framework than reflection methods. It can be interpreted as constraining the variational approximation based on prior beliefs about positivity of diffusion paths."
+  }, {
+    "heading": "4.4. Algorithm",
+    "text": "Our overall inference algorithm is given in Algorithm 1. This aims to maximise the ELBO\nL(φ) = Eθ,x∼q(·;φ) [ log\np(θ)p(x|θ)p(y|x, θ) q(θ;φθ)q(x|θ;φx)\n] , (21)\nby differentiating the Monte Carlo estimate\nL̂(φ) = 1 n n∑ i=1 log p(θ(i))p(x(i)|θ(i))p(y|x(i), θ(i)) q ( θ(i);φθ ) q ( x(i)|θ(i);φx\n) , (22) where θ(i) = gθ( (i) 1 , φθ) and x (i) = gx( (i) 2 , θ (i), φx).\nAlgorithm 1 Black-box variational inference for SDEs Initialise φ0 and k = 0. loop\nSample (i)1 , (i) 2 for 1 ≤ i ≤ n. Calculate ∇L̂(φk) using automatic differentiation of (22). Calculate φk+1 using stochastic gradient descent, or a similar algorithm, and increment k.\nend loop"
+  }, {
+    "heading": "4.5. Implementation Details",
+    "text": "Our RNN cell input at time τi, with tj ≤ τi < tj+1, is:\n• The parameters θ. • The most recent latent state, xτi−1 . • The time until the next observation, tj+1 − τi. • The next observation time, tj+1. • The difference between the next observation and what\nthe mean observation would be at the most recent latent state, ytj+1 − F ′xτi−1 .\nExploratory work showed that the RNN produces a much better approximation of the conditioned process with these features as input rather than simply xτi , y, θ and τi.\nOur RNN cell outputs a vector α̃ and the coefficients of a lower-triangular matrix, M . In order to return a Cholesky factor of β̃, the diagonal elements of M are transformed\nusing the softplus function to ensure positivity. We also regularise to avoid β̃ matrices with very small determinants.\nAlgorithm 1 requires automatic differentiation of (22). This can be achieved using the standard tool-kit of backpropagation after rolling-out the RNN i.e. stacking m copies of the RNN cell to form a deep feed-forward network. The canonical challenge in training such networks, known as the exploding-gradient problem (Bengio et al., 1994), often necessitates the use of gradient clipping to control for numerical instability. We follow Pascanu et al. (2013) and perform gradient clipping using the L1 norm.\nTo initialise φ0 in Algorithm 1, we select φθ so the margins of the variational approximation are based on those of the parameter priors. Standard choices from the neural network literature – random Gaussian weights and constant biases – are used for φx."
+  }, {
+    "heading": "5. Experiments",
+    "text": "We implement our method for two examples: (1) analysing synthetic data from a Lotka-Volterra SDE; (2) analysing real data from an SDE model of a susceptible-infectiousremoved (SIR) epidemic. Our experiments include challenging regimes such as: (A) low-variance observations; (B) conditioned diffusions with non-linear dynamics; (C) unobserved time series; (D) widely spaced observation times; (E) data which is highly unlikely under the unconditioned model. Many of these violate the assumptions used by existing diffusion bridge constructs (Whitaker et al., 2017b).\nIn all our experiments below similar tuning choices worked well. We use batch size n = 50 in (22). Our RNN cell has four hidden layers each with 20 hidden units and rectifiedlinear activation. We implement our algorithms in Tensorflow using the Adam optimiser (Kingma & Ba, 2015) and report results using an 8-core CPU. The code is available at https://github.com/Tom-Ryder/VIforSDEs."
+  }, {
+    "heading": "5.1. Lotka-Volterra",
+    "text": "Lotka-Volterra models describe simple predator-prey population dynamics combining three types of event: prey reproduction, predation (in which prey are consumed and predators have the resources to reproduce) and predator death. A SDE Lotka-Volterra model (for derivation see e.g. Golightly & Wilkinson, 2011) is defined by\nα(Xt, θ) = ( θ1Ut − θ2UtVt θ2UtVt − θ3Vt ) , (23)\nβ(Xt, θ) = ( θ1Ut + θ2UtVt −θ2UtVt −θ2UtVt θ3Vt + θ2UtVt ) , (24)\nwhere Xt = (Ut, Vt)′ represents the populations of prey and predators at time t. The parameters θ = (θ1, θ2, θ3) ′ control the rates of the three events described above.\nIn the experiments below, we use discretisation time step ∆τ = 0.1 and observation variance Σ = I , which is small relative to the typical population sizes (see e.g. Figure 1.)\nA single observation time with known parameters We begin with the case of a single observation time and known parameter values, where we follow Boys et al. (2008) by taking θ = (0.5, 0.0025, 0.3)′ and x0 = (71, 79)′. This setting solely investigates our ability to learn x, without uncertainty in θ: essentially the same problem as creating a bridge construct (described in Section 1.1.)\nWe consider four different observations at time t = 10, listed in Table 1. For each example we train our variational approximation until convergence (assessed manually throughout this paper), which takes roughly 20 minutes for the first 3 examples, and 90 minutes for the last. We then perform importance sampling using 500,000 samples from the fitted approximation. Table 1 shows the resulting ESS values. The first 3 rows in the table are typical observations under the model given our θ, while the final row represents highly unlikely observations (double those in the previous row). Figure 1 shows fitted diffusion paths for this case.\nThis example contains several challenging features: all those listed at the start of Section 5 except (C). While these features make it hard to use existing bridge constructs, our variational method produces a close approximation to the true posterior, as illustrated by the high ESS values.\nThe case of highly unlikely observations takes longer to train and receives a lower ESS, reflecting that a more complicated diffusion path must be learned here. (To check this we found that a simpler RNN cell suffices for good performance in the other examples but not this one.)\nMultiple observation times with known parameters We now extend the previous example to multiple observation times, t = 0, 10, 20, 30, 40. We analyse synthetic data, produced using the parameters specified previously (including observation noise with Σ = I). Here convergence takes 6 hours, and importance sampling with 500,000 samples produces an ESS of 96,812. The resulting diffusion\npaths are not shown as they are very similar visually to the next example (see Figure 2).\nThis example shows that our method learns the conditioned process well even when there are several observation times.\nMultiple observation times with unknown parameters We now analyse the same synthetic data with unknown θ parameters. As these must take positive values, we work with the log-transformed parameters ϑ and assume they have independent N(0, 32) priors. Our results are shown after transforming back to the original parameterisation.\nConvergence takes 2 hours, and importance sampling with 500,000 iterations produces an ESS of 635.4. Figure 2 shows 50 diffusion paths sampled from the fitted variational approximation. Figure 3 shows two estimates of the marginal parameter posteriors: the variational inference output, and a kernel density estimate based on importance sampling results.\nThe estimated posteriors give accurate estimates of the true parameter values. However, the low ESS here shows that both estimates of the parameter posteriors are imperfect approximations (also illustrated by the variational posterior estimates appearing overconcentrated compared to the importance sampling results.) Achieving good point estimates but imperfect posteriors is typical for variational inference (Blei et al., 2017)."
+  }, {
+    "heading": "5.2. Epidemic Model",
+    "text": "An SIR epidemic model (Andersson & Britton, 2000) describes the spread of an infectious disease. The population is\nsplit into those susceptible (S), infectious (I) and removed (R). Two types of event take place: susceptibles can be infected by the infectious, and the infectious eventually become removed. Constant population size is assumed. Hence only the S and I population sizes need to be modelled.\nAn SIR epidemic model using SDEs is defined by\nα(Xt, θ) =\n( −θ1StIt\nθ1StIt − θ2It,\n) (25)\nβ(Xt, θ) = ( θ1StIt −θ1StIt −θ1StIt θ1StIt + θ2It ) , (26)\nwhere Xt = (St, It)′ is the state of the system at time t, θ1 is an infection parameter and θ2 is a removal parameter. For a detailed derivation see Fuchs (2013).\nOur data is taken from an outbreak of influenza at a boys boarding school in 1978 (Jackson et al., 2013). Influenza was introduced to the population by a student returning from holiday in Hong Kong. Of the 763 boys at the school, 512 were infected within 14 days. Hence we assume x0 = (762, 1)\n′. Observations of the number infectious are provided daily by those students confined to bed. We\nassume Gaussian observation error with unknown variance σ2. Our analyses use a discretisation time step of ∆τ = 0.1.\nWe also consider an alternative model with a time-varying infection parameter. Here we let ϑ1 = log θ1 follow an Ornstein-Uhlenbeck process\ndϑt,1 = θ3 (θ4 − ϑt,1) dt+ θ5dWt, (27)\nwhere θ3, θ4 and θ5 are the mean-reversion rate, process mean and volatility, respectively, and θt,1 is the infection parameter at time t. Previous related work has focused on ODE epidemic models with time-varying parameters following SDEs (Dureau et al., 2013; Del Moral & Murray, 2015). In contrast, our approach can easily be applied to a full SDE system.\nTime-invariant infection parameter We infer the logtransformed parameters ϑ = (log θ1, log θ2, log σ2)′ under independent N(0, 32) priors. Our results are shown after transforming back to the original parameterisation.\nConvergence takes 2.5 hours, and importance sampling with 500,000 iterations produces an ESS of 718.2. Figure 4 shows two estimates of the marginal parameter posteriors: variational inference output, and a kernel density estimate based on importance sampling results. Figure 6 shows 50 diffusion paths sampled from the variational approximation.\nThe small ESS indicates there is some approximation error. However, the marginal posteriors for θ1 and θ2 are very similar to those from the MCMC analysis of Fuchs (2013, pg 293), despite some modelling differences (that analysis fixed σ2 = 0 and used exponential priors for θ1 and θ2).\nTime-variant infection parameter We infer the logtransformed parameters ϑ = (log θ0,1, log θ2, log θ3, log θ4, log θ5, log σ\n2)′ under independent N(0, 32) priors. Results are shown after transforming back to the original parameterisation.\nConvergence now takes 3 hours, and 500,000 iterations of importance sampling produces an ESS of 256.1. Figure 5 shows estimates of the marginal parameter posteriors, using variational inference and importance sampling outputs as before. Figures 7 (SIR) and 8 (Ornstein-Uhlenbeck) show 50 diffusion paths sampled from the variational approximation. Again the low ESS indicates some approximation error.\nModel comparison The two models produce visually similar diffusion paths, but close inspection shows some differences. The time-invariant model paths for It appear smooth but slightly miss some of the observation points. The time-variant model paths for It are less smooth and more accurately capture the shape of the data. Correspondingly, the time-varying model infers a smaller σ2 value. The most obvious difference in It paths occurs for the t = 7, 8, 9\nobservations, shown in the zoomed-in inset of Figures 6 and 7. Figure 8 shows that shortly before this the time-variant θ1 values become constrained to smaller values.\nAlthough the time-varying model appears to fit the data better, this is at the cost of increased model complexity, and could simply reflect overfitting. A better estimate of the parameter posteriors would allow formal model comparison based on importance sampling evidence estimates."
+  }, {
+    "heading": "6. Conclusion",
+    "text": "We provide a black-box variational approach to inference for SDES which is simple, practical and fast (relative to existing methods). This performs inference for a broad class of SDEs with minimal tuning requirements. Empirical investigation shows we obtain close matches to the posterior of the conditioned diffusion paths. Approximate parameter inference is also possible, with our results recovering known parameters for synthetic data (Section 5.1), and previous results for real data (Section 5.2), using only a few hours of computation for a desktop PC. An interesting future direction is develop choices of q(x|θ;φx) more efficent than standard RNNs, to further reduce computing time and enable real-time applications of this methodology."
+  }, {
+    "heading": "Acknowledgements",
+    "text": "Tom Ryder is supported by the Engineering and Physical Sciences Research Council, Centre for Doctoral Training in Cloud Computing for Big Data (grant number EP/L015358/1).\nWe acknowledge with thanks an NVIDIA academic GPU grant for this project."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Stochastic Epidemic Models and Their Statistical Analysis",
+    "authors": ["H. Andersson", "T. Britton"],
+    "year": 2000
+  }, {
+    "title": "Variational inference for diffusion processes",
+    "authors": ["C. Archambeau", "M. Opper", "Y. Shen", "D. Cornford", "J.S. Shawe-Taylor"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2008
+  }, {
+    "title": "Black box variational inference for state space models",
+    "authors": ["E. Archer", "I.M. Park", "L. Buesing", "J. Cunningham", "L. Paninski"],
+    "venue": "In International Conference on Learning Representations (ICLR) 2016,",
+    "year": 2016
+  }, {
+    "title": "Learning long-term dependencies with gradient descent is difficult",
+    "authors": ["Y. Bengio", "P. Simard", "P. Frasconi"],
+    "venue": "Trans. Neur. Netw.,",
+    "year": 1994
+  }, {
+    "title": "The pricing of options and corporate liabilities",
+    "authors": ["F. Black", "M. Scholes"],
+    "venue": "Journal of political economy,",
+    "year": 1973
+  }, {
+    "title": "Variational inference: A review for statisticians",
+    "authors": ["D.M. Blei", "A. Kucukelbir", "J.D. McAuliffe"],
+    "venue": "Journal of the American Statistical Association,",
+    "year": 2017
+  }, {
+    "title": "Bayesian inference for a discretely observed stochastic kinetic model",
+    "authors": ["R.J. Boys", "D.J. Wilkinson", "T.B.L. Kirkwood"],
+    "venue": "Statistics and Computing,",
+    "year": 2008
+  }, {
+    "title": "Modeling ion channel dynamics through reflected stochastic differential equations",
+    "authors": ["C.E. Dangerfield", "D. Kay", "K. Burrage"],
+    "venue": "Physical Review E,",
+    "year": 1907
+  }, {
+    "title": "Sequential Monte Carlo with highly informative observations",
+    "authors": ["P. Del Moral", "L.M. Murray"],
+    "venue": "SIAM/ASA Journal on Uncertainty Quantification,",
+    "year": 2015
+  }, {
+    "title": "Capturing the time-varying drivers of an epidemic using stochastic dynamical systems",
+    "authors": ["J. Dureau", "K. Kalogeropoulos", "M. Baguelin"],
+    "year": 2013
+  }, {
+    "title": "MCMC analysis of diffusion models with application to finance",
+    "authors": ["B. Eraker"],
+    "venue": "Journal of Business & Economic Statistics,",
+    "year": 2001
+  }, {
+    "title": "Inference for Diffusion Processes: With Applications in Life Sciences",
+    "authors": ["C. Fuchs"],
+    "venue": "Springer Science & Business Media,",
+    "year": 2013
+  }, {
+    "title": "The chemical Langevin equation",
+    "authors": ["D.T. Gillespie"],
+    "venue": "The Journal of Chemical Physics,",
+    "year": 2000
+  }, {
+    "title": "Bayesian inference for nonlinear multivariate diffusion models observed with error",
+    "authors": ["A. Golightly", "D.J. Wilkinson"],
+    "venue": "Computational Statistics & Data Analysis,",
+    "year": 2008
+  }, {
+    "title": "Bayesian parameter inference for stochastic biochemical network models using particle Markov chain Monte Carlo",
+    "authors": ["A. Golightly", "D.J. Wilkinson"],
+    "venue": "Interface focus,",
+    "year": 2011
+  }, {
+    "title": "School closures and influenza: systematic review of epidemiological studies",
+    "authors": ["C. Jackson", "E. Vynnycky", "J. Hawker", "B. Olowokure", "P. Mangtani"],
+    "venue": "BMJ Open,",
+    "year": 2013
+  }, {
+    "title": "An introduction to variational methods for graphical models",
+    "authors": ["M.I. Jordan", "Z. Ghahramani", "T.S. Jaakkola", "L.K. Saul"],
+    "venue": "Machine Learning,",
+    "year": 1999
+  }, {
+    "title": "Adam: A method for stochastic optimization",
+    "authors": ["D.P. Kingma", "J. Ba"],
+    "venue": "In International Conference on Learning Representations (ICLR)",
+    "year": 2015
+  }, {
+    "title": "Auto-encoding variational Bayes",
+    "authors": ["D.P. Kingma", "M. Welling"],
+    "venue": "In International Conference on Learning Representations (ICLR) 2014,",
+    "year": 2014
+  }, {
+    "title": "Metropolized independent sampling with comparisons to rejection sampling and importance sampling",
+    "authors": ["J.S. Liu"],
+    "venue": "Statistics and Computing,",
+    "year": 1996
+  }, {
+    "title": "Automatic variational ABC",
+    "authors": ["A. Moreno", "T. Adel", "E. Meeds", "J.M. Rehg", "M. Welling"],
+    "venue": "arXiv preprint arXiv:1606.08549,",
+    "year": 2016
+  }, {
+    "title": "Stochastic Differential Equations: An Introduction with Applications",
+    "authors": ["B. Øksendal"],
+    "venue": "Hochschultext / Universitext. Springer,",
+    "year": 2003
+  }, {
+    "title": "Data augmentation for diffusions",
+    "authors": ["O. Papaspiliopoulos", "G.O. Roberts", "O. Stramer"],
+    "venue": "Journal of Computational and Graphical Statistics,",
+    "year": 2013
+  }, {
+    "title": "Inference for SDE models via approximate Bayesian computation",
+    "authors": ["U. Picchini"],
+    "venue": "Journal of Computational and Graphical Statistics,",
+    "year": 2014
+  }, {
+    "title": "Gaussian variational approximation for high-dimensional state space models",
+    "authors": ["M. Quiroz", "D.J. Nott", "R. Kohn"],
+    "venue": "arXiv preprint arXiv:1801.07873,",
+    "year": 2018
+  }, {
+    "title": "Variational inference with normalizing flows",
+    "authors": ["D. Rezende", "S. Mohamed"],
+    "venue": "In Proceedings of the 32nd International Conference on Machine Learning",
+    "year": 2015
+  }, {
+    "title": "On inference for partially observed nonlinear diffusion models using the MetropolisHastings",
+    "authors": ["G.O. Roberts", "O. Stramer"],
+    "venue": "algorithm. Biometrika,",
+    "year": 2001
+  }, {
+    "title": "Diffusions, Markov processes and martingales",
+    "authors": ["L.C.G. Rogers", "D. Williams"],
+    "year": 2013
+  }, {
+    "title": "Approximate inference for stochastic reaction processes",
+    "authors": ["A. Ruttor", "G. Sanguinetti", "M. Opper"],
+    "venue": "Learning and Inference in Computational Systems Biology,",
+    "year": 2010
+  }, {
+    "title": "Stochastic equations for diffusion processes in a bounded region",
+    "authors": ["A.V. Skorokhod"],
+    "venue": "Theory of Probability & Its Applications,",
+    "year": 1961
+  }, {
+    "title": "Doubly stochastic variational Bayes for non-conjugate inference",
+    "authors": ["M. Titsias", "M. Lázaro-Gredilla"],
+    "venue": "Proceedings of the 31st International Conference on Machine Learning",
+    "year": 1979
+  }, {
+    "title": "Bayesian estimation of discretely observed multidimensional diffusion processes using guided proposals",
+    "authors": ["F. van der Meulen", "M. Schauer", "H. van Zanten"],
+    "venue": "Electronic Journal of Statistics,",
+    "year": 2017
+  }, {
+    "title": "Stochastic processes in physics and chemistry",
+    "authors": ["N.G. van Kampen"],
+    "year": 2007
+  }, {
+    "title": "Bayesian inference for diffusion-driven mixed-effects models",
+    "authors": ["G.A. Whitaker", "A. Golightly", "R.J. Boys", "C. Sherlock"],
+    "venue": "Bayesian Analysis,",
+    "year": 2017
+  }, {
+    "title": "Improved bridge constructs for stochastic differential equations",
+    "authors": ["G.A. Whitaker", "A. Golightly", "R.J. Boys", "C. Sherlock"],
+    "venue": "Statistics and Computing,",
+    "year": 2017
+  }],
+  "id": "SP:50e074f8d0479ed364a5a198e364b2b5370dc8cc",
+  "authors": [{
+    "name": "Thomas Ryder",
+    "affiliations": []
+  }, {
+    "name": "Andrew Golightly",
+    "affiliations": []
+  }, {
+    "name": "Stephen McGough",
+    "affiliations": []
+  }, {
+    "name": "Dennis Prangle",
+    "affiliations": []
+  }, {
+    "name": "Tom Ryder",
+    "affiliations": []
+  }],
+  "abstractText": "Parameter inference for stochastic differential equations is challenging due to the presence of a latent diffusion process. Working with an EulerMaruyama discretisation for the diffusion, we use variational inference to jointly learn the parameters and the diffusion paths. We use a standard mean-field variational approximation of the parameter posterior, and introduce a recurrent neural network to approximate the posterior for the diffusion paths conditional on the parameters. This neural network learns how to provide Gaussian state transitions which bridge between observations as the conditioned diffusion process does. The resulting black-box inference method can be applied to any SDE system with light tuning requirements. We illustrate the method on a LotkaVolterra system and an epidemic model, producing accurate parameter estimates in a few hours.",
+  "title": "Black-Box Variational Inference for Stochastic Differential Equations"
+}

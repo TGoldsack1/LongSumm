@@ -1,0 +1,214 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "The dramatic increase in available training data has made the use of deep neural networks feasible, which in turn has significantly improved the state-of-the-art in many fields, in particular computer vision and natural language processing. However, due to the complexity of the resulting optimization problem, computational cost is now the core issue in training these large architectures.\nWhen training such models, it appears to any practitioner that not all samples are equally important; many of them are properly handled after a few epochs of training, and most could be ignored at that point without impacting the final\n1Idiap Research Institute, Martigny, Switzerland 2EPFL, Lausanne, Switzerland. Correspondence to: Angelos Katharopoulos <firstname.lastname@idiap.ch>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\nmodel. To this end, we propose a novel importance sampling scheme that accelerates the training of any neural network architecture by focusing the computation on the samples that will introduce the biggest change in the parameters which reduces the variance of the gradient estimates.\nFor convex optimization problems, many works (Bordes et al., 2005; Zhao & Zhang, 2015; Needell et al., 2014; Canévet et al., 2016; Richtárik & Takáč, 2013) have taken advantage of the difference in importance among the samples to improve the convergence speed of stochastic optimization methods. On the other hand, for deep neural networks, sample selection methods were mainly employed to generate hard negative samples for embedding learning problems or to tackle the class imbalance problem (Schroff et al., 2015; Wu et al., 2017; Simo-Serra et al., 2015).\nRecently, researchers have shifted their focus on using importance sampling to improve and accelerate the training of neural networks (Alain et al., 2015; Loshchilov & Hutter, 2015; Schaul et al., 2015). Those works, employ either the gradient norm or the loss to compute each sample’s importance. However, the former is prohibitively expensive to compute and the latter is not a particularly good approximation of the gradient norm.\nCompared to the aforementioned works, we derive an upper bound to the per sample gradient norm that can be computed in a single forward pass. This results in reduced computational requirements of more than an order of magnitude compared to Alain et al. (2015). Furthermore, we quantify the variance reduction achieved with the proposed importance sampling scheme and associate it with the batch size increment required to achieve an equivalent variance reduction. The benefits of this are twofold, firstly we provide an intuitive metric to predict how useful importance sampling is going to be, thus we are able to decide when to switch on importance sampling during training. Secondly, we also provide theoretical guarantees for speedup, when variance reduction is above a threshold. Based on our analysis, we propose a simple to use algorithm that can be used to accelerate the training of any neural network architecture.\nOur implementation is generic and can be employed by adding a single line of code in a standard Keras model\ntraining. We validate it on three independent tasks: image classification, fine-tuning and sequence classification with recurrent neural networks. Compared to existing batch selection schemes, we show that our method consistently achieves lower training loss and test error for equalized wall-clock time."
+  }, {
+    "heading": "2. Related Work",
+    "text": "Existing importance sampling methods can be roughly categorized in methods applied to convex problems and methods designed for deep neural networks."
+  }, {
+    "heading": "2.1. Importance Sampling for Convex Problems",
+    "text": "Importance sampling for convex optimization problems has been extensively studied over the last years. Bordes et al. (2005) developed LASVM, which is an online algorithm that uses importance sampling to train kernelized support vector machines. Later, Richtárik & Takáč (2013) proposed a generalized coordinate descent algorithm that samples coordinate sets in a way that optimizes the algorithm’s convergence rate.\nMore recent works (Zhao & Zhang, 2015; Needell et al., 2014) make a clear connection with the variance of the gradient estimates of stochastic gradient descent and show that the optimal sampling distribution is proportional to the per sample gradient norm. Due to the relatively simple optimization problems that they deal with, the authors resort to sampling proportionally to the norm of the inputs, which in simple linear classification is proportional to the Lipschitz constant of the per sample loss function.\nSuch simple importance measures do not exist for Deep Learning and the direct application of the aforementioned theory (Alain et al., 2015), requires clusters of GPU workers just to compute the sampling distribution."
+  }, {
+    "heading": "2.2. Importance Sampling for Deep Learning",
+    "text": "Importance sampling has been used in Deep Learning mainly in the form of manually tuned sampling schemes. Bengio et al. (2009) manually design a sampling scheme inspired by the perceived way that human children learn; in practice they provide the network with examples of increasing difficulty in an arbitrary manner. Diametrically opposite, it is common for deep embedding learning to sample hard examples because of the plethora of easy non informative ones (Simo-Serra et al., 2015; Schroff et al., 2015).\nMore closely related to our work, Schaul et al. (2015) and Loshchilov & Hutter (2015) use the loss to create the sampling distribution. Both approaches keep a history of losses for previously seen samples, and sample either proportionally to the loss or based on the loss ranking. One of the\nmain limitations of history based sampling, is the need for tuning a large number of hyperparameters that control the effects of “stale” importance scores; i.e. since the model is constantly updated, the importance of samples fluctuate and previous observations may poorly reflect the current situation. In particular, Schaul et al. (2015) use various forms of smoothing for the losses and the importance sampling weights, while Loshchilov & Hutter (2015) introduce a large number of hyperparameters that control when the losses are computed, when they are sorted as well as how the sampling distribution is computed based on the rank.\nIn comparison to all the above methods, our importance sampling scheme based on an upper bound to the gradient norm has a solid theoretical basis with clear objectives, very easy to choose hyperparameters, theoretically guaranteed speedup and can be applied to any type of network and loss function."
+  }, {
+    "heading": "2.3. Other Sample Selection Methods",
+    "text": "For completeness, we mention the work of Wu et al. (2017), who design a distribution (suitable only for the distance based losses) that maximizes the diversity of the losses in a single batch. In addition, Fan et al. (2017) use reinforcement learning to train a neural network that selects samples for another neural network in order to optimize the convergence speed. Although their preliminary results are promising, the overhead of training two networks makes the wall-clock speedup unlikely and their proposal not as appealing."
+  }, {
+    "heading": "2.4. Stochastic Variance Reduced Gradient",
+    "text": "Finally, a class of algorithms that aim to accelerate the convergence of Stochastic Gradient Descent (SGD) through variance reduction are SVRG type algorithms (Johnson & Zhang, 2013; Defazio et al., 2014; Allen-Zhu, 2017; Lei et al., 2017). Although asymptotically better, those algorithms typically perform worse than plain SGD with momentum for the low accuracy optimization setting of Deep Learning. Contrary to the aforementioned algorithms, our proposed importance sampling does not improve the asymptotic convergence of SGD but results in pragmatic improvements in all the metrics given a fixed time budget."
+  }, {
+    "heading": "3. Variance Reduction for Deep Neural Networks",
+    "text": "Importance sampling aims at increasing the convergence speed of SGD by focusing computation on samples that actually induce a change in the model parameters. This formally translates into a reduced variance of the gradient estimates for a fixed computational cost. In the following sections, we analyze how this works and present an efficient algorithm that can be used to train any Deep Learning model."
+  }, {
+    "heading": "3.1. Introduction to Importance Sampling",
+    "text": "Let xi, yi be the i-th input-output pair from the training set, Ψ(·; θ) be a Deep Learning model parameterized by the vector θ, and L(·, ·) be the loss function to be minimized during training. The goal of training is to find\nθ∗ = arg min θ\n1\nN N∑ i=1 L(Ψ(xi; θ), yi) (1)\nwhere N corresponds to the number of examples in the training set.\nWe use an SGD procedure with learning rate η, where the update at iteration t depends on the sampling distribution pt1, . . . , p t N and re-scaling coefficients w t 1, . . . , w t N . Let It be the data point sampled at that step, we have P (It = i) = pti and\nθt+1 = θt − ηwIt∇θtL(Ψ(xIt ; θt), yIt) (2)\nPlain SGD with uniform sampling is achieved with wti = 1 and pti = 1 N for all t and i.\nIf we define the convergence speed S of SGD as the reduction of the distance of the parameter vector θ from the optimal parameter vector θ∗ in two consecutive iterations t and t+ 1\nS = −EPt [ ‖θt+1 − θ∗‖22 − ‖θt − θ ∗‖22 ] , (3)\nand if we have wi = 1Npi such that\nEPt [wIt∇θtL(Ψ(xIt ; θt), yIt)] (4) = ∇θt 1N ∑N i=1 L(Ψ(xi; θt), yi), (5)\nand set Gi = wi∇θtL(Ψ(xi; θt), yi), then we get (this is a different derivation of the result by Wang et al., 2016)\nS = −EPt [ (θt+1−θ∗)T (θt+1−θ∗)− (θt−θ∗)T (θt−θ∗) ] = −EPt [ θTt+1θt+1−2θt+1θ∗ − θTt θt + 2θtθ∗\n] = −EPt [ (θt−ηGIt) T (θt−ηGIt) + 2ηGTItθ ∗−θTt θt ]\n= −EPt [ −2η (θt−θ∗)GIt + η2GTItGIt ] = 2η (θt−θ∗)EPt [GIt ]− η2 EPt [GIt ]\nTEPt [GIt ]− η2Tr (VPt [GIt ])\n(6)\nSince the first two terms, in the last expression, are the speed of batch gradient descent, we observe that it is possible to gain a speedup by sampling from the distribution that minimizes Tr (VPt [GIt ]). Several works (Needell et al., 2014; Zhao & Zhang, 2015; Alain et al., 2015) have shown the optimal distribution to be proportional to the per-sample gradient norm. However, computing this distribution is computationally prohibitive."
+  }, {
+    "heading": "3.2. Beyond the Full Gradient Norm",
+    "text": "Given an upper bound Ĝi ≥ ‖∇θtL(Ψ(xi; θt), yi)‖2 and due to\narg min P Tr (VPt [GIt ]) = arg min P\nEPt [ ‖GIt‖ 2 2 ] , (7)\nwe propose to relax the optimization problem in the following way\nmin P\nEPt [ ‖GIt‖ 2 2 ] ≤ min P EPt [ w2ItĜ 2 It ] . (8)\nThe minimizer of the second term of equation 8, similar to the first term, is pi ∝ Ĝi. All that remains, is to find a proper expression for Ĝi which is significantly easier to compute than the norm of the gradient for each sample.\nIn order to continue with the derivation of our upper bound Ĝi, let us introduce some notation specific to a multi-layer perceptron. Let θ(l) ∈ RMl×Ml−1 be the weight matrix for layer l and σ(l)(·) be a Lipschitz continuous activation function. Then, let\nx(0) = x (9)\nz(l) = θ(l) x(l−1) (10)\nx(l) = σ(l)(z(l)) (11)\nΨ(x; Θ) = x(L) (12)\nAlthough our notation describes simple fully connected neural networks without bias, our analysis holds for any affine operation followed by a slope-bounded non-linearity (|σ′(x)| ≤ K). With\nΣ′l(z) = diag ( σ′(l)(z1), . . . , σ ′(l)(zMl) ) , (13)\n∆ (l) i = Σ ′ l(z (l) i )θ T l+1 . . .Σ ′ L−1(z (L−1) i )θ T L , (14)\n∇ x (L) i L = ∇ x (L) i L(Ψ(xi; Θ), yi) (15)\nwe get\n‖∇θlL(Ψ(xi; Θ), yi)‖2 (16)\n= ∥∥∥∥(∆(l)i Σ′L(z(L)i )∇x(L)i L)(x(l−1)i )T ∥∥∥∥\n2\n(17)\n≤ ∥∥∥∆(l)i ∥∥∥\n2 ∥∥∥Σ′L(z(L)i )∇x(L)i L∥∥∥2 ∥∥∥x(l−1)i ∥∥∥2 (18) ≤ max\nl,i (∥∥∥x(l−1)i ∥∥∥ 2 ∥∥∥∆(l)i ∥∥∥ 2 ) ︸ ︷︷ ︸\nρ\n∥∥∥Σ′L(z(L)i )∇x(L)i L∥∥∥2(19)\nVarious weight initialization (Glorot & Bengio, 2010) and activation normalization techniques (Ioffe & Szegedy, 2015; Ba et al., 2016) uniformise the activations across samples. As a result, the variation of the gradient norm is mostly captured by the gradient of the loss function with respect\nto the pre-activation outputs of the last layer of our neural network. Consequently we can derive the following upper bound to the gradient norm of all the parameters\n‖∇ΘL(Ψ(xi; Θ), yi)‖2 ≤ Lρ ∥∥∥Σ′L(z(L)i )∇x(L)i L∥∥∥2︸ ︷︷ ︸\nĜi\n,\n(20)\nwhich is marginally more difficult to compute than the value of the loss since it can be computed in a closed form in terms of z(L). However, our upper bound depends on the time step t, thus we cannot generate a distribution once and sample from it during training. This is intuitive because the importance of each sample changes as the model changes."
+  }, {
+    "heading": "3.3. When is Variance Reduction Possible?",
+    "text": "Computing the importance score from equation 20 is more than an order of magnitude faster compared to computing the gradient norm for each sample. Nevertheless, it still costs one forward pass through the network and can be wasteful. For instance, during the first iterations of training, the gradients with respect to every sample have approximately equal norm; thus we would waste computational resources trying to sample from the uniform distribution. In addition, computing the importance score for the whole dataset is still prohibitive and would render the method unsuitable for online learning.\nIn order to solve the problem of computing the importance for the whole dataset, we pre-sample a large batch of data points, compute the sampling distribution for that batch and re-sample a smaller batch with replacement. The above procedure upper bounds both the speedup and variance reduction. Given a large batch consisting of B samples and a small one consisting of b, we can achieve a maximum variance reduction of 1b2 − 1 B2 and a maximum speedup of B+3b 3B assuming that the backward pass requires twice the amount of time as the forward pass.\nDue to the large cost of computing the importance per sample, we only perform importance sampling when we know that the variance of the gradients can be reduced. In the following equation, we show that the variance reduction is proportional to the squared L2 distance of the sampling distribution, g, to the uniform distribution u. Due to lack of space, the complete derivation is included in the supplementary material. Let gi ∝ ‖∇θtL(Ψ(xi; θt), yi)‖2 = ‖Gi‖2 and u = 1B the uniform probability.\nTr (Vu[Gi])− Tr (Vg[wiGi]) (21) = Eu [ ‖Gi‖22 ] − Eg [ w2i ‖Gi‖ 2 2 ] (22)\n=\n( 1\nB B∑ i=1 ‖Gi‖2 )2 B ‖g − u‖22 . (23)\nEquation 23 already provides us with a useful metric to decide if the variance reduction is significant enough to justify using importance sampling. However, choosing a suitable threshold for the L2 distance squared would be tedious and unintuitive. We can do much better by dividing the variance reduction with the original variance to derive the increase in the batch size that would achieve an equivalent variance reduction. Assuming that we increase the batch size by τ , we achieve variance reduction 1τ2 ; thus we have(\n1 B ∑B i=1 ‖Gi‖2 )2 B ‖g − u‖22\n1 B ∑B i=1 ‖Gi‖ 2 2\n= (24)\n1∑B i=1 g 2 i ‖g − u‖22 = 1− 1 τ2 ⇐⇒ (25)\n1 τ = √ 1− 1∑B\ni=1 g 2 i\n‖g − u‖22 (26)\nUsing equation 26, we have a hyperparameter that is very easy to select and can now design our training procedure which is described in pseudocode in algorithm 1. Computing τ from equation 26 allows us to have guaranteed speedup when B + 3b < 3τb. However, as it is shown in the experiments, we can use τth smaller than B+3b3b and still get a significant speedup.\nAlgorithm 1 Deep Learning with Importance Sampling 1: Inputs B, b, τth, aτ , θ0 2: t← 1 3: τ ← 0 4: repeat 5: if τ > τth then 6: U ← B uniformly sampled datapoints 7: gi ∝ Ĝi ∀i ∈ U according to eq 20 8: G ← b datapoints sampled with gi from U 9: wi ← 1Bgi ∀i ∈ G 10: θt ← sgd step(wi,G, θt−1) 11: else 12: U ← b uniformly sampled datapoints 13: wi ← 1 ∀i ∈ U 14: θt ← sgd step(wi,U , θt−1) 15: gi ∝ Ĝi ∀i ∈ U 16: end if\n17: τ ← aττ + (1− aτ ) (\n1− 1∑ i g 2 i ∥∥∥g − 1|U|∥∥∥2 2 )− 12 18: until convergence\nThe inputs to the algorithm are the pre-sampling size B, the batch size b, the equivalent batch size increment after which we start importance sampling τth and the exponential moving average parameter aτ used to compute a smooth estimate of τ . θ0 denotes the initial parameters of our deep network. We would like to point out that in line 15 of the\nalgorithm, we compute gi for free since we have done the forward pass in the previous step.\nThe only parameter that has to be explicitly defined for our algorithm is the pre-sampling size B because τth can be set using equation 26. We provide a small ablation study for B in the supplementary material."
+  }, {
+    "heading": "4. Experiments",
+    "text": "In this section, we analyse experimentally the performance of the proposed importance sampling scheme based on our upper-bound of the gradient norm. In the first subsection, we compare the variance reduction achieved with our upper bound to the theoretically maximum achieved with the true gradient norm. We also compare against sampling based on the loss, which is commonly used in practice. Subsequently, we conduct experiments which demonstrate that we are able to achieve non-negligible wall-clock speedup for a variety of tasks using our importance sampling scheme.\nIn all the subsequent sections, we use uniform to refer to the usual training algorithm that samples points from a uniform distribution, we use loss to refer to algorithm 1 but instead of sampling from a distribution proportional to our upperbound to the gradient norm Ĝi (equations 8 and 20), we sample from a distribution proportional to the loss value and finally upper-bound to refer to our proposed method. All the other baselines from published methods are referred to using the names of the authors.\nIn addition to batch selection methods, we compare with various SVRG implementations including the accelerated Katyusha (Allen-Zhu, 2017) and the online SCSG (Lei et al., 2017) method. In all cases, SGD with uniform sampling performs significantly better. Due to lack of space, we report the detailed results in the supplementary material.\nExperiments were conducted using Keras (Chollet et al., 2015) with TensorFlow (Abadi et al., 2016), and the code can be found at http://github.com/idiap/ importance-sampling. For all the experiments, we use Nvidia K80 GPUs and the reported time is calculated by subtracting the timestamps before starting one epoch and after finishing one; thus it includes the time needed to transfer data between CPU and GPU memory.\nOur implementation provides a wrapper around models that substitutes the standard uniform sampling with our importance-sampling method. This means that adding a single line of code to call this wrapper before actually fitting the model is sufficient to switch from the standard uniform sampling to our importance-sampling scheme. And, as specified in § 3.3 and Algorithm 1, our procedure reliably estimates at every iteration if the importance sampling will provide a speed-up and sticks to uniform sampling otherwise."
+  }, {
+    "heading": "4.1. Ablation study",
+    "text": "As already mentioned, several works (Loshchilov & Hutter, 2015; Schaul et al., 2015) use the loss value, directly or indirectly, to generate sampling distributions. In this section, we present experiments that validate the superiority of our method with respect to the loss in terms of variance reduction. For completeness, in the supplementary material we include a theoretical analysis that explains why sampling based on the loss also achieves variance reduction during the late stages of training.\nOur experimental setup is as follows: we train a wide residual network (Zagoruyko & Komodakis, 2016) on the CIFAR100 dataset (Krizhevsky, 2009), following closely the training procedure of Zagoruyko & Komodakis (2016) (the details are presented in § 4.2). Subsequently, we sample\n1, 024 images uniformly at random from the dataset. Using the weights of the trained network, at intervals of 3, 000 updates, we resample 128 images from the large batch of 1, 024 images using uniform sampling or importance sampling with probabilities proportional to the loss, our upper-bound or the gradient-norm. The gradient-norm is computed by running the backpropagation algorithm with a batch size of 1.\nFigure 1 depicts the variance reduction achieved with every sampling scheme in comparison to uniform. We measure this directly as the distance between the mini-batch gradient and the batch gradient of the 1, 024 samples. For robustness we perform the sampling 10 times and report the average. We observe that our upper bound and the gradient norm result in very similar variance reduction, meaning that the bound is relatively tight and that the produced probability distributions are highly correlated. This can also be deduced by observing figure 2, where the probabilities proportional to the loss and the upper-bound are plotted against the optimal ones (proportional to the gradient-norm). We observe that our upper bound is almost perfectly correlated with the gradient norm, in stark contrast to the loss which is only correlated at the regime of very small gradients. Quantitatively the sum of squared error of 16, 384 points in figure 2 is 0.017 for the loss and 0.002 for our proposed upper bound.\nFurthermore, we observe that sampling hard examples (with high loss), increases the variance, especially in the beginning of training. Similar behaviour has been observed in problems such as embedding learning where semi-hard sample mining is preferred over sampling using the loss (Wu et al., 2017; Schroff et al., 2015)."
+  }, {
+    "heading": "4.2. Image classification",
+    "text": "In this section, we use importance sampling to train a residual network on CIFAR10 and CIFAR100. We follow the experimental setup of Zagoruyko & Komodakis (2016), specifically we train a wide resnet 28-2 with SGD with momentum. We use batch size 128, weight decay 0.0005, momentum 0.9, initial learning rate 0.1 divided by 5 after 20, 000 and 40, 000 parameter updates. Finally, we train for a total of 50, 000 iterations. In order for our history based baselines to be compatible with the data augmentation of the CIFAR images, we pre-augment both datasets to generate 1.5 × 106 images for each one. Our method does not have this limitation since it can work on infinite datasets in a true online fashion. To compare between methods, we use a learning rate schedule based on wall-clock time and we also fix the total seconds available for training. A faster method should have smaller training loss and test error given a specific time during training.\nFor this experiment, we compare the proposed method to uniform, loss, online batch selection by Loshchilov & Hut-\nter (2015) and the history based sampling of Schaul et al. (2015). For the method of Schaul et al. (2015), we use their proportional sampling since the rank based is very similar to Loshchilov & Hutter (2015) and we select the best parameters from the grid a = {0.1, 0.5, 1.0} and β = {0.5, 1.0}. Similarly, for online batch selection, we use s = {1, 10, 102} and a recomputation of all the losses every r = {600, 1200, 3600} updates.\nFor our method, we use a presampling size of 640. One of the goals of this experiment is to show that even a smaller reduction in variance can effectively stabilize training and provide wall-clock time speedup; thus we set τth = 1.5. We perform 3 independent runs and report the average.\nThe results are depicted in figure 3. We observe that in the relatively easy CIFAR10 dataset, all methods can provide some speedup over uniform sampling. However, for the more complicated CIFAR100, only sampling with our proposed upper-bound to the gradient norm reduces the variance of the gradients and provides faster convergence. Examining the training evolution in detail, we observe that on CIFAR10 our method is the only one that achieves a significant improvement in the test error even in the first stages of training (4, 000 to 8, 000 seconds). Quantitatively, on CIFAR10 we achieve more than an order of magnitude lower training loss and 8% lower test error from 0.087 to 0.079 while on CIFAR100 approximately 3 times lower training loss and 5% lower test error from 0.34 to 0.32 compared to uniform sampling.\nAt this point, we would also like to discuss the performance of the loss compared to other methods that also select batches based on this metric. Our experiments show, that using “fresh” values for the loss combined with a warmup stage so that importance sampling is not started too early outperforms all the other baselines on the CIFAR10 dataset."
+  }, {
+    "heading": "4.3. Fine-tuning",
+    "text": "Our second experiment shows the application of importance sampling to the significant task of fine tuning a pre-trained large neural network on a new dataset. This task is of particular importance because there exists an abundance of powerful models pre-trained on large datasets such as ImageNet (Deng et al., 2009).\nOur experimental setup is the following, we fine-tune a ResNet-50 (He et al., 2015) previously trained on ImageNet. We replace the last classification layer and then train the whole network end-to-end to classify indoor images among 67 possible categories (Quattoni & Torralba, 2009). We use SGD with learning rate 10−3 and momentum 0.9. We set the batch size to 16 and for our importance sampling algorithm we pre-sample 48. The variance reduction threshold is set to 2 as designated by equation 26.\nTo assess the performance of both our algorithm and our gradient norm approximation, we compare the convergence speed of our importance sampling algorithm using our upper-bound and using the loss. Once again, for robustness, we run 3 independent runs and report the average.\nThe results of the experiment are depicted in figure 4. As expected, importance sampling is very useful for the task of fine-tuning since a lot of samples are handled correctly very early in the training process. Our upper-bound, once again, greatly outperforms sampling proportionally to the loss when the network is large and the problem is non trivial. Compared to uniform sampling, in just half an hour importance sampling has converged close to the best performance (28.06% test error) that can be expected on this dataset without any data augmentation or multiple crops (Razavian et al., 2014), while uniform achieves only 33.74%."
+  }, {
+    "heading": "4.4. Pixel by Pixel MNIST",
+    "text": "To showcase the generality of our method, we use our importance sampling algorithm to accelerate the training of an LSTM in a sequence classification problem. We use the\npixel by pixel classification of randomly permuted MNIST digits (LeCun et al., 2010), as defined by Le et al. (2015). The problem may seem trivial at first, however as shown by Le et al. (2015) it is particularly suited to benchmarking the training of recurrent neural networks, due to the long range dependency problems inherent in the dataset (784 time steps).\nFor our experiment, we fix a permutation matrix for all the pixels to generate a training set of 60, 000 samples with 784 time steps each. Subsequently, we train an LSTM (Hochreiter & Schmidhuber, 1997) with 128 dimensions in the hidden space, tanh(·) as an activation function and sigmoid(·) as the recurrent activation function. Finally, we use a linear classifier on top of the LSTM to choose a digit based on the hidden representation. To train the aforementioned architecture, we use the Adam optimizer (Kingma & Ba, 2014) with a learning rate of 10−3 and a batch size of 32. We have also found gradient clipping to be necessary for the training not to diverge; thus we clip the norm of all gradients to 1.\nThe results of the experiment are depicted in figure 5. Both\nfor the loss and our proposed upper-bound, importance sampling starts at around 2, 000 seconds by setting τth = 1.8 and the presampling size to 128. We could set τth = 2.33 (equation 26) which would only result in our algorithm being more conservative and starting importance sampling later. We clearly observe that sampling proportionally to the loss hurts the convergence in this case. On the other hand, our algorithm achieves 20% lower training loss and 7% lower test error in the given time budget."
+  }, {
+    "heading": "5. Conclusions",
+    "text": "We have presented an efficient algorithm for accelerating the training of deep neural networks using importance sampling. Our algorithm takes advantage of a novel upper bound to the gradient norm of any neural network that can be computed in a single forward pass. In addition, we show an equivalence of the variance reduction with importance sampling to increasing the batch size; thus we are able to quantify both the variance reduction and the speedup and intelligently decide when to stop sampling uniformly.\nOur experiments show that our algorithm is effective in reducing the training time for several tasks both on image and sequence data. More importantly, we show that not all data points matter equally in the duration of training, which can be exploited to gain a speedup or better quality gradients or both.\nOur analysis opens several avenues of future research. The two most important ones that were not investigated in this work are automatically tuning the learning rate based on the variance of the gradients and decreasing the batch size. The variance of the gradients can be kept stable by increasing the learning rate proportionally to the batch increment or by decreasing the number of samples for which we compute the backward pass. Thus, we can speed up convergence by increasing the step size or reducing the time per update."
+  }, {
+    "heading": "6. Acknowledgement",
+    "text": "This work is supported by the Swiss National Science Foundation under grant number FNS-30209 “ISUL”."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Tensorflow: Large-scale machine learning on heterogeneous distributed systems",
+    "authors": ["M. Abadi", "A. Agarwal", "P. Barham", "E. Brevdo", "Z. Chen", "C. Citro", "G.S. Corrado", "A. Davis", "J. Dean", "M Devin"],
+    "venue": "arXiv preprint arXiv:1603.04467,",
+    "year": 2016
+  }, {
+    "title": "Variance reduction in sgd by distributed importance sampling",
+    "authors": ["G. Alain", "A. Lamb", "C. Sankar", "A. Courville", "Y. Bengio"],
+    "venue": "arXiv preprint arXiv:1511.06481,",
+    "year": 2015
+  }, {
+    "title": "Katyusha: The first direct acceleration of stochastic gradient methods",
+    "authors": ["Z. Allen-Zhu"],
+    "venue": "In Proceedings of the 49th Annual ACM SIGACT Symposium on Theory of Computing,",
+    "year": 2017
+  }, {
+    "title": "Curriculum learning",
+    "authors": ["Y. Bengio", "J. Louradour", "R. Collobert", "J. Weston"],
+    "venue": "In Proceedings of the 26th annual international conference on machine learning,",
+    "year": 2009
+  }, {
+    "title": "Fast kernel classifiers with online and active learning",
+    "authors": ["A. Bordes", "S. Ertekin", "J. Weston", "L. Bottou"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2005
+  }, {
+    "title": "Importance sampling tree for large-scale empirical expectation",
+    "authors": ["O. Canévet", "C. Jose", "F. Fleuret"],
+    "venue": "In Proceedings of the International Conference on Machine Learning (ICML),",
+    "year": 2016
+  }, {
+    "title": "Saga: A fast incremental gradient method with support for nonstrongly convex composite objectives",
+    "authors": ["A. Defazio", "F. Bach", "S. Lacoste-Julien"],
+    "venue": "In Advances in neural information processing systems,",
+    "year": 2014
+  }, {
+    "title": "ImageNet: A Large-Scale Hierarchical Image Database",
+    "authors": ["J. Deng", "W. Dong", "R. Socher", "Li", "L.-J", "K. Li", "L. FeiFei"],
+    "venue": "In CVPR09,",
+    "year": 2009
+  }, {
+    "title": "Learning what data to learn",
+    "authors": ["Y. Fan", "F. Tian", "T. Qin", "J. Bian", "Liu", "T.-Y"],
+    "venue": "arXiv preprint arXiv:1702.08635,",
+    "year": 2017
+  }, {
+    "title": "Understanding the difficulty of training deep feedforward neural networks",
+    "authors": ["X. Glorot", "Y. Bengio"],
+    "year": 2010
+  }, {
+    "title": "Deep residual learning for image recognition",
+    "authors": ["K. He", "X. Zhang", "S. Ren", "J. Sun"],
+    "venue": "arXiv preprint arXiv:1512.03385,",
+    "year": 2015
+  }, {
+    "title": "Long short-term memory",
+    "authors": ["S. Hochreiter", "J. Schmidhuber"],
+    "venue": "Neural computation,",
+    "year": 1997
+  }, {
+    "title": "Batch normalization: Accelerating deep network training by reducing internal covariate shift",
+    "authors": ["S. Ioffe", "C. Szegedy"],
+    "year": 2015
+  }, {
+    "title": "Accelerating stochastic gradient descent using predictive variance reduction",
+    "authors": ["R. Johnson", "T. Zhang"],
+    "venue": "In Advances in neural information processing systems,",
+    "year": 2013
+  }, {
+    "title": "Adam: A method for stochastic optimization",
+    "authors": ["D.P. Kingma", "J. Ba"],
+    "venue": "arXiv preprint arXiv:1412.6980,",
+    "year": 2014
+  }, {
+    "title": "Learning multiple layers of features from tiny images",
+    "authors": ["A. Krizhevsky"],
+    "venue": "Master’s thesis,",
+    "year": 2009
+  }, {
+    "title": "A simple way to initialize recurrent networks of rectified linear units",
+    "authors": ["Q.V. Le", "N. Jaitly", "G.E. Hinton"],
+    "venue": "arXiv preprint arXiv:1504.00941,",
+    "year": 2015
+  }, {
+    "title": "Mnist handwritten digit database",
+    "authors": ["Y. LeCun", "C. Cortes", "C. Burges"],
+    "venue": "AT&T Labs [Online]. Available: http://yann. lecun. com/exdb/mnist,",
+    "year": 2010
+  }, {
+    "title": "Non-convex finite-sum optimization via scsg methods",
+    "authors": ["L. Lei", "C. Ju", "J. Chen", "M.I. Jordan"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2017
+  }, {
+    "title": "Online batch selection for faster training of neural networks",
+    "authors": ["I. Loshchilov", "F. Hutter"],
+    "venue": "arXiv preprint arXiv:1511.06343,",
+    "year": 2015
+  }, {
+    "title": "Stochastic gradient descent, weighted sampling, and the randomized kaczmarz algorithm",
+    "authors": ["D. Needell", "R. Ward", "N. Srebro"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2014
+  }, {
+    "title": "Recognizing indoor scenes",
+    "authors": ["A. Quattoni", "A. Torralba"],
+    "venue": "In Computer Vision and Pattern Recognition,",
+    "year": 2009
+  }, {
+    "title": "Cnn features off-the-shelf: an astounding baseline for recognition",
+    "authors": ["A.S. Razavian", "H. Azizpour", "J. Sullivan", "S. Carlsson"],
+    "venue": "In Computer Vision and Pattern Recognition Workshops (CVPRW),",
+    "year": 2014
+  }, {
+    "title": "On optimal probabilities in stochastic coordinate descent methods",
+    "authors": ["P. Richtárik", "M. Takáč"],
+    "venue": "arXiv preprint arXiv:1310.3438,",
+    "year": 2013
+  }, {
+    "title": "Facenet: A unified embedding for face recognition and clustering",
+    "authors": ["F. Schroff", "D. Kalenichenko", "J. Philbin"],
+    "venue": "In Proceedings of the IEEE conference on computer vision and pattern recognition,",
+    "year": 2015
+  }, {
+    "title": "Discriminative learning of deep convolutional feature point descriptors",
+    "authors": ["E. Simo-Serra", "E. Trulls", "L. Ferraz", "I. Kokkinos", "P. Fua", "F. Moreno-Noguer"],
+    "venue": "In Computer Vision (ICCV),",
+    "year": 2015
+  }, {
+    "title": "Accelerating deep neural network training with inconsistent stochastic gradient descent",
+    "authors": ["L. Wang", "Y. Yang", "M.R. Min", "S. Chakradhar"],
+    "venue": "arXiv preprint arXiv:1603.05544,",
+    "year": 2016
+  }, {
+    "title": "Sampling matters in deep embedding learning",
+    "authors": ["Wu", "C.-Y", "R. Manmatha", "A.J. Smola", "P. Krahenbuhl"],
+    "venue": "In The IEEE International Conference on Computer Vision (ICCV),",
+    "year": 2017
+  }, {
+    "title": "Wide residual networks",
+    "authors": ["S. Zagoruyko", "N. Komodakis"],
+    "venue": "Proceedings of the British Machine Vision Conference (BMVC),",
+    "year": 2016
+  }, {
+    "title": "Stochastic optimization with importance sampling for regularized loss minimization",
+    "authors": ["P. Zhao", "T. Zhang"],
+    "venue": "In Proceedings of the 32nd International Conference on Machine Learning",
+    "year": 2015
+  }],
+  "id": "SP:d68999c2d90aa1aba7b090ffce6d9c871d5a30ac",
+  "authors": [{
+    "name": "Angelos Katharopoulos",
+    "affiliations": []
+  }, {
+    "name": "François Fleuret",
+    "affiliations": []
+  }],
+  "abstractText": "Deep neural network training spends most of the computation on examples that are properly handled, and could be ignored. We propose to mitigate this phenomenon with a principled importance sampling scheme that focuses computation on “informative” examples, and reduces the variance of the stochastic gradients during training. Our contribution is twofold: first, we derive a tractable upper bound to the per-sample gradient norm, and second we derive an estimator of the variance reduction achieved with importance sampling, which enables us to switch it on when it will result in an actual speedup. The resulting scheme can be used by changing a few lines of code in a standard SGD procedure, and we demonstrate experimentally, on image classification, CNN fine-tuning, and RNN training, that for a fixed wall-clock time budget, it provides a reduction of the train losses of up to an order of magnitude and a relative improvement of test errors between 5% and 17%.",
+  "title": "Not All Samples Are Created Equal:  Deep Learning with Importance Sampling"
+}

@@ -1,0 +1,301 @@
+{
+  "sections": [{
+    "text": "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Long Papers), pages 1190–1199 Melbourne, Australia, July 15 - 20, 2018. c©2018 Association for Computational Linguistics\n1190"
+  }, {
+    "heading": "1 Introduction",
+    "text": "Statistical parsers are often criticized for their performance outside of the domain they were trained on. The most straightforward remedy would be more training data in the target domain, but building treebanks (Marcus et al., 1993) is expensive.\nIn this paper, we revisit this issue in light of recent developments in neural natural language processing. Our paper rests on two observations:\n1. It is trivial to train on partial annotations using a span-focused model. Stern et al. (2017a) demonstrated that a parser with minimal dependence between the decisions that produce a parse can achieve state-of-the-art performance. We modify their parser, hence-"
+  }, {
+    "heading": "In [ the figure above ] , [ [ AD = 4 ] , [ AB =",
+    "text": "forth MSP, so that it trains directly on individual labeled spans instead of parse trees. This results in a parser that can be trained, with no adjustments to the training regime, from partial sentence bracketings.\n2. The use of contextualized word representations (Peters et al., 2017; McCann et al., 2017) greatly reduces the amount of data needed to train linguistic models. Contextualized word representations, which encode tokens conditioned on their context in a sentence, have been shown to give significant boosts across a variety of NLP tasks, and also to reduce the amount of data needed by an order of magnitude in some tasks.\nTaken together, this suggests a way to rapidly extend a newswire-trained parser to new domains. Specifically, we will show it is possible to achieve large out-of-domain performance improvements using only dozens of partially annotated sentences, like those shown in Figure 1. The resulting parser also does not suffer any degradation on the newswire domain.\nAlong the way, we provide several other notable contributions:\n• We raise the state-of-the-art single-model F1score for constituency parsing from 92.6% to 94.3% on the Wall Street Journal (WSJ) test set. A trained model is publicly available.1\n• We show that, even without domain-specific training data, our parser has much less out-ofdomain degradation than previous parsers on “newswire-adjacent” domains like the Brown corpus.\n• We provide a version of MSP which predicts its own POS tags (rather than requiring a third-party tagger)."
+  }, {
+    "heading": "2 The Reconciled Span Parser (RSP)",
+    "text": "When we allow annotators to selectively annotate important phenomena, we make the process faster and simpler (Mielens et al., 2015). Unfortunately, this produces a disconnect between the model (which typically asserts the probability of a full parse tree) and the annotation task (which asserts the correctness of some subcomponent, like a constituent span or a dependency arc). There is a body of research (Hwa, 1999; Li et al., 2016) that discusses how to bridge this gap by modifying the training data, training algorithm, or the training objective.\nAlternatively, we could just better align the model with the annotation task. Specifically, we could train a parser whose base model predicts exactly what we ask the annotator to annotate, e.g. whether a particular span is a constituent. This makes it trivial to train with partial or full annotations, because the training data reduces to a collection of span labels in either case.\nLuckily, recent state-of-the-art results that model NLP tasks as independently classified spans (Stern et al., 2017a) suggest this strategy is currently viable. In this section, we present the Reconciled Span Parser (RSP), a modified version of the Minimal Span Parser (MSP) of Stern et al. (2017a). RSP differs from MSP in the following ways:\n• It is trained on a span classification task. MSP trains on a maximum margin objective; that is, the loss function penalizes the\n1http://allennlp.org/models\nviolation of a margin between the scores of the gold parse and the next highest scoring parse decoded. This couples its training procedure with its decoding procedure, resulting in two versions, a top-down parser and a chart parser. To allow our model to be trained on partial annotations, we change the training task to be the span classification task described below.\n• It uses contextualized word representations instead of predicted part-of-speech tags. Our model uses contextualized word representations as described in Peters et al. (2018). It does not take part-of-speech-tags as input, eliminating the dependence of the parser on a newswire-trained POS-tagger."
+  }, {
+    "heading": "2.1 Overview",
+    "text": "We will view a parse tree as a labeling of all the spans of a sentence such that:\n• Every constituent span is labeled with the sequence of non-terminals assigned to it in the parse tree. For instance, span (2, 4) in Figure 2b is labeled with the sequence 〈S,VP〉, as shown in Figure 2a.\n• Every non-constituent is labeled with the empty sequence.\nGiven a sentence represented by a sequence of tokens x of length n, define spans(x) = {(i, j) | 0 ≤ i < j ≤ n}. Define a parse for sentence x as a function π : spans(x) 7→ L where L is the set of all sequences of non-terminal tags, including the empty sequence.\nWe model the probability of a parse as the independent product of its span labels:\nPr(π|x) = ∏\ns∈spans(x)\nPr(π(s) | x, s)\n⇒ logPr(π|x) = ∑\ns∈spans(x)\nlogPr(π(s) | x, s)\nHence, we will train a base model σ(l | x, s) to estimate the log probability of label l for span s (given sentence x), and we will score the overall parse with:\nscore(π|x) = ∑\ns∈spans(x)\nσ(π(s) | x, s)\nNote that this probability model accords mass to mis-structured trees (e.g. overlapping spans like (2, 5) and (3, 7) cannot both be constituents of a well-formed tree). We solve the following Integer Linear Program (ILP)2 to find the highest scoring parse that admits a well-formed tree:\nmax δ ∑ (i,j)∈spans(x) v+(i,j)δ(i,j) + v − (i,j)(1− δ(i,j))\nsubject to:\ni < k < j < m =⇒ δ(i,j) + δ(k,m) ≤ 1 (i, j) ∈ spans(x) =⇒ δ(i,j) ∈ {0, 1}\nwhere:\nv+(i,j) = maxl s.t. l 6=∅ σ(l | x, (i, j))\nv−(i,j) = σ(∅ | x, (i, j)) 2There are a number of ways to reconcile the span conflicts, including an adaptation of the standard dynamic programming chart parsing algorithm to work with spans of an unbinarized tree. However it turns out that the classification model rarely produces span conflicts, so all methods we tried performed equivalently well."
+  }, {
+    "heading": "2.2 Classification Model",
+    "text": "For our span classification model σ(l | x, s), we use the model from (Stern et al., 2017a), which leverages a method for encoding spans from (Wang and Chang, 2016; Cross and Huang, 2016). First, it creates a sentence encoding by running a two-layer bidirectional LSTM over the sentence to obtain forward and backward encodings for each position i, denoted by fi and bi respectively. Then, spans are encoded by the difference in LSTM states immediately before and after the span; that is, span (i, j) is encoded as the concatenation of the vector differences fj − fi−1 and bi−bj+1. A one-layer feedforward network maps each span representation to a distribution over labels.\nClassification Model Parameters and Initializations\nWe preserve the settings used in Stern et al. (2017a) where possible. As a result, the size of the hidden dimensions of the LSTM and the feedforward network is 250. The dropout ratio for the LSTM is set to 0.4 . Unlike the model it is based on, our model uses word embeddings of length 1124. These result from concatenating a 100 dimension learned word embedding, with a 1024 di-\nmension learned linear combination of the internal states of a bidirectional language model run on the input sentence as described in Peters et al. (2018). We refer to them below as ELMo (Embeddings from Language Models). For the learned embeddings, words with n occurrences in the training data are replaced by 〈UNK〉 with probability 1+ n\n10 1+n . This does not affect the ELMo component of the word embeddings. As a result, even common words are replaced with probability at least 1 10 , making the model rely on the ELMo embeddings instead of the learned embeddings. To make the model self-contained, it does not take part-ofspeech tags as input. Using a linear layer over the last hidden layer of the classification model, partof-speech tags are predicted for spans containing single words."
+  }, {
+    "heading": "3 Analysis of RSP",
+    "text": ""
+  }, {
+    "heading": "3.1 Performance on Newswire",
+    "text": "On WSJTEST3, RSP outperforms (see Table 1) all previous single models trained on WSJTRAIN by a significant margin, raising the state-of-the-art result from 92.6% to 94.3%. Additionally, our predicted part-of-speech tags achieve 97.72%4 accuracy on WSJTEST.\n3For all our experiments on the WSJ component of the Penn Treebank (Marcus et al., 1993), we use the standard split which is sections 2-21 for training, henceforth WSJTRAIN, section 22 for development, henceforth WSJDEV, and 23 for testing, henceforth WSJTEST.\n4The split we used is not standard for part-of-speech tagging. As a result, we do not compare to part-of-speech taggers."
+  }, {
+    "heading": "3.2 Beyond Newswire",
+    "text": "The Brown Corpus The Brown corpus (Marcus et al., 1993) is a standard benchmark used to assess WSJ-trained parsers outside of the newswire domain. When (Kummerfeld et al., 2012) parsed the various Brown verticals with the (then state-of-the-art) Charniak parser (Charniak, 2000; Charniak and Johnson, 2005; McClosky et al., 2006a), it achieved F1 scores between 83% and 86%, even though its F1 score on WSJTEST was 92.1%.\nIn Table 3, we discover that RSP does not suffer nearly as much degradation, with an average F1-score of 90.3%. To determine whether this increased portability is because of the parser architecture or the use of ELMo vectors, we also run MSP on the Brown verticals. We used the Stanford tagger5 (Toutanova et al., 2003) to tag WSJTRAIN and the Brown verticals so that MSP could be given these at train and test time. We learned that most of the improvement can be attributed to the ELMo word representations. In fact, even if we use MSP with gold POS tags, the average performance is 3.4% below RSP.\nQuestion Bank and Genia Despite being a standard benchmark for parsing domain adaptation, the Brown corpus has considerable commonality with newswire text. It is primarily composed of well-formed sentences with similar syntactic phenomena. Perhaps the main challenge with the Brown corpus is a difference in vocabulary, rather than a difference in syntax, which may explain the success of RSP, which leverages contextualized embeddings learned from a large corpus.\nIf we try to run RSP on a more syntactically divergent corpus like QuestionBank6 (Judge et al., 2006), we find much more performance degradation. This is unsurprising, since WSJTRAIN does not contain many examples of question syntax. But how many examples do we need, to get good performance?\n5We used the english-left3words-distsim.tagger model from the 2017-06-09 release of the Stanford POS tagger since it achieved the best accuracy on the Brown corpus.\n6For all our experiments on QuestionBank, we use the following split: sentences 1-1000 and 2001-3000 for training, henceforth QBANKTRAIN, 1001-1500 and 3001-3500 for development, henceforth QBANKDEV, and 1501-2000 and 2501-4000 for testing, henceforth QBANKTEST. This split is described at https://nlp.stanford.edu/data/QuestionBankStanford.shtml.\nFor the experiments summarized in table 4 and table 5 involving 40k sentences from WSJTRAIN, we started with RSP trained on WSJTRAIN, and fine-tuned it on minibatches containing an equal number of target domain and WSJTRAIN sentences.\nSurprisingly, with only 50 annotated questions (see Table 4), performance on QBANKDEV jumps 5 points, from 89.9% to 94.9%. This is only\n1.5% below training with all of WSJTRAIN and QBANKTRAIN. The resulting system improves slightly on WSJTEST getting 94.38%.\nOn the more difficult GENIA corpus of biomedical abstracts (Tateisi et al., 2005), we see a similar, if somewhat less dramatic, trend. See Table 5. With 50 annotated sentences, performance on GENIADEV jumps from 79.5% to 86.2%, outperforming all but one parser from David McClosky’s thesis (McClosky, 2010) – the one that trains on all 14k sentences from GENIATRAIN and self-trains using 270k sentences from PubMed. That parser achieves 87.6%, which we outperform with just 500 sentences from GENIATRAIN.\nThese results suggest that it is currently feasible to extend a parser to a syntactically distant domain (for which no gold parses exist) with a couple hours of effort. We explore this possibility in the next section."
+  }, {
+    "heading": "4 Rapid Parser Extension",
+    "text": "To create a parser for their geometry question answering system, (Seo et al., 2015) did the following:\n• Designed regular expressions to identify mathematical expressions.\n• Replaced the identified expressions with dummy words.\n• Parsed the resulting sentences.\nFRAG\n.\n.\nNP\n24 and QS = 10\nSYM\n=\nNP\nPR\n,\n,\nNP\nPQRS\nPP\nIn the rhombus\n(a) Training only on WSJTRAIN.\nFRAG\n.\n.\nNP\nPR = 24 and QS = 10\n,\n,\nPP\nIn the rhombus PQRS\n(b) Retraining on partial annotations.\nIt is clear why this was necessary. Figure 3 (top) shows how RSP (trained only on WSJTRAIN) parses the sentence “In the rhombus PQRS, PR = 24 and QS = 10.” The result is completely wrong, and useless to a downstream application.\nStill, beyond just the inconvenience of building additional infrastructure, there are downsides to the “regex-and-replace” strategy:\n1. It assumes that each expression always maps to the same constituent label. Consider “2x = 3y”. This is a verb phrase in the sentence “In the above figure, x is prime and 2x = 3y.” However, it is a noun phrase in the sentence “The equation 2x = 3y has 2 solutions.” If we replace both instances with the same dummy word, the parser will almost certainly become confused in one of the two instances.\n2. It assumes that each expression is always a constituent. Suppose that we replace the expression “AB < 30” with a dummy word. This means we cannot properly parse a sentence like “When angle AB < 30, the lines are parallel,” because the constituent “angle AB” no longer exists in the resulting sentence.\n3. It does not handle other syntactic variation. As we will see in the next section, the\ngeometry domain has a propensity for using right-attaching participial adjective phrases, like “labeled x” in the phrase “the segment labeled x.” Encouraging a parser to recognize this syntactic construct is out-of-scope for the “regex-and-replace” strategy.\nInstead, we propose directly extending the parser by providing a few domain-specific examples like those in Figure 1. Because RSP’s model directly predicts span constituency, we can simply mark up a sentence with the “tricky” domain-specific constituents that the model will not already have learned from WSJTRAIN. For instance, we mark up NOUN-LABEL constructs like “chord BD”, and equations like “AD = 4”.\nFrom these marked-up sentences, we can extract training instances declaring the constituency of certain spans (like “to chord BD” in the third example) and the implied non-constituency of certain spans (like “perpendicular to chord” in the third example). We also allow annotators to explicitly declare the non-constituency of a span via an alternative markup (not shown).\nWe do not require annotators to provide span labels (although they can if desired). If a training instance merely declares a span to be a constituent (but does not provide a particular label), then the loss function only records loss when that span is classified as a non-constituent (i.e. any label is ok)."
+  }, {
+    "heading": "5 Experiments",
+    "text": ""
+  }, {
+    "heading": "5.1 Geometry Questions",
+    "text": "We took the publicly available training data from (Seo et al., 2015), split the data into sentences, and then annotated each sentence as in Figure 1. Next, we randomly split these sentences into GEOTRAIN and GEODEV7. After removing duplicate sentences spanning both sets, we ended up with 63 annotated sentences in GEOTRAIN and 62 in GEODEV. In GEOTRAIN, we made an average of 2.8 constituent declarations and 0.3 (explicit) nonconstituent declarations per sentence.\nAfter preparing the data, we started with RSP trained on WSJTRAIN, and fine-tuned it on minibatches containing 50 randomly selected WSJTRAIN sentences, plus all of GEOTRAIN. The results are in table 6. After fine-tuning, the model\n7GEOTRAIN and GEODEV are available at https://github.com/vidurj/parser-adaptation/tree/master/data.\ngets 87% of the 185 annotations on GEODEV correct, compared with 71.9% before fine-tuning8. Moreover, the fraction of sentences with no errors increases from 45.2% to 72.6%. With only a few dozen partially-annotated training examples, not only do we see a large increase in domain performance, but there is also no degradation in the parser’s performance on newswire. Some GEODEV parses have enormous qualitative differences, like the example shown in Figure 3.\nFor the GEODEV sentences on which we get errors after retraining, the errors fall predominantly into three categories. First, approximately 44% have some mishandled math syntax, like failing to recognize “dimensions 16 by 8” as a constituent, or providing a flat structuring of the equation “BAC = 1/4 * ACB” (instead of recognizing “1/4 * ACB” as a subconstituent). Second, approximately 19% have PP-attachment errors. Third, another 19% fail to correctly analyze right-attaching participial adjectives like “labeled x” in the noun phrase “the segment labeled x” or\n8This improvement has a p-value of 10−4 under the onesided, two-sample difference between proportions test.\n“indicated” in the noun phrase “the center indicated.” This phenomenon is unusually frequent in geometry but was insufficiently marked-up in our training examples. For instance, while we have a training instance “Find [ the measure of [ the angle designated by x ] ],” it does not explicitly highlight the constituency of “designated by x”. This suggests that in practice, this domain adaptation method could benefit from an iterative cycle in which a user assesses the parser’s errors on their target domain, creates some partial annotations that address these issues, retrains the parser, and then repeats the process until satisfied. As a proof-of-concept, we invented 3 additional sentences with right-attaching participial adjectives (shown in Figure 4), added them to GEOTRAIN, and then retrained. Indeed, the handling of participial adjectives in GEODEV improved, increasing the overall percentage of correctly identified constituents to 88.6% and the percentage of errorfree sentences to 75.8%."
+  }, {
+    "heading": "5.2 Biomedicine and Chemistry",
+    "text": "We ran a similar experiment using biomedical and chemistry text, taken from the unannotated data provided by (Nivre et al., 2007). We partially annotated 134 sentences and randomly split them into BIOCHEMTRAIN (72 sentences) and BIOCHEMDEV (62 sentences)9. In BIOCHEMTRAIN, we made an average of 4.2 constituent declarations per sentence. We made no nonconstituent declarations.\nAgain, we started with RSP trained on WSJTRAIN, and fine-tuned it on minibatches containing annotations from 50 randomly selected WSJ-\n9BIOCHEMTRAIN and BIOCHEMDEV are available at https://github.com/vidurj/parser-adaptation/tree/master/data.\nTRAIN sentences, plus all of BIOCHEMTRAIN. Table 7 shows the improvement in the percentage of correctly-identified annotated constituents and the percentage of test sentences for which the parse agrees with every annotation. As with the geometry domain, we get significant improvements using only dozens of partially annotated training sentences."
+  }, {
+    "heading": "6 Related Work",
+    "text": "The two major themes of this paper, domain adaptation and learning from partial annotation, each have a long tradition in natural language processing."
+  }, {
+    "heading": "6.1 Domain Adaptation",
+    "text": "Domain adaptation has been recognized as a major NLP problem for over a decade (Ben-David et al., 2006; Blitzer et al., 2006; Daumé, 2007; Finkel and Manning, 2009). In particular, domain adaptation for parsers (Plank, 2011; Ma and Xia, 2013) has received considerable attention. Much of this work (McClosky et al., 2006b; Reichart and Rappoport, 2007; Sagae and Tsujii, 2007; Kawahara and Uchimoto, 2008; McClosky et al., 2010; Sagae, 2010; Baucom et al., 2013; Yu et al., 2015) has focused on how to best use co-training (Blum and Mitchell, 1998) or self-training to augment a small domain corpus, or how to best combine models to perform well on a particular domain.\nIn this work, we focus on the direct impact that just a few dozen partially annotated out-of-domain examples can have, when using a particular neural model with contextualized word representations. Co-training, self-training, and model combination are orthogonal to our approach. Our work is a spiritual successor to (Garrette and Baldridge, 2013), which shows how to train a part-of-speech tagger with a minimal amount of annotation effort."
+  }, {
+    "heading": "6.2 Learning from Partial Annotation",
+    "text": "Most literature on training parsers from partial annotations (Sassano and Kurohashi, 2010; Spreyer et al., 2010; Flannery et al., 2011; Flannery and Mori, 2015; Mielens et al., 2015) focuses on dependency parsing. (Li et al., 2016) provides a good overview. Here we highlight three important highlevel strategies.\nThe first is “complete-then-train” (Mirroshandel and Nasr, 2011; Majidi and Crane, 2013), which “completes” every partially annotated de-\npendency parse by finding the most likely parse (according to an already trained parser model) that respects the constraints of the partial annotations. These “completed” parses are then used to train a new parser.\nThe second strategy (Nivre et al., 2014; Li et al., 2016) is similar to “complete-then-train,” but integrates parse completion into the training process. At each iteration, new “complete” parses are created using the parser model from the most recent training iteration.\nThe third strategy (Li et al., 2014, 2016) transforms each partial annotation into a forest of parses that encodes all fully-specified parses permitted by the partial annotation. Then, the training objective is modified to support optimization over these forests.\nOur work differs from these in two respects. First, since we are training a constituency parser, our partial annotations are constituent bracketings rather than dependency arcs. Second, and more importantly, we can use the partial annotations for training without modifying either the training algorithm or the training data.\nWhile the bulk of the literature on training from partial annotations focuses on dependency parsing, the earliest papers (Pereira and Schabes, 1992; Hwa, 1999) focus on constituency parsing. These leverage an adapted version of the inside-outside algorithm for estimating the parameters of a probabilistic context-free grammar (PCFG). Our work is not tied to PCFG parsing, nor does it require a specialized training algorithm when going from full annotations to partial annotations."
+  }, {
+    "heading": "7 Conclusion",
+    "text": "Recent developments in neural natural language processing have made it very easy to build custom parsers. Not only do contextualized word representations help parsers learn the syntax of new domains with very few examples, but they also work extremely well with parsing models that correspond directly with a granular and intuitive annotation task (like identifying whether a span is a constituent). This allows you to train with either full or partial annotations without any change to the training process.\nThis work provides a convenient path forward for the researcher who requires a parser for their domain, but laments that “parsers don’t work outside of newswire.” With a couple hours of effort\n(and a layman’s understanding of syntactic building blocks), they can get significant performance improvements. We envision an iterative use case in which a user assesses a parser’s errors on their target domain, creates some partial annotations to teach the parser how to fix these errors, then retrains the parser, repeating the process until they are satisfied."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Domain adaptation for parsing",
+    "authors": ["Eric Baucom", "Levi King", "Sandra Kübler."],
+    "venue": "RANLP.",
+    "year": 2013
+  }, {
+    "title": "Analysis of representations for domain adaptation",
+    "authors": ["Shai Ben-David", "John Blitzer", "Koby Crammer", "Fernando Pereira."],
+    "venue": "NIPS.",
+    "year": 2006
+  }, {
+    "title": "Domain adaptation with structural correspondence learning",
+    "authors": ["John Blitzer", "Ryan T. McDonald", "Fernando Pereira."],
+    "venue": "EMNLP.",
+    "year": 2006
+  }, {
+    "title": "Combining labeled and unlabeled data with co-training",
+    "authors": ["Avrim Blum", "Tom Mitchell."],
+    "venue": "Proceedings of the eleventh annual conference on Computational learning theory. ACM, pages 92–100.",
+    "year": 1998
+  }, {
+    "title": "A maximum-entropy-inspired parser",
+    "authors": ["Eugene Charniak."],
+    "venue": "ANLP.",
+    "year": 2000
+  }, {
+    "title": "Coarseto-fine n-best parsing and maxent discriminative reranking",
+    "authors": ["Eugene Charniak", "Mark Johnson."],
+    "venue": "Proceedings of the 43rd Annual Meeting on Association for Computational Linguistics. Association for Computational Linguistics, pages",
+    "year": 2005
+  }, {
+    "title": "Span-based constituency parsing with a structure-label system and provably optimal dynamic oracles",
+    "authors": ["James Cross", "Liang Huang."],
+    "venue": "EMNLP.",
+    "year": 2016
+  }, {
+    "title": "Frustratingly easy domain adaptation",
+    "authors": ["Hal Daumé."],
+    "venue": "CoRR abs/0907.1815.",
+    "year": 2007
+  }, {
+    "title": "Recurrent neural network grammars",
+    "authors": ["Chris Dyer", "Adhiguna Kuncoro", "Miguel Ballesteros", "Noah A. Smith."],
+    "venue": "CoRR abs/1602.07776. http://arxiv.org/abs/1602.07776.",
+    "year": 2016
+  }, {
+    "title": "Hierarchical bayesian domain adaptation",
+    "authors": ["Jenny Rose Finkel", "Christopher D. Manning."],
+    "venue": "HLTNAACL.",
+    "year": 2009
+  }, {
+    "title": "Training dependency parsers from partially annotated corpora",
+    "authors": ["Daniel Flannery", "Yusuke Miyao", "Graham Neubig", "Shinsuke Mori."],
+    "venue": "IJCNLP.",
+    "year": 2011
+  }, {
+    "title": "Combining active learning and partial annotation for domain adaptation of a japanese dependency parser",
+    "authors": ["Daniel Flannery", "Shinsuke Mori."],
+    "venue": "IWPT .",
+    "year": 2015
+  }, {
+    "title": "Learning a part-of-speech tagger from two hours of annotation",
+    "authors": ["Dan Garrette", "Jason Baldridge."],
+    "venue": "Proceedings of the 2013 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies.",
+    "year": 2013
+  }, {
+    "title": "Supervised grammar induction using training data with limited constituent information",
+    "authors": ["Rebecca Hwa."],
+    "venue": "CoRR cs.CL/9905001.",
+    "year": 1999
+  }, {
+    "title": "Questionbank: Creating a corpus of parseannotated questions",
+    "authors": ["John Judge", "Aoife Cahill", "Josef Van Genabith."],
+    "venue": "Proceedings of the 21st International Conference on Computational Linguistics and the 44th annual meeting of the Associa-",
+    "year": 2006
+  }, {
+    "title": "Learning reliability of parses for domain adaptation of dependency parsing",
+    "authors": ["Daisuke Kawahara", "Kiyotaka Uchimoto."],
+    "venue": "IJCNLP.",
+    "year": 2008
+  }, {
+    "title": "Parser showdown at the wall street corral: An empirical investigation of error types in parser output",
+    "authors": ["Jonathan K. Kummerfeld", "David Leo Wright Hall", "James R. Curran", "Dan Klein."],
+    "venue": "EMNLP-CoNLL.",
+    "year": 2012
+  }, {
+    "title": "Soft cross-lingual syntax projection for dependency parsing",
+    "authors": ["Zhenghua Li", "Min Zhang", "Wenliang Chen."],
+    "venue": "COLING.",
+    "year": 2014
+  }, {
+    "title": "Training dependency parsers with partial annotation",
+    "authors": ["Zhenghua Li", "Yue Zhang", "Jiayuan Chao", "Min Zhang."],
+    "venue": "CoRR abs/1609.09247.",
+    "year": 2016
+  }, {
+    "title": "Dependency parser adaptation with subtrees from auto-parsed target domain data",
+    "authors": ["Xuezhe Ma", "Fei Xia."],
+    "venue": "ACL.",
+    "year": 2013
+  }, {
+    "title": "Committee-based active learning for dependency parsing",
+    "authors": ["Saeed Majidi", "Gregory R. Crane."],
+    "venue": "TPDL.",
+    "year": 2013
+  }, {
+    "title": "Building a large annotated corpus of english: The penn treebank",
+    "authors": ["Mitchell P Marcus", "Mary Ann Marcinkiewicz", "Beatrice Santorini."],
+    "venue": "Computational linguistics 19(2):313–330.",
+    "year": 1993
+  }, {
+    "title": "Learned in translation: Contextualized word vectors",
+    "authors": ["Bryan McCann", "James Bradbury", "Caiming Xiong", "Richard Socher."],
+    "venue": "NIPS.",
+    "year": 2017
+  }, {
+    "title": "Any domain parsing: automatic domain adaptation for natural language parsing",
+    "authors": ["David McClosky"],
+    "year": 2010
+  }, {
+    "title": "Effective self-training for parsing",
+    "authors": ["David McClosky", "Eugene Charniak", "Mark Johnson."],
+    "venue": "HLT-NAACL.",
+    "year": 2006
+  }, {
+    "title": "Reranking and self-training for parser adaptation",
+    "authors": ["David McClosky", "Eugene Charniak", "Mark Johnson."],
+    "venue": "ACL.",
+    "year": 2006
+  }, {
+    "title": "Automatic domain adaptation for parsing",
+    "authors": ["David McClosky", "Eugene Charniak", "Mark Johnson."],
+    "venue": "HLT-NAACL.",
+    "year": 2010
+  }, {
+    "title": "Parse imputation for dependency annotations",
+    "authors": ["Jason Mielens", "Liang Sun", "Jason Baldridge."],
+    "venue": "ACL.",
+    "year": 2015
+  }, {
+    "title": "Active learning for dependency parsing using partially annotated sentences",
+    "authors": ["Seyed Abolghasem Mirroshandel", "Alexis Nasr."],
+    "venue": "IWPT .",
+    "year": 2011
+  }, {
+    "title": "Constrained arc-eager dependency parsing",
+    "authors": ["Joakim Nivre", "Yoav Goldberg", "Ryan T. McDonald."],
+    "venue": "Computational Linguistics 40:249–527.",
+    "year": 2014
+  }, {
+    "title": "The conll 2007 shared task on dependency parsing",
+    "authors": ["Joakim Nivre", "Johan Hall", "Sandra Kübler", "Ryan McDonald", "Jens Nilsson", "Sebastian Riedel", "Deniz Yuret."],
+    "venue": "Proceedings of the 2007 Joint Conference on Empirical Methods in Natural Lan-",
+    "year": 2007
+  }, {
+    "title": "Insideoutside reestimation from partially bracketed corpora",
+    "authors": ["Fernando Pereira", "Yves Schabes."],
+    "venue": "ACL.",
+    "year": 1992
+  }, {
+    "title": "Deep contextualized word representations",
+    "authors": ["M.E. Peters", "M. Neumann", "M. Iyyer", "M. Gardner", "C. Clark", "K. Lee", "L. Zettlemoyer."],
+    "venue": "ArXiv e-prints .",
+    "year": 2018
+  }, {
+    "title": "Semi-supervised sequence tagging with bidirectional language models",
+    "authors": ["Matthew E. Peters", "Waleed Ammar", "Chandra Bhagavatula", "Russell Power."],
+    "venue": "ACL.",
+    "year": 2017
+  }, {
+    "title": "Domain adaptation for parsing",
+    "authors": ["Barbara Plank."],
+    "venue": "Citeseer.",
+    "year": 2011
+  }, {
+    "title": "Self-training for enhancement and domain adaptation of statistical parsers trained on small datasets",
+    "authors": ["Roi Reichart", "Ari Rappoport."],
+    "venue": "ACL.",
+    "year": 2007
+  }, {
+    "title": "Self-training without reranking for parser domain adaptation and its impact on semantic role labeling",
+    "authors": ["Kenji Sagae"],
+    "year": 2010
+  }, {
+    "title": "Dependency parsing and domain adaptation with lr models and parser ensembles",
+    "authors": ["Kenji Sagae", "Jun’ichi Tsujii"],
+    "venue": "In EMNLP-CoNLL",
+    "year": 2007
+  }, {
+    "title": "Using smaller constituents rather than sentences in active learning for japanese dependency parsing",
+    "authors": ["Manabu Sassano", "Sadao Kurohashi."],
+    "venue": "ACL.",
+    "year": 2010
+  }, {
+    "title": "Solving geometry problems: Combining text and diagram interpretation",
+    "authors": ["Min Joon Seo", "Hannaneh Hajishirzi", "Ali Farhadi", "Oren Etzioni", "Clint Malcolm."],
+    "venue": "EMNLP.",
+    "year": 2015
+  }, {
+    "title": "Training parsers on partial trees: A cross-language comparison",
+    "authors": ["Kathrin Spreyer", "Lilja Ovrelid", "Jonas Kuhn."],
+    "venue": "LREC.",
+    "year": 2010
+  }, {
+    "title": "A minimal span-based neural constituency parser",
+    "authors": ["Mitchell Stern", "Jacob Andreas", "Dan Klein."],
+    "venue": "CoRR abs/1705.03919. http://arxiv.org/abs/1705.03919.",
+    "year": 2017
+  }, {
+    "title": "Effective inference for generative neural parsing",
+    "authors": ["Mitchell Stern", "Daniel Fried", "Dan Klein."],
+    "venue": "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing, EMNLP 2017, Copen-",
+    "year": 2017
+  }, {
+    "title": "Syntax annotation for the genia corpus",
+    "authors": ["Yuka Tateisi", "Akane Yakushiji", "Tomoko Ohta", "Jun’ichi Tsujii"],
+    "venue": "In Companion Volume to the Proceedings of Conference including Posters/Demos and tutorial abstracts",
+    "year": 2005
+  }, {
+    "title": "Feature-rich partof-speech tagging with a cyclic dependency network",
+    "authors": ["Kristina Toutanova", "Dan Klein", "Christopher D. Manning", "Yoram Singer."],
+    "venue": "Human Language Technology Conference of the North American Chapter of the Asso-",
+    "year": 2003
+  }, {
+    "title": "Graph-based dependency parsing with bidirectional lstm",
+    "authors": ["Wenhui Wang", "Baobao Chang."],
+    "venue": "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers). volume 1, pages 2306–2315.",
+    "year": 2016
+  }, {
+    "title": "Domain adaptation for dependency parsing via selftraining",
+    "authors": ["Juntao Yu", "Mohab Elkaref", "Bernd Bohnet."],
+    "venue": "IWPT .",
+    "year": 2015
+  }],
+  "id": "SP:1f1ed5bfd1b74518526edcd7650e7e9902fd8a50",
+  "authors": [{
+    "name": "Vidur Joshi",
+    "affiliations": []
+  }, {
+    "name": "Matthew Peters",
+    "affiliations": []
+  }, {
+    "name": "Mark Hopkins",
+    "affiliations": []
+  }],
+  "abstractText": "We revisit domain adaptation for parsers in the neural era. First we show that recent advances in word representations greatly diminish the need for domain adaptation when the target domain is syntactically similar to the source domain. As evidence, we train a parser on the Wall Street Journal alone that achieves over 90% F1 on the Brown corpus. For more syntactically distant domains, we provide a simple way to adapt a parser using only dozens of partial annotations. For instance, we increase the percentage of error-free geometry-domain parses in a held-out set from 45% to 73% using approximately five dozen training examples. In the process, we demonstrate a new state-of-the-art single model result on the Wall Street Journal test set of 94.3%. This is an absolute increase of 1.7% over the previous state-of-the-art of 92.6%.",
+  "title": "Extending a Parser to Distant Domains Using a Few Dozen Partially Annotated Examples"
+}

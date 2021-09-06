@@ -1,0 +1,315 @@
+{
+  "sections": [{
+    "text": "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Long Papers), pages 2094–2103 Melbourne, Australia, July 15 - 20, 2018. c©2018 Association for Computational Linguistics\n2094"
+  }, {
+    "heading": "1 Introduction",
+    "text": "Recurrent neural networks (RNNs) have recently proven to be very effective sequence modeling tools, and are now state of the art for tasks such as machine translation (Cho et al., 2014; Sutskever et al., 2014; Bahdanau et al., 2015), image captioning (Kiros et al., 2014; Vinyals et al., 2015; Anderson et al., 2017) and automatic speech recognition (Chorowski et al., 2015; Chiu et al., 2017).\nThe basic principle of RNNs is to iteratively compute a vectorial sequence representation, by applying at each time-step the same trainable func-\ntion to compute the new network state from the previous state and the last symbol in the sequence. These models are typically trained by maximizing the likelihood of the target sentence given an encoded source (text, image, speech).\nMaximum likelihood estimation (MLE), however, has two main limitations. First, the training signal only differentiates the ground-truth target output from all other outputs. It treats all other output sequences as equally incorrect, regardless of their semantic proximity from the ground-truth target. While such a “zero-one” loss is probably acceptable for coarse grained classification of images, e.g. across a limited number of basic object categories (Everingham et al., 2010) it becomes problematic as the output space becomes larger and some of its elements become semantically similar to each other. This is in particular the case for tasks that involve natural language generation (captioning, translation, speech recognition) where the number of possible outputs is practically unbounded. For natural language generation tasks, evaluation measures typically do take into account structural similarity, e.g. based on n-grams, but such structural information is not reflected in the MLE criterion. The second limitation of MLE is that training is based on predicting the next token given the input and preceding ground-truth output tokens, while at test time the model predicts conditioned on the input and the so-far generated output sequence. Given the exponentially large output space of natural language sentences, it is not obvious that the learned RNNs generalize well beyond the relatively sparse distribution of ground-truth sequences used during MLE optimization. This phenomenon is known as “exposure bias” (Ranzato et al., 2016; Bengio et al., 2015).\nMLE minimizes the KL divergence between a target Dirac distribution on the ground-truth sentence(s) and the model’s distribution. In this pa-\nper, we build upon the “loss smoothing” approach by Norouzi et al. (2016), which smooths the Dirac target distribution over similar sentences, increasing the support of the training data in the output space. We make the following main contributions: • We propose a token-level loss smooth-\ning approach, using word-embeddings, to achieve smoothing among semantically similar terms, and we introduce a special procedure to promote rare tokens. • For sequence-level smoothing, we propose to\nuse restricted token replacement vocabularies, and a “lazy evaluation” method that significantly speeds up training. • We experimentally validate our approach on\nthe MSCOCO image captioning task and the WMT’14 English to French machine translation task, showing that on both tasks combining token-level and sequence-level loss smoothing improves results significantly over maximum likelihood baselines.\nIn the remainder of the paper, we review the existing methods to improve RNN training in Section 2. Then, we present our token-level and sequence-level approaches in Section 3. Experimental evaluation results based on image captioning and machine translation tasks are laid out in Section 4."
+  }, {
+    "heading": "2 Related work",
+    "text": "Previous work aiming to improve the generalization performance of RNNs can be roughly divided into three categories: those based on regularization, data augmentation, and alternatives to maximum likelihood estimation.\nRegularization techniques are used to increase the smoothness of the function learned by the network, e.g. by imposing an `2 penalty on the network weights, also known as “weight decay”. More recent approaches mask network activations during training, as in dropout (Srivastava et al., 2014) and its variants adapted to recurrent models (Pham et al., 2014; Krueger et al., 2017). Instead of masking, batch-normalization (Ioffe and Szegedy, 2015) rescales the network activations to avoid saturating the network’s non-linearities. Instead of regularizing the network parameters or activations, it is also possible to directly regularize based on the entropy of the output distribution (Pereyra et al., 2017).\nData augmentation techniques improve the ro-\nbustness of the learned models by applying transformations that might be encountered at test time to the training data. In computer vision, this is common practice, and implemented by, e.g., scaling, cropping, and rotating training images (LeCun et al., 1998; Krizhevsky et al., 2012; Paulin et al., 2014). In natural language processing, examples of data augmentation include input noising by randomly dropping some input tokens (Iyyer et al., 2015; Bowman et al., 2015; Kumar et al., 2016), and randomly replacing words with substitutes sampled from the model (Bengio et al., 2015). Xie et al. (2017) introduced data augmentation schemes for RNN language models that leverage n-gram statistics in order to mimic KneserNey smoothing of n-grams models. In the context of machine translation, Fadaee et al. (2017) modify sentences by replacing words with rare ones when this is plausible according to a pretrained language model, and substitutes its equivalent in the target sentence using automatic word alignments. This approach, however, relies on the availability of additional monolingual data for language model training.\nThe de facto standard way to train RNN language models is maximum likelihood estimation (MLE) (Cho et al., 2014; Sutskever et al., 2014; Bahdanau et al., 2015). The sequential factorization of the sequence likelihood generates an additive structure in the loss, with one term corresponding to the prediction of each output token given the input and the preceding ground-truth output tokens. In order to directly optimize for sequence-level structured loss functions, such as measures based on n-grams like BLEU or CIDER, Ranzato et al. (2016) use reinforcement learning techniques that optimize the expectation of a sequence-level reward. In order to avoid early convergence to poor local optima, they pre-train the model using MLE.\nLeblond et al. (2018) build on the learning to search approach to structured prediction (Daumé III et al., 2009; Chang et al., 2015) and adapts it to RNN training. The model generates candidate sequences at each time-step using all possible tokens, and scores these at sequence-level to derive a training signal for each time step. This leads to an approach that is structurally close to MLE, but computationally expensive. Norouzi et al. (2016) introduce a reward augmented maximum likelihood (RAML) approach, that incorpo-\nrates a notion of sequence-level reward without facing the difficulties of reinforcement learning. They define a target distribution over output sentences using a soft-max over the reward over all possible outputs. Then, they minimize the KL divergence between the target distribution and the model’s output distribution. Training with a general reward distribution is similar to MLE training, except that we use multiple sentences sampled from the target distribution instead of only the ground-truth sentences.\nIn our work, we build upon the work of Norouzi et al. (2016) by proposing improvements to sequence-level smoothing, and extending it to token-level smoothing. Our token-level smoothing approach is related to the label smoothing approach of Szegedy et al. (2016) for image classification. Instead of maximizing the probability of the correct class, they train the model to predict the correct class with a large probability and all other classes with a small uniform probability. This regularizes the model by preventing overconfident predictions. In natural language generation with large vocabularies, preventing such “narrow” over-confident distributions is imperative, since for many tokens there are nearly interchangeable alternatives."
+  }, {
+    "heading": "3 Loss smoothing for RNN training",
+    "text": "We briefly recall standard recurrent neural network training, before presenting sequence-level and token-level loss smoothing below."
+  }, {
+    "heading": "3.1 Maximum likelihood RNN training",
+    "text": "We are interested in modeling the conditional probability of a sequence y = (y1, . . . , yT ) given a conditioning observation x,\npθ(y|x) = T∏ t=1 pθ(yt|x, y<t), (1)\nwhere y<t = (y1, . . . , yt−1), the model parameters are given by θ, and x is a source sentence or an image in the contexts of machine translation and image captioning, respectively.\nIn a recurrent neural network, the sequence y is predicted based on a sequence of states ht,\npθ(yt|x, y<t) = pθ(yt|ht), (2)\nwhere the RNN state is computed recursively as\nht = { fθ(ht−1, yt−1, x) for t ∈ {1, ..T}, gθ(x) for t = 0. (3)\nThe input is encoded by gθ and used to initialize the state sequence, and fθ is a non-linear function that updates the state given the previous state ht−1, the last output token yt−1, and possibly the input x. The state update function can take different forms, the ones including gating mechanisms such as LSTMs (Hochreiter and Schmidhuber, 1997) and GRUs (Chung et al., 2014) are particularly effective to model long sequences.\nIn standard teacher-forced training, the hidden states will be computed by forwarding the ground truth sequence y∗ i.e. in Eq. (3), the RNN has access to the true previous token y∗t−1. In this case we will note the hidden states h∗t .\nGiven a ground-truth target sequence y∗, maximum likelihood estimation (MLE) of the network parameters θ amounts to minimizing the loss\n`MLE(y ∗, x) = − ln pθ(y∗|x) (4)\n= − T∑ t=1 ln pθ(y ∗ t |h∗t ). (5)\nThe loss can equivalently be expressed as the KLdivergence between a Dirac centered on the target output (with δa(x) = 1 at x = a and 0 otherwise) and the model distribution, either at the sequencelevel or at the token-level:\n`MLE(y ∗, x) = DKL ( δy∗ ||pθ(y|x) ) (6)\n= T∑ t=1 DKL ( δy∗t ||pθ(yt|h ∗ t ) ) . (7)\nLoss smoothing approaches considered in this paper consist in replacing the Dirac on the groundtruth sequence with distributions with larger support. These distributions can be designed in such a manner that they reflect which deviations from ground-truth predictions are preferred over others."
+  }, {
+    "heading": "3.2 Sequence-level loss smoothing",
+    "text": "The reward augmented maximum likelihood approach of Norouzi et al. (2016) consists in replacing the sequence-level Dirac δy∗ in Eq. (6) with a distribution\nr(y|y∗) ∝ exp r(y, y∗)/τ, (8)\nwhere r(y, y∗) is a “reward” function that measures the quality of sequence y w.r.t. y∗, e.g. metrics used for evaluation of natural language processing tasks can be used, such as BLEU (Papineni et al., 2002) or CIDER (Vedantam et al.,\n2015). The temperature parameter τ controls the concentration of the distribution around y∗. When m > 1 ground-truth sequences are paired with the same input x, the reward function can be adapted to fit this setting and be defined as r(y, {y∗(1), . . . , y∗(m)}). The sequence-level smoothed loss function is then given by\n`Seq(y ∗, x) = DKL ( r(y|y∗)||pθ(y|x) ) = H(r(y|y∗))− Er[ln pθ(y|x)] , (9)\nwhere the entropy term H(r(y|y∗)) does not depend on the model parameters θ.\nIn general, expectation in Eq. (9) is intractable due to the exponentially large output space, and replaced with a Monte-Carlo approximation:\nEr[− ln pθ(y|x)] ≈ − L∑ l=1 ln pθ(y l|x). (10)\nStratified sampling. Norouzi et al. (2016) show that when using the Hamming or edit distance as a reward, we can sample directly from r(y|y∗) using a stratified sampling approach. In this case sampling proceeds in three stages. (i) Sample a distance d from {0, . . . , T} from a prior distribution on d. (ii) Uniformly select d positions in the sequence to be modified. (iii) Sample the d substitutions uniformly from the token vocabulary.\nDetails on the construction of the prior distribution on d for a reward based on the Hamming distance can be found in Appendix A.\nImportance sampling. For a reward based on BLEU or CIDER , we cannot directly sample from r(y|y∗) since the normalizing constant, or “partition function”, of the distribution is intractable to compute. In this case we can resort to importance sampling. We first sample L sequences yl from a tractable proposal distribution q(y|y∗). We then compute the importance weights\nωl ≈ r(yl|y∗)/q(yl|y∗)∑L k=1 r(y k|y∗)/q(yk|y∗) , (11)\nwhere r(yk|y∗) is the un-normalized reward distribution in Eq. (8). We finally approximate the expectation by reweighing the samples in the Monte Carlo approximation as\nEr[− ln pθ(y|x)] ≈ − L∑ l=1 ωl ln pθ(y l|x). (12)\nIn our experiments we use a proposal distribution based on the Hamming distance, which allows for tractable stratified sampling, and generates sentences that do not stray away from the ground truth.\nWe propose two modifications to the sequencelevel loss smoothing of Norouzi et al. (2016): sampling to a restricted vocabulary (described in the following paragraph) and lazy sequence-level smoothing (described in section 3.4).\nRestricted vocabulary sampling. In the stratified sampling method for Hamming and edit distance rewards, instead of drawing from the large vocabulary V , containing typically in the order of 104 words or more, we can restrict ourselves to a smaller subset Vsub more adapted to our task. We considered three different possibilities for Vsub. V : the full vocabulary from which we sample uniformly (default), or draw from our token-level smoothing distribution defined below in Eq. (13). Vrefs: uniformly sample from the set of tokens that appear in the ground-truth sentence(s) associated with the current input. Vbatch: uniformly sample from the tokens that appear in the ground-truth sentences across all inputs that appear in a given training mini-batch.\nUniformly sampling from Vbatch has the effect of boosting the frequencies of words that appear in many reference sentences, and thus approximates to some extent sampling substitutions from the uni-gram statistics of the training set."
+  }, {
+    "heading": "3.3 Token-level loss smoothing",
+    "text": "While the sequence-level smoothing can be directly based on performance measures of interest such as BLEU or CIDEr, the support of the smoothed distribution is limited to the number of samples drawn during training. We propose smoothing the token-level Diracs δy∗t in Eq. (7) to increase its support to similar tokens. Since we apply smoothing to each of the tokens independently, this approach implicitly increases the support to an exponential number of sequences, unlike the sequence-level smoothing approach. This comes at the price, however, of a naive token-level independence assumption in the smoothing.\nWe define the smoothed token-level distribution, similar as the sequence-level one, as a softmax over a token-level “reward” function,\nr(yt|y∗t ) ∝ exp r(yt, y∗t )/τ, (13)\nwhere τ is again a temperature parameter. As a token-level reward r(yt, y∗t ) we use the cosine similarity between yt and y∗t in a semantic wordembedding space. In our experiments we use GloVe (Pennington et al., 2014); preliminary experiments with word2vec (Mikolov et al., 2013) yielded somewhat worse results.\nPromoting rare tokens. We can further improve the token-level smoothing by promoting rare tokens. To do so, we penalize frequent tokens when smoothing over the vocabulary, by subtracting β freq(yt) from the reward, where freq(·) denotes the term frequency and β is a non-negative weight. This modification encourages frequent tokens into considering the rare ones. We experimentally found that it is also beneficial for rare tokens to boost frequent ones, as they tend to have mostly rare tokens as neighbors in the wordembedding space. With this in mind, we define a new token-level reward as:\nrfreq(yt, y ∗ t ) = r(yt, y ∗ t ) (14) − βmin ( freq(yt)\nfreq(y∗t ) , freq(y∗t ) freq(yt)\n) ,\nwhere the penalty term is strongest if both tokens have similar frequencies."
+  }, {
+    "heading": "3.4 Combining losses",
+    "text": "In both loss smoothing methods presented above, the temperature parameter τ controls the concentration of the distribution. As τ gets smaller the distribution peaks around the ground-truth, while for large τ the uniform distribution is approached. We can, however, not separately control the spread of the distribution and the mass reserved for the ground-truth output. We therefore introduce a second parameter α ∈ [0, 1] to interpolate between the Dirac on the ground-truth and the smooth distribution. Using ᾱ = 1 − α, the sequence-level and token-level loss functions are then defined as\n`αSeq(y ∗, x) = α`Seq(y ∗, x) + ᾱ`MLE(y ∗, x) (15) = αEr[`MLE(y, x)] + ᾱ`MLE(y∗, x) `αTok(y ∗, x) = α`Tok(y ∗, x) + ᾱ`MLE(y ∗, x) (16)\nTo benefit from both sequence-level and tokenlevel loss smoothing, we also combine them by applying token-level smoothing to the different sequences sampled for the sequence-level smoothing. We introduce two mixing parameters α1 and\nα2. The first controls to what extent sequencelevel smoothing is used, while the second controls to what extent token-level smoothing is used. The combined loss is defined as\n`α1,α2Seq, Tok(y ∗, x, r) = α1Er[`Tok(y, x)] + ᾱ1`Tok(y∗, x)\n= α1Er[α2`Tok(y, x) + ᾱ2`MLE(y, x)] + ᾱ1(α2`Tok(y ∗, x) + ᾱ2`MLE(y ∗, x)).\n(17)\nIn our experiments, we use held out validation data to set mixing and temperature parameters.\nAlgorithm 1 Sequence-level smoothing algorithm Input: x, y∗ Output: `αseq(x, y∗)\nEncode x to initialize the RNN Forward y∗ in the RNN to compute the hidden states h∗t Compute the MLE loss `MLE(y∗, x) for l ∈ {1, . . . , L} do\nSample yl ∼ r(|̇y∗) if Lazy then\nCompute `(yl, x) = − ∑ t log pθ(y l t|h∗t )\nelse Forward yl in the RNN to get its hidden states hlt Compute `(yl, x) = `MLE(yl, x)\nend if end for `αSeq(x, y ∗) = ᾱ`MLE(y ∗, x) + α\nL ∑ l `(y l, x)\nLazy sequence smoothing. Although sequencelevel smoothing is computationally efficient compared to reinforcement learning approaches (Ranzato et al., 2016; Rennie et al., 2017), it is slower compared to MLE. In particular, we need to forward each of the samples yl through the RNN in teacher-forcing mode so as to compute its hidden states hlt, which are used to compute the sequence MLE loss as\n`MLE(y l, x) = − T∑ t=1 ln pθ(y l t|hlt). (18)\nTo speed up training, and since we already forward the ground truth sequence in the RNN to evaluate the MLE part of `αSeq(y\n∗, x), we propose to use the same hidden states h∗t to compute both the MLE and the sequence-level smoothed loss. In this case:\n`lazy(y l, x) = − T∑ t=1 ln pθ(y l t|h∗t ) (19)\nIn this manner, we only have a single instead of L + 1 forwards-passes in the RNN. We provide the pseudo-code for training in Algorithm 1."
+  }, {
+    "heading": "4 Experimental evaluation",
+    "text": "In this section, we compare sequence prediction models trained with maximum likelihood (MLE) with our token and sequence-level loss smoothing on two different tasks: image captioning and machine translation."
+  }, {
+    "heading": "4.1 Image captioning",
+    "text": ""
+  }, {
+    "heading": "4.1.1 Experimental setup.",
+    "text": "We use the MS-COCO datatset (Lin et al., 2014), which consists of 82k training images each annotated with five captions. We use the standard splits of Karpathy and Li (2015), with 5k images for validation, and 5k for test. The test set results are generated via beam search (beam size 3) and are evaluated with the MS-COCO captioning evaluation tool. We report CIDER and BLEU scores on this internal test set. We also report results obtained on the official MS-COCO server that additionally measures METEOR (Denkowski and Lavie, 2014) and ROUGE-L (Lin, 2004). We experiment with both non-attentive LSTMs (Vinyals et al., 2015) and the ResNet baseline of the stateof-the-art top-down attention (Anderson et al., 2017).\nThe MS-COCO vocabulary consists of 9,800 words that occur at least 5 times in the training set. Additional details and hyperparameters can\nbe found in Appendix B.1."
+  }, {
+    "heading": "4.1.2 Results and discussion",
+    "text": "Restricted vocabulary sampling In this section, we evaluate the impact of the vocabulary subset from which we sample the modified sentences for sequence-level smoothing. We experiment with two rewards: CIDER , which scores w.r.t. all five available reference sentences, and Hamming distance reward taking only a single reference into account. For each reward we train our (Seq) models with each of the three subsets detailed previously in Section 3.2, Restricted vocabulary sampling.\nFrom the results in Table 1 we note that for the inattentive models, sampling from Vrefs or Vbatch has a better performance than sampling from the full vocabulary on all metrics. In fact, using these subsets introduces a useful bias to the model and improves performance. This improvement is most notable using the CIDER reward that scores candidate sequences w.r.t. to multiple references, which stabilizes the scoring of the candidates.\nWith an attentive decoder, no matter the reward, re-sampling sentences with words from Vref rather than the full vocabulary V is better for both reward functions, and all metrics. Additional experimental results, presented in Appendix B.2, obtained with a BLEU-4 reward, in its single and\nmultiple references variants, further corroborate this conclusion.\nLazy training. From the results of Table 1, we see that lazy sequence-level smoothing is competitive with exact non-lazy sequence-level smoothing, while requiring roughly equivalent training time as MLE. We provide detailed timing results in Appendix B.3.\nOverall For reference, we include in Table 1 baseline results obtained using MLE, and our implementation of MLE with entropy regularization (MLE+γH) (Pereyra et al., 2017), as well as the RAML approach of Norouzi et al. (2016) which corresponds to sequence-level smoothing based on the Hamming reward and sampling replacements from the full vocabulary (Seq, Hamming, V)\nWe observe that entropy smoothing is not able to improve performance much over MLE for the model without attention, and even deteriorates for the attention model. We improve upon RAML by choosing an adequate subset of vocabulary for substitutions.\nWe also report the performances of token-level smoothing, where the promotion of rare tokens boosted the scores in both attentive and nonattentive models.\nFor sequence-level smoothing, choosing a taskrelevant reward with importance sampling yielded better results than plain Hamming distance.\nMoreover, we used the two smoothing schemes (Tok-Seq) and achieved the best results with CIDER as a reward for sequence-level smoothing combined with a token-level smoothing that promotes rare tokens improving CIDER from 93.59 (MLE) to 99.92 for the model without attention, and improving from 101.63 to 103.81 with attention.\nQualitative results. In Figure 1 we showcase captions obtained with MLE and our three variants of smoothing i.e. token-level (Tok), sequencelevel (Seq) and the combination (Tok-Seq). We note that the sequence-level smoothing tend to generate lengthy captions overall, which is maintained in the combination. On the other hand, the token-level smoothing allows for a better recognition of objects in the image that stems from the robust training of the classifier e.g. the ’cement block’ in the top right image or the carrots in the bottom right. More examples are available in Appendix B.4\nComparison to the state of the art. We compare our model to state-of-the-art systems on the MS-COCO evaluation server in Table 2. We submitted a single model (Tok-Seq, CIDER , Vrefs) as well as an ensemble of five models with different initializations trained on the training set plus 35k images from the dev set (a total of 117k images) to the MS-COCO server. The three best results on the server (Rennie et al., 2017; Yao et al., 2017; Anderson et al., 2017) are trained in two stages where they first train using MLE, before switching to policy gradient methods based on CIDEr. Anderson et al. (2017) reported an increase of 5.8% of CIDER on the test split after the CIDER optimization. Moreover, Yao et al. (2017) uses additional information about image regions to train the attributes classifiers, while Anderson et al. (2017) pre-trains its bottom-up attention model on the Visual Genome dataset (Krishna et al., 2017). Lu et al. (2017); Yao et al. (2017) use the same CNN encoder as ours (ResNet152), (Vinyals et al., 2015; Yang et al., 2016) use Inception-v3 (Szegedy et al., 2016) for image encoding and Rennie et al. (2017); Anderson et al.\n(2017) use Resnet-101, both of which have similar performances to ResNet-152 on ImageNet classification (Canziani et al., 2016)."
+  }, {
+    "heading": "4.2 Machine translation",
+    "text": ""
+  }, {
+    "heading": "4.2.1 Experimental setup.",
+    "text": "For this task we validate the effectiveness of our approaches on two different datasets. The first is WMT’14 English to French, in its filtered version, with 12M sentence pairs obtained after dynamically selecting a “clean” subset of 348M words out of the original “noisy” 850M words (Bahdanau et al., 2015; Cho et al., 2014; Sutskever et al., 2014). The second benchmark is IWSLT’14 German to English consisting of around 150k pairs for training. In all our experiments we use the attentive model of (Bahdanau et al., 2015) The hyperparameters of each of these models as well as any additional pre-processing can be found in Appendix C.1\nTo assess the translation quality we report the BLEU-4 metric."
+  }, {
+    "heading": "4.2.2 Results and analysis",
+    "text": "We present our results in Table 3. On both benchmarks, we improve on both MLE and RAML approach of Norouzi et al. (2016) (Seq, Hamming, V): using the smaller batch-vocabulary for replacement improves results, and using importance sampling based on BLEU-4 further boosts results. In this case, unlike in the captioning experiment, token-level smoothing brings smaller improvements. The combination of both smoothing approaches gives best results, similar to what was observed for image captioning, improving the MLE BLEU-4 from 30.03 to 31.39 on WMT’14 and from 27.55 to 28.74 on IWSLT’14. The outputs of our best model are compared to the MLE in some examples showcased in Appendix C."
+  }, {
+    "heading": "5 Conclusion",
+    "text": "We investigated the use of loss smoothing approaches to improve over maximum likelihood estimation of RNN language models. We generalized the sequence-level smoothing RAML approach of Norouzi et al. (2016) to the tokenlevel by smoothing the ground-truth target across semantically similar tokens. For the sequencelevel, which is computationally expensive, we introduced an efficient “lazy” evaluation scheme, and introduced an improved re-sampling strategy. Experimental evaluation on image captioning and machine translation demonstrates the complementarity of sequence-level and token-level loss smoothing, improving over both the maximum likelihood and RAML.\nAcknowledgment. This work has been partially supported by the grant ANR-16-CE23-0006 “Deep in France” and LabEx PERSYVAL-Lab (ANR-11-LABX-0025-01)."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Bottomup and top-down attention for image captioning and visual question answering",
+    "authors": ["P. Anderson", "X. He", "C. Buehler", "D. Teney", "M. Johnson", "S. Gould", "L. Zhang."],
+    "venue": "arXiv preprint arXiv:1707.07998.",
+    "year": 2017
+  }, {
+    "title": "Neural machine translation by jointly learning to align and translate",
+    "authors": ["D. Bahdanau", "K. Cho", "Y. Bengio."],
+    "venue": "ICLR.",
+    "year": 2015
+  }, {
+    "title": "Scheduled sampling for sequence prediction with recurrent neural networks",
+    "authors": ["S. Bengio", "O. Vinyals", "N. Jaitly", "N. Shazeer."],
+    "venue": "NIPS.",
+    "year": 2015
+  }, {
+    "title": "Generating sentences from a continuous space",
+    "authors": ["S. Bowman", "L. Vilnis", "O. Vinyals", "A. Dai", "R. Jozefowicz", "S. Bengio."],
+    "venue": "CoNLL.",
+    "year": 2015
+  }, {
+    "title": "An analysis of deep neural network models for practical applications",
+    "authors": ["A. Canziani", "A. Paszke", "E. Culurciello."],
+    "venue": "arXiv preprint arXiv:1605.07678.",
+    "year": 2016
+  }, {
+    "title": "Learning to search better than your teacher",
+    "authors": ["K.-W. Chang", "A. Krishnamurthy", "A. Agarwal", "H. Daumé III", "J. Langford."],
+    "venue": "ICML.",
+    "year": 2015
+  }, {
+    "title": "State-of-the-art speech recognition with sequence-to-sequence models",
+    "authors": ["C.-C. Chiu", "T. Sainath", "Y. Wu", "R. Prabhavalkar", "P. Nguyen", "Z. Chen", "A. Kannan", "R.-J. Weiss", "K. Rao", "E. Gonina", "N. Jaitly", "B. Li", "J. Chorowski", "M. Bacchiani."],
+    "venue": "arXiv",
+    "year": 2017
+  }, {
+    "title": "Learning phrase representations using RNN encoder-decoder for statistical machine translation",
+    "authors": ["K. Cho", "B. van Merrienboer", "Ç. Gülçehre", "D. Bahdanau", "F. Bougares", "H. Schwenk", "Y. Bengio."],
+    "venue": "Empirical Methods in Natural Language Process-",
+    "year": 2014
+  }, {
+    "title": "Attention-based models for speech recognition",
+    "authors": ["J. Chorowski", "D. Bahdanau", "D. Serdyuk", "K. Cho", "Y. Bengio."],
+    "venue": "NIPS.",
+    "year": 2015
+  }, {
+    "title": "Empirical evaluation of gated recurrent neural networks on sequence modeling",
+    "authors": ["J. Chung", "C. Gulcehre", "K. Cho", "Y. Bengio."],
+    "venue": "NIPS Deep Learning Workshop.",
+    "year": 2014
+  }, {
+    "title": "Search-based structured prediction",
+    "authors": ["H. Daumé III", "J. Langford", "D. Marcu."],
+    "venue": "Machine Learning, 75(3):297–325.",
+    "year": 2009
+  }, {
+    "title": "Meteor universal: Language specific translation evaluation for any target language",
+    "authors": ["M. Denkowski", "A. Lavie."],
+    "venue": "Workshop on statistical machine translation.",
+    "year": 2014
+  }, {
+    "title": "The pascal visual object classes (VOC) challenge",
+    "authors": ["M. Everingham", "L. van Gool", "C. Williams", "J. Winn", "A. Zisserman."],
+    "venue": "IJCV, 88(2):303–338.",
+    "year": 2010
+  }, {
+    "title": "Data augmentation for low-resource neural machine translation",
+    "authors": ["M. Fadaee", "A. Bisazza", "C. Monz."],
+    "venue": "ACL.",
+    "year": 2017
+  }, {
+    "title": "Deep residual learning for image recognition",
+    "authors": ["K. He", "X. Zhang", "S. Ren", "J. Sun."],
+    "venue": "CVPR.",
+    "year": 2016
+  }, {
+    "title": "Long shortterm memory",
+    "authors": ["S. Hochreiter", "J. Schmidhuber."],
+    "venue": "Neural Computation, 9(8):1735– 1780.",
+    "year": 1997
+  }, {
+    "title": "Batch normalization: Accelerating deep network training by reducing internal covariate shift",
+    "authors": ["S. Ioffe", "C. Szegedy."],
+    "venue": "ICML.",
+    "year": 2015
+  }, {
+    "title": "Deep unordered composition rivals syntactic methods for text classification",
+    "authors": ["M. Iyyer", "V. Manjunatha", "J. Boyd-Graber", "H. Daumé III."],
+    "venue": "ACL.",
+    "year": 2015
+  }, {
+    "title": "Deep visualsemantic alignments for generating image descriptions",
+    "authors": ["A. Karpathy", "Fei-Fei Li."],
+    "venue": "CVPR.",
+    "year": 2015
+  }, {
+    "title": "Adam: A method for stochastic optimization",
+    "authors": ["D. Kingma", "J. Ba."],
+    "venue": "ICLR.",
+    "year": 2015
+  }, {
+    "title": "Multimodal neural language models",
+    "authors": ["R. Kiros", "R. Salakhutdinov", "R. Zemel."],
+    "venue": "ICML.",
+    "year": 2014
+  }, {
+    "title": "Visual genome: Connecting language and vision using crowdsourced dense image annotations",
+    "authors": ["R. Krishna", "Y. Zhu", "O. Groth", "J. Johnson", "K. Hata", "J. Kravitz", "S. Chen", "Y. Kalantidis", "L.-J. Li", "D. Shamma", "M. Bernstein", "L. Fei-Fei."],
+    "venue": "IJCV,",
+    "year": 2017
+  }, {
+    "title": "Imagenet classification with deep convolutional neural networks",
+    "authors": ["A. Krizhevsky", "I. Sutskever", "G. Hinton."],
+    "venue": "NIPS.",
+    "year": 2012
+  }, {
+    "title": "Zoneout: Regularizing RNNs by randomly preserving hidden activations",
+    "authors": ["D. Krueger", "T. Maharaj", "J. Kramár", "M. Pezeshki", "N. Ballas", "N. Ke", "A. Goyal", "Y. Bengio", "H. Larochelle", "A. Courville", "C. Pal."],
+    "venue": "ICLR.",
+    "year": 2017
+  }, {
+    "title": "Ask me anything: Dynamic memory networks for natural language processing",
+    "authors": ["A. Kumar", "O. Irsoy", "P. Ondruska", "M. Iyyer", "J. Bradbury", "I. Gulrajani", "V. Zhong", "R. Paulus", "R. Socher."],
+    "venue": "ICML.",
+    "year": 2016
+  }, {
+    "title": "SeaRnn: Training RNNs with globallocal losses",
+    "authors": ["R. Leblond", "J.-B. Alayrac", "A. Osokin", "S. LacosteJulien."],
+    "venue": "ICLR.",
+    "year": 2018
+  }, {
+    "title": "Gradient-based learning applied to document recognition",
+    "authors": ["Y. LeCun", "L. Bottou", "Y. Bengio", "P. Haffner."],
+    "venue": "Proceedings of the IEEE, pages 2278–2324.",
+    "year": 1998
+  }, {
+    "title": "Rouge: a package for automatic evaluation of summaries",
+    "authors": ["C.-Y. Lin."],
+    "venue": "ACL Workshop Text Summarization Branches Out.",
+    "year": 2004
+  }, {
+    "title": "Microsoft COCO: common objects in context",
+    "authors": ["T.-Y. Lin", "M. Maire", "S. Belongie", "L. Bourdev", "R. Girshick", "J. Hays", "P. Perona", "D. Ramanan", "P. Dollár", "C. Zitnick."],
+    "venue": "ECCV.",
+    "year": 2014
+  }, {
+    "title": "Knowing when to look: Adaptive attention via a visual sentinel for image captioning",
+    "authors": ["J. Lu", "C. Xiong", "D. Parikh", "R. Socher."],
+    "venue": "CVPR.",
+    "year": 2017
+  }, {
+    "title": "Efficient estimation of word representations in vector space",
+    "authors": ["T. Mikolov", "K. Chen", "G. Corrado", "J. Dean."],
+    "venue": "ICLR.",
+    "year": 2013
+  }, {
+    "title": "Reward augmented maximum likelihood for neural structured prediction",
+    "authors": ["M. Norouzi", "S. Bengio", "Z. Chen", "N. Jaitly", "M. Schuster", "Y. Wu", "D. Schuurmans."],
+    "venue": "NIPS.",
+    "year": 2016
+  }, {
+    "title": "BLEU: a method for automatic evaluation of machine translation",
+    "authors": ["K. Papineni", "S. Roukos", "T. Ward", "W.-J. Zhu."],
+    "venue": "Proceedings of the Annual Meeting of the Association for Computational Linguistics.",
+    "year": 2002
+  }, {
+    "title": "Transformation pursuit for image classification",
+    "authors": ["M. Paulin", "J. Revaud", "Z. Harchaoui", "F. Perronnin", "C. Schmid."],
+    "venue": "CVPR.",
+    "year": 2014
+  }, {
+    "title": "Areas of attention for image captioning",
+    "authors": ["M. Pedersoli", "T. Lucas", "C. Schmid", "J. Verbeek."],
+    "venue": "ICCV.",
+    "year": 2017
+  }, {
+    "title": "GloVe: Global vectors for word representation",
+    "authors": ["J. Pennington", "R. Socher", "C. Manning."],
+    "venue": "Empirical Methods in Natural Language Processing.",
+    "year": 2014
+  }, {
+    "title": "Regularizing neural networks by penalizing confident output distributions",
+    "authors": ["G. Pereyra", "G. Tucker", "J. Chorowski", "L. Kaiser", "G. Hinton."],
+    "venue": "ICLR.",
+    "year": 2017
+  }, {
+    "title": "Dropout improves recurrent neural networks for handwriting recognition",
+    "authors": ["V. Pham", "T. Bluche", "C. Kermorvant", "J. Louradour."],
+    "venue": "Frontiers in Handwriting Recognition.",
+    "year": 2014
+  }, {
+    "title": "Sequence level training with recurrent neural networks",
+    "authors": ["M. Ranzato", "S. Chopra", "M. Auli", "W. Zaremba."],
+    "venue": "ICLR.",
+    "year": 2016
+  }, {
+    "title": "Self-critical sequence training for image captioning",
+    "authors": ["S. Rennie", "E. Marcheret", "Y. Mroueh", "J. Ross", "V. Goel."],
+    "venue": "CVPR.",
+    "year": 2017
+  }, {
+    "title": "Dropout: A simple way to prevent neural networks from overfitting",
+    "authors": ["N. Srivastava", "G. Hinton", "A. Krizhevsky", "I. Sutskever", "R. Salakhutdinov."],
+    "venue": "JMLR.",
+    "year": 2014
+  }, {
+    "title": "Sequence to sequence learning with neural networks",
+    "authors": ["I. Sutskever", "O. Vinyals", "Q. Le."],
+    "venue": "NIPS.",
+    "year": 2014
+  }, {
+    "title": "Rethinking the inception architecture for computer vision",
+    "authors": ["C. Szegedy", "V. Vanhoucke", "S. Ioffe", "J. Shlens", "Z. Wojna."],
+    "venue": "CVPR.",
+    "year": 2016
+  }, {
+    "title": "CIDEr: Consensus-based image description evaluation",
+    "authors": ["R. Vedantam", "C. Zitnick", "D. Parikh."],
+    "venue": "CVPR.",
+    "year": 2015
+  }, {
+    "title": "Show and tell: A neural image caption generator",
+    "authors": ["O. Vinyals", "A. Toshev", "S. Bengio", "D. Erhan."],
+    "venue": "CVPR.",
+    "year": 2015
+  }, {
+    "title": "Data noising as smoothing in neural network language models",
+    "authors": ["Z. Xie", "S. Wang", "J. Li", "D. Lévy", "A. Nie", "D. Jurafsky", "A. Ng."],
+    "venue": "ICLR.",
+    "year": 2017
+  }, {
+    "title": "Show, attend and tell: Neural image caption generation with visual attention",
+    "authors": ["K. Xu", "J. Ba", "R. Kiros", "K. Cho", "A. Courville", "R. Salakhutdinov", "R. Zemel", "Y. Bengio."],
+    "venue": "ICML.",
+    "year": 2015
+  }, {
+    "title": "Encode, review, and decode: Reviewer module for caption generation",
+    "authors": ["Z. Yang", "Y. Yuan", "Y. Wu", "R. Salakhutdinov", "W. Cohen."],
+    "venue": "NIPS.",
+    "year": 2016
+  }, {
+    "title": "Boosting image captioning with attributes",
+    "authors": ["T. Yao", "Y. Pan", "Y. Li", "Z. Qiu", "T. Mei."],
+    "venue": "ICLR.",
+    "year": 2017
+  }, {
+    "title": "Image captioning with semantic attention",
+    "authors": ["Q. You", "H. Jin", "Z. Wang", "C. Fang", "J. Luo."],
+    "venue": "CVPR.",
+    "year": 2016
+  }],
+  "id": "SP:15e36a7c4201e23aa6ace19fd95da4fcb7e17468",
+  "authors": [{
+    "name": "Maha Elbayad",
+    "affiliations": []
+  }, {
+    "name": "Laurent Besacier",
+    "affiliations": []
+  }, {
+    "name": "Jakob Verbeek",
+    "affiliations": []
+  }],
+  "abstractText": "Despite the effectiveness of recurrent neural network language models, their maximum likelihood estimation suffers from two limitations. It treats all sentences that do not match the ground truth as equally poor, ignoring the structure of the output space. Second, it suffers from “exposure bias”: during training tokens are predicted given ground-truth sequences, while at test time prediction is conditioned on generated output sequences. To overcome these limitations we build upon the recent reward augmented maximum likelihood approach i.e. sequence-level smoothing that encourages the model to predict sentences close to the ground truth according to a given performance metric. We extend this approach to token-level loss smoothing, and propose improvements to the sequence-level smoothing approach. Our experiments on two different tasks, image captioning and machine translation, show that token-level and sequence-level loss smoothing are complementary, and significantly improve results.",
+  "title": "Token-level and sequence-level loss smoothing for RNN language models"
+}

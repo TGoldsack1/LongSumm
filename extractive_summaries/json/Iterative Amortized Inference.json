@@ -1,0 +1,204 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Variational inference (Jordan et al., 1998) has been essential in learning deep directed latent variable models on high-dimensional data, enabling extraction of complex, nonlinear relationships, such as object identities (Higgins et al., 2016) and dynamics (Xue et al., 2016; Karl et al., 2017) directly from observations. Variational inference reformulates inference as optimization (Neal & Hinton, 1998; Hoffman et al., 2013). However, the current trend has moved toward employing inference models (Dayan et al., 1995; Gregor et al., 2014; Kingma & Welling, 2014; Rezende et al., 2014), mappings from data to approximate posterior estimates that\n1California Institute of Technology (Caltech), Pasadena, CA, USA 2Disney Research, Los Angeles, CA, USA. Correspondence to: Joseph Marino <jmarino@caltech.edu>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\nare amortized across examples. Intuitively, the inference model encodes observations into latent representations, and the generative model decodes these representations into reconstructions. Yet, this approach has notable limitations. For instance, in models with empirical priors, such as hierarchical latent variable models, “bottom-up” data-encoding inference models cannot account for “top-down” priors (Section 4.1). This has prompted the use of top-down inference techniques (Sønderby et al., 2016), which currently lack a rigorous theoretical justification. More generally, the inability of inference models to reach fully optimized approximate posterior estimates results in decreased modeling performance, referred to as an amortization gap (Krishnan et al., 2018; Cremer et al., 2017).\nTo combat this problem, our work offers a departure from previous approaches by re-examining inference from an optimization perspective. We utilize approximate posterior gradients to perform inference optimization. Yet, we improve computational efficiency over conventional optimizers by encoding these gradients with an inference model that learns how to iteratively update approximate posterior estimates. The resulting iterative inference models resemble learning to learn (Andrychowicz et al., 2016) applied to variational inference optimization. However, we refine and extend this method along several novel directions. Namely, (1) we show that learned optimization models can be applied to inference optimization of latent variables; (2) we show that non-recurrent optimization models work well in practice, breaking assumptions about the necessity of nonlocal curvature for outperforming conventional optimizers (Andrychowicz et al., 2016; Putzky & Welling, 2017); and (3) we provide a new form of optimization model that encodes errors rather than gradients to approximate higher order derivatives, empirically resulting in faster convergence.\nOur main contributions are summarized as follows:\n1. we introduce a family of iterative inference models, which generalize standard inference models,\n2. we provide the first theoretical justification for topdown inference techniques,\n3. we empirically evaluate iterative inference models, demonstrating that they outperform standard inference models on several data sets of images and text."
+  }, {
+    "heading": "2. Background",
+    "text": ""
+  }, {
+    "heading": "2.1. Latent Variable Models & Variational Inference",
+    "text": "Latent variable models are generative probabilistic models that use local (per data example) latent variables, z, to model observations, x, using global (across data examples) parameters, θ. A model is defined by the joint distribution pθ(x, z) = pθ(x|z)pθ(z), composed of the conditional likelihood and the prior. Learning the model parameters and inferring the posterior, p(z|x), are intractable for all but the simplest models, as they require evaluating the marginal likelihood, pθ(x) = ∫ pθ(x, z)dz, which involves integrating the model over z. For this reason, we often turn to approximate inference methods.\nVariational inference reformulates this intractable integration as an optimization problem by introducing an approximate posterior1, q(z|x), typically chosen from some tractable family of distributions, and minimizing the KLdivergence from the posterior, DKL(q(z|x)||p(z|x)). This quantity cannot be minimized directly, as it contains the posterior. Instead, KL-divergence can be decomposed into\nDKL(q(z|x)||p(z|x)) = log pθ(x)− L, (1)\nwhere L is the evidence lower bound (ELBO), which is defined as:\nL ≡ Ez∼q(z|x) [log pθ(x, z)− log q(z|x)] (2) = Ez∼q(z|x) [log pθ(x|z)]−DKL(q(z|x)||pθ(z)). (3)\nThe first term in eq. 3 expresses how well the output reconstructs the data example. The second term quantifies the dissimilarity between the approximate posterior and the prior. Because log pθ(x) is not a function of q(z|x), we can minimize DKL(q(z|x)||p(z|x)) in eq. 1 by maximizing L w.r.t. q(z|x), thereby performing approximate inference. Likewise, becauseDKL(q(z|x)||p(z|x)) is non-negative, L is a lower bound on log pθ(x). Therefore, once we have inferred an optimal q(z|x), learning corresponds to maximizing L w.r.t. θ."
+  }, {
+    "heading": "2.2. Variational Expectation Maximization (EM) via Gradient Ascent",
+    "text": "The optimization procedures for variational inference and learning are respectively the expectation and maximization steps of the variational EM algorithm (Dempster et al., 1977; Neal & Hinton, 1998), which alternate until convergence. This is typically performed in the batched setting of stochastic variational inference (Hoffman et al., 2013). When q(z|x) takes a parametric form, the expectation step for data\n1We use q(z|x) to denote that the approximate posterior is conditioned on a data example (i.e. local), however this does not necessarily imply a direct functional mapping.\nexample x(i) involves finding a set of distribution parameters, λ(i), that are optimal w.r.t. L. With a factorized Gaussian density over continuous latent variables, i.e. λ(i) = {µ(i)q ,σ2(i)q } and q(z(i)|x(i)) = N (z(i);µ(i)q ,diagσ2(i)q ), conventional optimization techniques repeatedly estimate the stochastic gradients ∇λL to optimize L w.r.t. λ(i), e.g.:\nλ(i) ← λ(i) + α∇λL(x(i),λ(i); θ), (4)\nwhere α is the step size. This procedure, which is repeated for each example, is computationally expensive and requires setting step-size hyper-parameters."
+  }, {
+    "heading": "2.3. Amortized Inference Models",
+    "text": "Due to the aforementioned issues, gradient updates of approximate posterior parameters are rarely performed in practice. Rather, inference models are often used to map observations to approximate posterior estimates. Optimization of each data example’s approximate posterior parameters, λ(i), is replaced with the optimization of a shared, i.e. amortized (Gershman & Goodman, 2014), set of parameters, φ, contained within an inference model, f , of the form:\nλ(i) ← f(x(i);φ). (5)\nWhile inference models have a long history, e.g. (Dayan et al., 1995), the most notable recent example is the variational auto-encoder (VAE) (Kingma & Welling, 2014; Rezende et al., 2014), which employs the reparameterization trick to propagate stochastic gradients from the generative model to the inference model, both of which are parameterized by neural networks. We refer to inference models of this form as standard inference models. As discussed in Section 3, the aim of this paper is to move beyond the direct encoder paradigm of standard inference models to develop improved techniques for performing inference."
+  }, {
+    "heading": "3. Iterative Amortized Inference",
+    "text": "In Section 3.3, we introduce our contribution, iterative inference models. However, we first motivate our approach in Section 3.1 by discussing the limitations of standard inference models. We then draw inspiration from other techniques for learning to optimize (Section 3.2)."
+  }, {
+    "heading": "3.1. Standard Inference Models & Amortization Gaps",
+    "text": "As described in Section 2.1, variational inference reformulates inference as the maximization of L w.r.t. q(z|x), constituting the expectation step of the variational EM algorithm. In general, this is a difficult non-convex optimization problem, typically requiring a lengthy iterative estimation procedure. Yet, standard inference models attempt to perform this optimization through a direct, discriminative mapping from data observations to approximate posterior\nparameters. Of course, generative models can adapt to accommodate sub-optimal approximate posteriors. Nevertheless, the possible limitations of a direct inference mapping applied to this difficult optimization procedure may result in a decrease in overall modeling performance.\nWe demonstrate this concept in Figure 1 by visualizing the optimization surface of L defined by a 2-D latent Gaussian model and a particular binarized MNIST (LeCun et al., 1998) data example. To visualize the approximate posterior, we use a point estimate, q(z|x) = δ(µq), where µq = (µ1, µ2) is the estimate and δ is the Dirac delta function. See Appendix C.1 for details. Shown on the plot are the optimal (maximum a posteriori or MAP) estimate, the estimate from a standard inference model, and an optimization trajectory of gradient ascent. The inference model is unable to achieve the optimum, but manages to output a reasonable estimate in one pass. Gradient ascent requires many iterations and is sensitive to step-size, but through the iterative estimation procedure, ultimately arrives at a better final estimate. The inability of inference models to reach optimal approximate posterior estimates, as typically compared with gradient-based methods, creates an amortization gap (Krishnan et al., 2018; Cremer et al., 2017), which impairs modeling performance. Additional latent dimensions and more complex data could further exacerbate this problem."
+  }, {
+    "heading": "3.2. Learning to Iteratively Optimize",
+    "text": "While offering significant benefits in computational efficiency, standard inference models can suffer from sizable amortization gaps (Krishnan et al., 2018). Parameterizing inference models as direct, static mappings from x to q(z|x)\nmay be overly restrictive, widening this gap. To improve upon this direct encoding paradigm, we pose the following question: can we retain the computational efficiency of inference models while incorporating more powerful iterative estimation capabilities? Our proposed solution is a new class of inference models, capable of learning how to update approximate posterior estimates by encoding gradients or errors. Due to the iterative nature of these models, we refer to them as iterative inference models. Through an analysis with latent Gaussian models, we show that iterative inference models generalize standard inference models (Section 4.3) and offer theoretical justification for top-down inference in hierarchical models (Section 4.1).\nOur approach relates to learning to learn (Andrychowicz et al., 2016), where an optimizer model learns to optimize the parameters of an optimizee model. The optimizer receives the optimizee’s parameter gradients and outputs updates to these parameters to improve the optimizee’s loss. The optimizer itself can be learned due to the differentiable computation graph. Such models can adaptively adjust step sizes, potentially outperforming conventional optimizers. For inference optimization, previous works have combined standard inference models with gradient updates (Hjelm et al., 2016; Krishnan et al., 2018; Kim et al., 2018), however, these works do not learn to iteratively optimize. (Putzky & Welling, 2017) use recurrent inference models for MAP estimation of denoised images in linear models. We propose a unified method for learning to perform variational inference optimization, generally applicable to probabilistic latent variable models. Our work extends techniques for learning to optimize along several novel directions, discussed in Section 4."
+  }, {
+    "heading": "3.3. Iterative Inference Models",
+    "text": "We denote an iterative inference model as f with parameters φ. With L(i)t ≡ L(x(i),λ (i) t ; θ) as the ELBO for data example x(i) at inference iteration t, the model uses the approximate posterior gradients, denoted∇λL(i)t , to output updated estimates of λ(i):\nλ (i) t+1 ← ft(∇λL (i) t ,λ (i) t ;φ), (6)\nwhere λ(i)t is the estimate of λ (i) at inference iteration t. Eq. 6 is in a general form and contains, as special cases, the linear update in eq. 4, as well as the residual, nonlinear update used in (Andrychowicz et al., 2016). Figure 2 displays a computation graph of the inference procedure, and Algorithm 1 in Appendix B describes the procedure in detail. As with standard inference models, the parameters of an iterative inference model can be updated using estimates of∇φL, obtained through the reparameterization trick (Kingma & Welling, 2014; Rezende et al., 2014) or through score function methods (Gregor et al., 2014; Ranganath et al., 2014). Model parameter updating is performed using stochastic gradient techniques with∇θL and ∇φL."
+  }, {
+    "heading": "4. Iterative Inference in Latent Gaussian Models",
+    "text": "We now describe an instantiation of iterative inference models for (single-level) latent Gaussian models, which have a Gaussian prior density over latent variables: p(z) = N (z;µp,diagσ2p). Although the prior is typically a standard Normal density, we use this prior form for generality. Latent Gaussian models are often used in VAEs and are a common choice for continuous-valued latent variables. While the approximate posterior can be any probability density, it is typically also chosen as Gaussian: q(z|x) = N (z;µq,diagσ2q ). With this choice, λ(i) corresponds to {µ(i)q ,σ2(i)q } for example x(i). Dropping the superscript (i) to simplify notation, we can express eq. 6 for this model as:\nµq,t+1 = f µq t (∇µqLt,µq,t;φ), (7)\nσ2q,t+1 = f σ2q t (∇σ2qLt,σ 2 q,t;φ), (8)\nwhere fµqt and f σ2q t are the iterative inference models for updating µq and σ2q respectively. In practice, these models can be combined, with shared inputs and model parameters but separate outputs to update each term.\nIn Appendix A, we derive the stochastic gradients ∇µqL and ∇σ2qL for the cases where pθ(x|z) takes a Gaussian and Bernoulli form, though any output distribution can be used. Generally, these gradients are comprised of (1) errors, expressing the mismatch in distributions, and (2) Jacobian matrices, which invert the generative mappings. For instance, assuming a Gaussian output density, p(x|z) = N (x;µx,diagσ2x), the gradient for µq is\n∇µqL = Jᵀεx − εz, (9)\nwhere the Jacobian (J), bottom-up errors (εx), and topdown errors (εz) are defined as\nJ ≡ Ez∼q(z|x) [ ∂µx ∂µq ] , (10)\nεx ≡ Ez∼q(z|x)[(x− µx)/σ2x], (11) εz ≡ Ez∼q(z|x)[(z− µp)/σ2p]. (12)\nHere, we have assumed µx is a function of z and σ2x is a global parameter. The gradient ∇σ2qL is comprised of similar terms as well as an additional term penalizing approximate posterior entropy. Inspecting and understanding the composition of the gradients reveals the forces pushing the approximate posterior toward agreement with the data, through εx, and agreement with the prior, through εz. In other words, inference is as much a top-down process as it is a bottom-up process, and the optimal combination of these terms is given by the approximate posterior gradients. As discussed in Section 4.1, standard inference models have traditionally been purely bottom-up, only encoding the data."
+  }, {
+    "heading": "4.1. Reinterpreting Top-Down Inference",
+    "text": "To increase the model capacity of latent variable models, it is common to add higher-level latent variables, thereby providing flexible empirical priors on lower-level variables. Traditionally, corresponding standard inference models were parmeterized as purely bottom-up (e.g. Fig. 1 of (Rezende et al., 2014)). It was later found to be beneficial to incorporate top-down information from higher-level variables in the inference model, the given intuition being that “a purely bottom-up inference process . . . does not correspond well with real perception” (Sønderby et al., 2016), however, a rigorous justification of this technique was lacking.\nIterative inference models, or rather, the gradients that they encode, provide a theoretical explanation for this previously empirical heuristic. As seen in eq. 9, the approximate posterior parameters are optimized to agree with the prior, while also fitting the conditional likelihood to the data. Analogous terms appear in the gradients for hierarchical models. For instance, in a chain-structured hierarchical model, the gradient of µ`q , the approximate posterior mean at layer `, is\n∇µ`qL = J `ᵀε`−1z − ε`z, (13)\nwhere J` is the Jacobian of the generative mapping at layer ` and ε`z is defined similarly to eq. 12. ε ` z depends on the top-down prior at layer `, which, unlike the single-level case, varies across data examples. Thus, a purely bottom-up inference procedure may struggle, as it must model both the bottom-up data dependence as well as the top-down prior. Top-down inference (Sønderby et al., 2016) explicitly uses the prior to perform inference. Iterative inference models instead rely on approximate posterior gradients, which naturally account for both bottom-up and top-down influences."
+  }, {
+    "heading": "4.2. Approximating Approximate Posterior Derivatives",
+    "text": "In the formulation of iterative inference models given in eq. 6, inference optimization is restricted to first-order approximate posterior derivatives. Thus, it may require many inference iterations to reach reasonable approximate posterior estimates. Rather than calculate costly higher-order derivatives, we can take a different approach.\nApproximate posterior derivatives (e.g. eq. 9 and higherorder derivatives) are essentially defined by the errors at the current estimate, as the other factors, such as the Jacobian matrices, are internal to the model. Thus, the errors provide more general information about the curvature beyond the gradient. As iterative inference models already learn to perform approximate posterior updates, it is natural to ask whether the errors provide a sufficient signal for faster inference optimization. In other words, we may be able to offload approximate posterior derivative calculation onto the inference model, yielding a model that requires fewer in-\nference iterations while maintaining or possibly improving computational efficiency.\nComparing with eqs. 7 and 8, the form of this new iterative inference model is\nµq,t+1 = f µq t (εx,t, εz,t,µq,t;φ), (14)\nσ2q,t+1 = f σ2q t (εx,t, εz,t,σ 2 q,t;φ), (15)\nwhere, again, these models can be shared, with separate outputs per parameter. In Section 5.2, we empirically find that models of this form converge to better solutions than gradient-encoding models when given fewer inference iterations. It is also worth noting that this error encoding scheme is similar to DRAW (Gregor et al., 2015). However, in addition to architectural differences in the generative model, DRAW and later extensions do not include top-down errors (Gregor et al., 2016), nor error precision-weighting."
+  }, {
+    "heading": "4.3. Generalizing Standard Inference Models",
+    "text": "Under certain assumptions on single-level latent Gaussian models, iterative inference models of the form in Section 4.2 generalize standard inference models. First, note that εx (eq. 11) is a stochastic affine transformation of x:\nεx = Ax+ b, (16)\nwhere A ≡ Eq(z|x) [ (diagσ2x) −1] , (17) b ≡ −Eq(z|x) [ µx σ2x ] . (18)\nReasonably assuming that the initial approximate posterior and prior are both constant, then in expectation, A, b, and εz are constant across all data examples at the first inference iteration. Using proper weight initialization and input normalization, it is equivalent to input x or an affine transformation of x into a fully-connected neural network. Therefore, standard inference models are equivalent to the special case of a one-step iterative inference model. Thus, we can interpret standard inference models as learning a map of local curvature around a fixed approximate posterior estimate. Iterative inference models, on the other hand, learn to traverse the optimization landscape more generally."
+  }, {
+    "heading": "5. Experiments",
+    "text": "Using latent Gaussian models, we performed an empirical evaluation of iterative inference models on both image and text data. For images, we used MNIST (LeCun et al., 1998), Omniglot (Lake et al., 2013), Street View House Numbers (SVHN) (Netzer et al., 2011), and CIFAR-10 (Krizhevsky & Hinton, 2009). MNIST and Omniglot were dynamically binarized and modeled with Bernoulli output\ndistributions, and SVHN and CIFAR-10 were modeled with Gaussian output densities, using the procedure from (Gregor et al., 2016). For text, we used RCV1 (Lewis et al., 2004), with word count data modeled with a multinomial output.\nDetails on implementing iterative inference models are found in Appendix B. The primary difficulty of training iterative inference models comes from shifting gradient and error distributions during the course of inference and learning. In some cases, we found it necessary to normalize these inputs using layer normalization (Ba et al., 2016). We also found it beneficial, though never necessary, to additionally encode the data itself, particularly when given few inference iterations (see Figure 7a). For comparison, all experiments use feedforward networks, though we observed similar results with recurrent inference models. Reported values of L were estimated using 1 sample, and reported values of log p(x) and perplexity (Tables 1 & 2) were estimated using 5,000 importance weighted samples. Additional experiment details, including model architectures, can be found in Appendix C. Accompanying code can be found on GitHub at joelouismarino/iterative inference.\nSection 5.1 demonstrates the optimization capabilities of iterative inference models. Section 5.2 explores two methods by which to further improve the modeling performance of these models. Section 5.3 provides a quantitative comparison between standard and iterative inference models."
+  }, {
+    "heading": "5.1. Approximate Inference Optimization",
+    "text": "We begin with a series of experiments that demonstrate the inference optimization capabilities of iterative inference\nmodels. These experiments confirm that iterative inference models indeed learn to perform inference optimization through an adaptive iterative estimation procedure. These results highlight the qualitative differences between this inference optimization procedure and that of standard inference models. That is, iterative inference models are able to effectively utilize multiple inference iterations rather than collapsing to static, one-step encoders.\nDirect Visualization As in Section 3.1, we directly visualize iterative inference optimization in a 2-D latent Gaussian model trained on MNIST with a point estimate approximate posterior. Model architectures are identical to those used in Section 3.1, with additional details found in Appendix C.1. Shown in Figure 3 is a 16-step inference optimization trajectory taken by the iterative inference model for a particular example. The model adaptively adjusts inference update step sizes to navigate the optimization surface, quickly arriving and remaining at a near-optimal estimate.\nL During Inference We can quantify and compare optimization performance through the ELBO. In Figure 4, we plot the average ELBO on the MNIST validation set during inference, comparing iterative inference models with conventional optimizers. Details are in Appendix C.2. On average, the iterative inference model converges significantly faster to better estimates than the optimizers. The model actually has less derivative information than the optimizers; it only has access to the local gradient, whereas the optimizers use momentum and similar terms. The model’s final estimates are also stable, despite only being trained using 16 inference iterations.\nReconstructions Approximate inference optimization can also be visualized through image reconstructions. As the reconstruction term is typically the dominant term in L, the output reconstructions should improve in terms of visual quality during inference optimization, resembling x. We demonstrate this phenomenon with iterative inference models for several data sets in Figure 5. Additional reconstructions are shown in Appendix C.3.\nGradient Magnitudes During inference optimization, iterative inference models should ideally obtain approximate posterior estimates near local maxima. The approximate posterior gradient magnitudes should thus decrease during inference. Using a model trained on RCV1, we recorded average gradient magnitudes for the approximate posterior mean during inference. In Figure 6, we plot these values throughout training, finding that they do, indeed, decrease. See Appendix C.4 for more details."
+  }, {
+    "heading": "5.2. Additional Inference Iterations & Latent Samples",
+    "text": "We highlight two sources that allow iterative inference models to further improve modeling performance: additional inference iterations and samples. Additional inference iterations allow the model to further refine approximate posterior estimates. Using MNIST, we trained models by encoding approximate posterior gradients (∇λL) or errors (εx, εz), with or without the data (x), for 2, 5, 10, and 16 inference iterations. While we kept the model architectures identical, the encoded terms affect the number of input parameters to each model. For instance, the small size of z relative to x gives the gradient encoding model fewer input parameters than a standard inference model. The other models have more input parameters. Results are shown in Figure\n7a, where we observe improved performance with increasing inference iterations. All iterative inference models outperformed standard inference models. Note that encoding errors to approximate higher-order derivatives helps when training with fewer inference iterations.\nAdditional approximate posterior samples provide more precise gradient and error estimates, potentially allowing an iterative inference model to output improved updates. To verify this, we trained standard and iterative inference models on MNIST using 1, 5, 10, and 20 approximate posterior samples. Iterative inference models were trained by encoding the data (x) and approximate posterior gradients (∇λL) for 5 iterations. Results are shown in Figure 7b. Iterative inference models improve by more than 1 nat with additional samples, further widening the improvement over similar standard inference models."
+  }, {
+    "heading": "5.3. Comparison with Standard Inference Models",
+    "text": "We now provide a quantitative performance comparison between standard and iterative inference models on MNIST, CIFAR-10, and RCV1. Inference model architectures are identical across each comparison, with the exception of input parameters. Details are found in Appendix C.7. Table 1 contains estimated marginal log-likelihood performance on MNIST and CIFAR-10. Table 2 contains estimated perplexity on RCV12. In each case, iterative inference models outperform standard inference models. This holds for both\n2Perplexity re-weights log-likelihood by document length.\nsingle-level and hierarchical models. We observe larger improvements on the high-dimensional RCV1 data set, consistent with (Krishnan et al., 2018). Because the generative model architectures are kept fixed, performance improvements demonstrate improvements in inference optimization."
+  }, {
+    "heading": "6. Conclusion",
+    "text": "We have proposed iterative inference models, which learn to refine inference estimates by encoding approximate posterior gradients or errors. These models generalize and extend standard inference models, and by naturally accounting for priors during inference, these models provide insight and justification for top-down inference. Through empirical evaluations, we have demonstrated that iterative inference models learn to perform variational inference optimization, with advantages over current inference techniques shown on several benchmark data sets. However, this comes with the limitation of requiring additional computation over similar standard inference models. While we discussed the relevance of iterative inference models to hierarchical latent variable models, sequential latent variable models also contain empirical priors. In future work, we hope to apply iterative inference models to the online filtering setting, where fewer inference iterations, and thus less additional computation, may be required at each time step."
+  }, {
+    "heading": "Acknowledgements",
+    "text": "We would like to thank the reviewers as well as Peter Carr, Oisin Mac Aodha, Grant Van Horn, and Matteo Ruggero Ronchi for their insightful feedback. This research was supported in part by JPL PDF 1584398 and NSF 1564330."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Learning to learn by gradient descent by gradient descent",
+    "authors": ["M. Andrychowicz", "M. Denil", "S. Gomez", "M.W. Hoffman", "D. Pfau", "T. Schaul", "N. de Freitas"],
+    "venue": "In Advances in Neural Information Processing Systems (NIPS),",
+    "year": 2016
+  }, {
+    "title": "Inference suboptimality in variational autoencoders",
+    "authors": ["C. Cremer", "X. Li", "D. Duvenaud"],
+    "venue": "NIPS Workshop on Advances in Approximate Bayesian Inference,",
+    "year": 2017
+  }, {
+    "title": "The helmholtz machine",
+    "authors": ["P. Dayan", "G.E. Hinton", "R.M. Neal", "R.S. Zemel"],
+    "venue": "Neural computation,",
+    "year": 1995
+  }, {
+    "title": "Maximum likelihood from incomplete data via the em algorithm. Journal of the royal statistical society",
+    "authors": ["A.P. Dempster", "N.M. Laird", "D.B. Rubin"],
+    "venue": "Series B (methodological),",
+    "year": 1977
+  }, {
+    "title": "Amortized inference in probabilistic reasoning",
+    "authors": ["S. Gershman", "N. Goodman"],
+    "venue": "In Proceedings of the Cognitive Science Society,",
+    "year": 2014
+  }, {
+    "title": "Deep autoregressive networks",
+    "authors": ["K. Gregor", "I. Danihelka", "A. Mnih", "C. Blundell", "D. Wierstra"],
+    "venue": "In Proceedings of the International Conference on Machine Learning (ICML),",
+    "year": 2014
+  }, {
+    "title": "Draw: A recurrent neural network for image generation",
+    "authors": ["K. Gregor", "I. Danihelka", "A. Graves", "D.J. Rezende", "D. Wierstra"],
+    "venue": "Proceedings of the International Conference on Machine Learning (ICML),",
+    "year": 2015
+  }, {
+    "title": "Towards conceptual compression",
+    "authors": ["K. Gregor", "F. Besse", "D.J. Rezende", "I. Danihelka", "D. Wierstra"],
+    "venue": "In Advances In Neural Information Processing Systems (NIPS),",
+    "year": 2016
+  }, {
+    "title": "beta-vae: Learning basic visual concepts with a constrained variational framework",
+    "authors": ["I. Higgins", "L. Matthey", "A. Pal", "C. Burgess", "X. Glorot", "M. Botvinick", "S. Mohamed", "A. Lerchner"],
+    "venue": "In Proceedings of the International Conference on Learning Representations (ICLR),",
+    "year": 2016
+  }, {
+    "title": "Stochastic variational inference",
+    "authors": ["M.D. Hoffman", "D.M. Blei", "C. Wang", "J. Paisley"],
+    "venue": "The Journal of Machine Learning Research,",
+    "year": 2013
+  }, {
+    "title": "An introduction to variational methods for graphical models",
+    "authors": ["M.I. Jordan", "Z. Ghahramani", "T.S. Jaakkola", "L.K. Saul"],
+    "venue": "NATO ASI SERIES D BEHAVIOURAL AND SOCIAL SCIENCES,",
+    "year": 1998
+  }, {
+    "title": "Deep variational bayes filters: Unsupervised learning of state space models from raw data",
+    "authors": ["M. Karl", "M. Soelch", "J. Bayer", "P. van der Smagt"],
+    "venue": "In Proceedings of the International Conference on Learning Representations (ICLR),",
+    "year": 2017
+  }, {
+    "title": "Semi-amortized variational autoencoders",
+    "authors": ["Y. Kim", "S. Wiseman", "A.C. Miller", "D. Sontag", "A.M. Rush"],
+    "venue": "In Proceedings of the International Conference on Machine Learning (ICML),",
+    "year": 2018
+  }, {
+    "title": "Stochastic gradient vb and the variational auto-encoder",
+    "authors": ["D.P. Kingma", "M. Welling"],
+    "venue": "In Proceedings of the International Conference on Learning Representations (ICLR),",
+    "year": 2014
+  }, {
+    "title": "On the challenges of learning with inference networks on sparse, high-dimensional data",
+    "authors": ["R.G. Krishnan", "D. Liang", "M. Hoffman"],
+    "venue": "In Proceedings of the International Conference on Artificial Intelligence and Statistics (AISTATS),",
+    "year": 2018
+  }, {
+    "title": "Learning multiple layers of features from tiny images",
+    "authors": ["A. Krizhevsky", "G. Hinton"],
+    "year": 2009
+  }, {
+    "title": "Oneshot learning by inverting a compositional causal process",
+    "authors": ["B.M. Lake", "R.R. Salakhutdinov", "J. Tenenbaum"],
+    "venue": "In Advances in Neural Information Processing Systems (NIPS),",
+    "year": 2013
+  }, {
+    "title": "Gradientbased learning applied to document recognition",
+    "authors": ["Y. LeCun", "L. Bottou", "Y. Bengio", "P. Haffner"],
+    "venue": "Proceedings of the IEEE,",
+    "year": 1998
+  }, {
+    "title": "Rcv1: A new benchmark collection for text categorization research",
+    "authors": ["D.D. Lewis", "Y. Yang", "T.G. Rose", "F. Li"],
+    "venue": "The Journal of Machine Learning Research,",
+    "year": 2004
+  }, {
+    "title": "A view of the em algorithm that justifies incremental, sparse, and other variants",
+    "authors": ["R.M. Neal", "G.E. Hinton"],
+    "venue": "In Learning in graphical models,",
+    "year": 1998
+  }, {
+    "title": "Reading digits in natural images with unsupervised feature learning",
+    "authors": ["Y. Netzer", "T. Wang", "A. Coates", "A. Bissacco", "B. Wu", "A.Y. Ng"],
+    "venue": "In NIPS workshop on deep learning and unsupervised feature learning,",
+    "year": 2011
+  }, {
+    "title": "Recurrent inference machines for solving inverse problems",
+    "authors": ["P. Putzky", "M. Welling"],
+    "venue": "arXiv preprint arXiv:1706.04008,",
+    "year": 2017
+  }, {
+    "title": "Black box variational inference",
+    "authors": ["R. Ranganath", "S. Gerrish", "D. Blei"],
+    "venue": "In Proceedings of the International Conference on Artificial Intelligence and Statistics (AISTATS),",
+    "year": 2014
+  }, {
+    "title": "Stochastic backpropagation and approximate inference in deep generative models",
+    "authors": ["D.J. Rezende", "S. Mohamed", "D. Wierstra"],
+    "venue": "In Proceedings of the International Conference on Machine Learning (ICML),",
+    "year": 2014
+  }, {
+    "title": "Ladder variational autoencoders",
+    "authors": ["C.K. Sønderby", "T. Raiko", "L. Maaløe", "S.K. Sønderby", "O. Winther"],
+    "venue": "In Advances in Neural Information Processing Systems (NIPS),",
+    "year": 2016
+  }, {
+    "title": "Visual dynamics: Probabilistic future frame synthesis via cross convolutional networks",
+    "authors": ["T. Xue", "J. Wu", "K. Bouman", "B. Freeman"],
+    "venue": "In Advances in Neural Information Processing Systems (NIPS),",
+    "year": 2016
+  }],
+  "id": "SP:27b369d845cfaa0a3d7d70d9c3a87677bdd03e6c",
+  "authors": [{
+    "name": "Joseph Marino",
+    "affiliations": []
+  }, {
+    "name": "Yisong Yue",
+    "affiliations": []
+  }, {
+    "name": "Stephan Mandt",
+    "affiliations": []
+  }],
+  "abstractText": "Inference models are a key component in scaling variational inference to deep latent variable models, most notably as encoder networks in variational auto-encoders (VAEs). By replacing conventional optimization-based inference with a learned model, inference is amortized over data examples and therefore more computationally efficient. However, standard inference models are restricted to direct mappings from data to approximate posterior estimates. The failure of these models to reach fully optimized approximate posterior estimates results in an amortization gap. We aim toward closing this gap by proposing iterative inference models, which learn to perform inference optimization through repeatedly encoding gradients. Our approach generalizes standard inference models in VAEs and provides insight into several empirical findings, including top-down inference techniques. We demonstrate the inference optimization capabilities of iterative inference models and show that they outperform standard inference models on several benchmark data sets of images and text.",
+  "title": "Iterative Amortized Inference"
+}

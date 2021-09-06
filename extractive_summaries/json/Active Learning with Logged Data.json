@@ -1,0 +1,251 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "We consider learning a classifier from logged data. Here, the learner has access to a logged labeled dataset that has been collected according to a known pre-determined policy, and his goal is to learn a classifier that predicts the labels accurately over the entire population, not just conditioned on the logging policy.\nThis problem arises frequently in many natural settings. An example is predicting the efficacy of a treatment as a function of patient characteristics based on observed data. Doctors may assign the treatment to patients based on some predetermined rule; recording these patient outcomes produces a logged dataset where outcomes are observed conditioned on the doctors’ assignment. A second example is recidivism prediction, where the goal is to predict whether a convict will re-offend. Judges use their own predefined policy to grant parole, and if parole is granted, then an outcome (reoffense or not) is observed. Thus the observed data records outcomes conditioned on the judges’ parole policy,\n1University of California, San Diego. Correspondence to: Songbai Yan <yansongbai@eng.ucsd.edu>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\nwhile the learner’s goal is to learn a predictor over the entire population.\nA major challenge in learning from logged data is that the logging policy may leave large areas of the data distribution under-explored. Consequently, empirical risk minimization (ERM) on the logged data leads to classifiers that may be highly suboptimal on the population. When the logging policy is known, a second option is to use a weighted ERM, that reweighs each observed labeled data point to ensure that it reflects the underlying population. However, this may lead to sample inefficiency if the logging policy does not adequately explore essential regions of the population. A final approach, typically used in clinical trials, is controlled random experimentation – essentially, ignore the logged data, and record outcomes for fresh examples drawn from the population. This approach is expensive due to the high cost of trials, and wasteful since it ignores the observed data.\nMotivated by these challenges, we propose active learning to combine logged data with a small amount of strategically chosen labeled data that can be used to correct the bias in the logging policy. This solution has the potential to achieve the best of both worlds by limiting experimentation to achieve higher sample efficiency, and by making the most of the logged data. Specifically, we assume that in addition to the logged data, the learner has some additional unlabeled data that he can selectively ask an annotator to label. The learner’s goal is to learn a highly accurate classifier over the entire population by using a combination of the logged data and with as few label queries to the annotator as possible.\nHow can we utilize logged data for better active learning? This problem has not been studied to the best of our knowledge. A naive approach is to use the logged data to come up with a warm start and then do standard active learning. In this work, we show that we can do even better. In addition to the warm start, we show how to use multiple importance sampling estimators to utilize the logged data more efficiently. Additionally, we introduce a novel debiasing policy that selectively avoids label queries for those examples that are highly represented in the logged data.\nCombining these three approaches, we provide a new algorithm. We prove that our algorithm is statistically consistent, and has a lower label requirement than simple active learning that uses the logged data as a warm start. Finally, we\nevaluate our algorithm experimentally on various datasets and logging policies. Our experiments show that the performance of our method is either the best or close to the best for a variety of datasets and logging policies. This confirms that active learning to combine logged data with carefully chosen labeled data may indeed yield performance gains."
+  }, {
+    "heading": "2. Preliminaries",
+    "text": ""
+  }, {
+    "heading": "2.1. Problem Setup",
+    "text": "Instances are drawn from an instance space X and a label space Y = {0, 1}. There is an underlying data distribution D over X × Y that describes the population. There is a hypothesis spaceH ⊂ YX . For simplicity, we assumeH is a finite set, but our results can be generalized to VC-classes by standard arguments (Vapnik & Chervonenkis, 1971).\nThe learning algorithm has access to two sources of data: logged data, and online data. The logged data are generated from m examples {(Xt, Yt)}mt=1 drawn i.i.d. from D, and a logging policy Q0 : X → [0, 1] that determines the probability of observing the label. For each example (Xt, Yt) (1 ≤ t ≤ m), an independent Bernoulli random variable Zt is drawn with expectation Q0(Xt), and then the label Yt is revealed to the learning algorithm if Zt = 11. We call T0 = {(Xt, Yt, Zt)}mt=1 the logged dataset. From the algorithm’s perspective, we assume it knows the logging policy Q0, and only observes instances {Xt}mt=1, decisions of the policy {Zt}mt=1, and revealed labels {Yt | Zt = 1}mt=1.\nThe online data are generated as follows. Suppose there is a stream of another n examples {(Xt, Yt)}m+nt=m+1 drawn i.i.d. from distribution D. At time t (m < t ≤ m+ n), the algorithm uses its query policy to compute a bit Zt ∈ {0, 1}, and then the label Yt is revealed to the algorithm if Zt = 1. The computation of Zt may in general be randomized, and is based on the observed logged data T0, observed instances {Xi}ti=m+1, previous decisions{Zi} t−1 i=m+1, and observed labels {Yi | Zi = 1}t−1i=m+1.\nThe goal of the algorithm is to learn a classifier h ∈ H from observed logged data and online data. Fixing D, Q0, m, n, the performance measures are: (1) the error rate l(h) := PrD(h(X) 6= Y ) of the output classifier, and (2) the number of label queries on the online data. Note that the error rate is over the entire population D instead of conditioned on the logging policy, and that we assume the logged data T0 come at no cost. In this work, we are interested in the situation where n is about the same as or less than m.\n1Note that this generating process implies the standard unconfoundedness assumption in the counterfactual inference literature: Pr(Yt, Zt | Xt) = Pr(Yt | Xt) Pr(Zt | Xt), that is, given the instance Xt, its label Yt is conditionally independent with the action Zt (whether the label is observed)."
+  }, {
+    "heading": "2.2. Background on Disagreement-Based Active Learning",
+    "text": "Our algorithm is based on Disagreement-Based Active Learning (DBAL) which has rigorous theoretical guarantees and can be implemented practically (see (Hanneke et al., 2014) for a survey, and (Hanneke & Yang, 2015; Huang et al., 2015) for some recent developments). DBAL iteratively maintains a candidate set of classifiers that contains the optimal classifier h? := arg minh∈H l(h) with high probability. At the k-th iteration, the candidate set Vk is constructed as all classifiers which have low estimated error on examples observed up to round k. Based on Vk, the algorithm constructs a disagreement set Dk to be a set of instances on which there are at least two classifiers in Vk that predict different labels. Then the algorithm draws a set Tk of unlabeled examples, where the size of Tk is a parameter of the algorithm. For each instance X ∈ Tk, if it falls into the disagreement region Dk, then the algorithm queries for its label; otherwise, observing that all classifiers in Vk have the same prediction on X , its label is not queried. The queried labels are then used to update future candidate sets."
+  }, {
+    "heading": "2.3. Background on Error Estimators",
+    "text": "Most learning algorithms, including DBAL, require estimating the error rate of a classifier. A good error estimator should be unbiased and of low variance. When instances are observed with different probabilities, a commonly used error estimator is the standard importance sampling estimator that reweighs each observed labeled example according to the inverse probability of observing it.\nConsider a simplified setting where the logged dataset T0 = (Xi, Yi, Zi) m i=1 and Pr(Zi = 1 | Xi) = Q0(Xi). On the online dataset T1 = (Xi, Yi, Zi)m+ni=m+1, the algorithm uses a fixed query policy Q1 to determine whether to query for labels, that is, Pr(Zi = 1 | Xi) = Q1(Xi) for m < i ≤ m+ n. Let S = T0 ∪ T1.\nIn this setting, the standard importance sampling (IS) error estimator for a classifier h is:\nlIS(h, S) := 1\nm+ n m∑ i=1 1{h(Xi) 6= Yi}Zi Q0(Xi)\n+ 1\nm+ n m+n∑ i=m+1 1{h(Xi) 6= Yi}Zi Q1(Xi) . (1)\nlIS is unbiased, and its variance is proportional to supi=0,1;x∈X 1 Qi(x)\n. Although the learning algorithm can choose its query policy Q1 to avoid Q1(Xi) to be too small for i > m, Q0 is the logging policy that cannot be changed. When Q0(Xi) is small for some i ≤ m, the estimator in (1) have a high variance such that it may be even better to just ignore the logged dataset T0.\nAn alternative is the multiple importance sampling (MIS) estimator with balanced heuristic (Veach & Guibas, 1995):\nlMIS(h, S) := m+n∑ i=1 1{h(Xi) 6= Yi}Zi mQ0(Xi) + nQ1(Xi) . (2)\nIt can be proved that lMIS(h, S) is indeed an unbiased estimator for l(h). Moreover, as proved in (Owen & Zhou, 2000; Agarwal et al., 2017), (2) always has a lower variance than both (1) and the standard importance sampling estimator that ignores the logged data.\nIn this paper, we use multiple importance sampling estimators, and write lMIS(h, S) as l(h, S).\nAdditional Notations In this paper, unless otherwise specified, all probabilities and expectations are over the distribution D, and we drop D from subscripts henceforth.\nLet ρ(h1, h2) := Pr(h1(X) 6= h2(X)) be the disagreement mass between h1 and h2, and ρS(h1, h2) := 1 N ∑N i=1 1{h1(xi) 6= h2(xi)} for S = {x1, x2, . . . , xN} ⊂ X be the empirical disagreement mass between h1 and h2 on S.\nFor any h ∈ H, r > 0, define B(h, r) := {h′ ∈ H | ρ(h, h′) ≤ r} to be r-ball around h. For any V ⊆ H, define the disagreement region DIS(V ) := {x ∈ X | ∃h1 6= h2 ∈ V s.t. h1(x) 6= h2(x)}."
+  }, {
+    "heading": "3. Algorithm",
+    "text": ""
+  }, {
+    "heading": "3.1. Main Ideas",
+    "text": "Our algorithm employs the disagreement-based active learning framework, but modifies the main DBAL algorithm in three key ways.\nKEY IDEA 1: WARM-START\nOur algorithm applies a straightforward way of making use of the logged data T0 inside the DBAL framework: to set the initial candidate set V0 to be the set of classifiers that have a low empirical error on T0.\nKEY IDEA 2: MULTIPLE IMPORTANCE SAMPLING\nOur algorithm uses multiple importance sampling estimators instead of standard importance sampling estimators. As noted in the previous section, in our setting, multiple importance sampling estimators are unbiased and have lower variance, which results in a better performance guarantee.\nWe remark that the main purpose of using multiple importance sampling estimators here is to control the variance due to the predetermined logging policy. In the classical active learning setting without logged data, standard impor-\ntance sampling can give satisfactory performance guarantees (Beygelzimer et al., 2009; 2010; Huang et al., 2015).\nKEY IDEA 3: A DEBIASING QUERY STRATEGY\nThe logging policy Q0 introduces bias into the logged data: some examples may be underrepresented since Q0 chooses to reveal their labels with lower probability. Our algorithm employs a debiasing query strategy to neutralize this effect. For any instance x in the online data, the algorithm would query for its label with a lower probability if Q0(x) is relatively large.\nIt is clear that a lower query probability leads to fewer label queries. Moreover, we claim that our debiasing strategy, though queries for less labels, does not deteriorate our theoretical guarantee on the error rate of the final output classifier. To see this, we note that we can establish a concentration bound for multiple importance sampling estimators that with probability at least 1− δ, for all h ∈ H,\nl(h)− l(h?) ≤2(l(h, S)− l(h?, S))\n+γ1 sup x∈X 1{h(x) 6= h?(x)} log |H|δ mQ0(x) + nQ1(x)\n+γ1 √ sup x∈X 1{h(x) 6= h?(x)} log |H|δ mQ0(x) + nQ1(x) l(h?)\n(3)\nwhere m,n are sizes of logged data and online data respectively, Q0 and Q1 are query policy during the logging phase and the online phase respectively, and γ1 is an absolute constant (see Corollary 15 in Appendix for proof).\nThis concentration bound implies that for any x ∈ X , if Q0(x) is large, we can set Q1(x) to be relatively small (as long as mQ0(x) + nQ1(x) ≥ infx′ mQ0(x′) + nQ1(x′)) while achieving the same concentration bound. Consequently, the upper bound on the final error rate that we can establish from this concentration bound would not be impacted by the debiasing querying strategy.\nOne technical difficulty of applying both multiple importance sampling and the debiasing strategy to the DBAL framework is adaptivity. Applying both methods requires that the query policy and consequently the importance weights in the error estimator are updated with observed examples in each iteration. In this case, the summands of the error estimator are not independent, and the estimator becomes an adaptive multiple importance sampling estimator whose convergence property is still an open problem (Cornuet et al., 2012).\nTo circumvent this convergence issue and establish rigorous theoretical guarantees, in each iteration, we compute the error estimator from a fresh sample set. In particular, we partition the logged data and the online data stream into\ndisjoint subsets, and we use one logged subset and one online subset for each iteration."
+  }, {
+    "heading": "3.2. Details of the Algorithm",
+    "text": "Algorithm 1 Acitve learning with logged data 1: Input: confidence δ, size of online data n, logging pol-\nicy Q0, logged data T0. 2: K ← dlog ne. 3: S̃0 ← T (0)0 ; V0 ← H; D0 ← X ; ξ0 ← infx∈X Q0(x). 4: for k = 0, . . . ,K − 1 do 5: Define δk ← δ(k+1)(k+2) ; σ(k, δ) ← log |H|/δ mkξk+nk ;\n∆k(h, h ′)← γ0(σ(k, δk2 )+ √ σ(k, δk2 )ρS̃k(h, h\n′)). 6: . γ0 is an absolute constant defined in Lemma 16. 7: ĥk ← arg minh∈Vk l(h, S̃k). 8: Define the candidate set\nVk+1 ← {h ∈ Vk | l(h, S̃k) ≤ l(ĥk, S̃k)+∆k(h, ĥk)}\nand its disagreement region Dk+1 ← DIS(Vk+1). 9: Define ξk+1 ← infx∈Dk+1 Q0(x), and Qk+1(x) ←\n1{Q0(x) ≤ ξk+1 + 1/α}. 10: Draw nk+1 samples {(Xt, Yt)} m+n1+···+nk+1 t=m+n1···+nk+1, and\npresent {Xt} m+n1+···+nk+1 t=m+n1+···+nk+1 to the algorithm.\n11: for t = m+n1+· · ·+nk+1 to m+n1+· · ·+nk+1 do 12: Zt ← Qk+1(Xt). 13: if Zt = 1 then 14: If Xt ∈ Dk+1, query for label: Ỹt ← Yt; otherwise infer Ỹt ← ĥk(Xt). 15: end if 16: end for 17: T̃k+1 ← {Xt, Ỹt, Zt} m+n1+···+nk+1 t=m+n1+···+nk+1. 18: S̃k+1 ← T (k+1)0 ∪ T̃k+1. 19: end for 20: Output ĥ = arg minh∈VK l(h, S̃K).\nThe Algorithm is shown as Algorithm 1. Algorithm 1 runs in K iterations where K = dlog ne (recall n is the size of the online data stream). For simplicity, we assume n = 2K − 1.\nAs noted in the previous subsection, we require the algorithm to use a disjoint sample set for each iteration. Thus, we partition the data as follows. The online data stream is partitioned into K parts T1, · · · , TK of sizes n1 = 2\n0, · · · , nK = 2K−1. We define n0 = 0 for completeness. The logged data T0 is partitioned into K + 1 parts T\n(0) 0 , · · · , T (K) 0 of sizes m0 = m/3,m1 = αn1,m2 = αn2, · · · ,mK = αnK (where α = 2m/3n and we assume α ≥ 1 is an integer for simplicity. m0 can take other values as long as it is a constant factor of m). The algorithm uses T (0)0 to construct an initial candidate set, and uses\nSk := T (k) 0 ∪ Tk in iteration k.\nAlgorithm 1 uses the disagreement-based active learning framework. At iteration k (k = 0, · · · ,K − 1), it first constructs a candidate set Vk+1 which is the set of classifiers whose training error (using the multiple importance sampling estimator) on T (k)0 ∪ T̃k is small, and its disagreement region Dk+1. At the end of the k-th iteration, it receives the (k + 1)-th part of the online data stream {Xi} m+n1···+nk+1 i=m+n1···+nk+1 from which it can query for labels. It only queries for labels inside the disagreement region Dk+1. For any example X outside the disagreement region, Algorithm 1 infers its label Ỹ = ĥk(X). Throughout this paper, we denote by Tk, Sk the set of examples with original labels, and by T̃k, S̃k the set of examples with inferred labels. The algorithm only observes T̃k and S̃k.\nAlgorithm 1 uses aforementioned debiasing query strategy, which leads to fewer label queries than the standard disagreement-based algorithms. To simplify our analysis, we round the query probability Qk(x) to be 0 or 1."
+  }, {
+    "heading": "4. Analysis",
+    "text": ""
+  }, {
+    "heading": "4.1. Consistency",
+    "text": "We first introduce some additional quantities.\nDefine h? := minh∈H l(h) to be the best classifier in H, and ν := l(h?) to be its error rate. Let γ2 to be an absolute constant to be specified in Lemma 17 in Appendix.\nWe introduce some definitions that will be used to upperbound the size of the disagreement sets in our algorithm. Let DIS0 := X . Recall K = dlog ne. For k = 1, . . . ,K, let ζk := supx∈DISk−1 log(2|H|/δk) mk−1Q0(x)+nk−1 , k := γ2ζk +\nγ2 √ ζkl(h?), DISk := DIS(B(h?, 2ν + k)). Let ζ := supx∈DIS1 1 αQ0(x)+1 .\nThe following theorem gives statistical consistency of our algorithm.\nTheorem 1. There is an absolute constant c0 such that for any δ > 0, with probability at least 1− δ,\nl(ĥ) ≤l(h?) + c0 sup x∈DISK log K|H|δ mQ0(x) + n\n+ c0\n√ sup\nx∈DISK log K|H|δ mQ0(x) + n l(h?)."
+  }, {
+    "heading": "4.2. Label Complexity",
+    "text": "We first introduce the adjusted disagreement coefficient, which characterizes the rate of decrease of the query region as the candidate set shrinks.\nDefinition 2. For any measurable set A ⊆ X , define\nS(A,α) to be⋃ A′⊆A ( A′ ∩ { x : Q0(x) ≤ inf x∈A′ Q0(x) + 1 α }) .\nFor any r0 ≥ 2ν, α ≥ 1, define the adjusted disagreement coefficient θ̃(r0, α) to be\nsup r>r0\n1 r Pr(S(DIS(B(h?, r)), α)).\nThe adjusted disagreement coefficient is a generalization of the standard disagreement coefficient (Hanneke, 2007) which has been widely used for analyzing active learning algorithms. The standard disagreement coefficient θ(r) can be written as θ(r) = θ̃(r, 1), and clearly θ(r) ≥ θ̃(r, α) for all α ≥ 1.\nWe can upper-bound the number of labels queried by our algorithm using the adjusted disagreement coefficient. (Recall that we only count labels queried during the online phase, and that α = 2m/3n ≥ 1) Theorem 3. There is an absolute constant c1 such that for any δ > 0, with probability at least 1 − δ, the number of labels queried by Algorithm 1 is at most:\nc1θ̃(2ν + K , α)(nν + ζ log n log |H| log n\nδ\n+ log n √ nνζ log\n|H| log n δ )."
+  }, {
+    "heading": "4.3. Remarks",
+    "text": "As a sanity check, note that when Q0(x) ≡ 1 (i.e., all labels in the logged data are shown), our results reduce to the classical bounds for disagreement-based active learning with a warm-start.\nNext, we compare the theoretical guarantees of our algorithm with some alternatives. We fix the target error rate to be ν + , assume we are given m logged data, and compare upper bounds on the number of labels required in the online phase to achieve the target error rate. Recall ξ0 = infx∈X Q0(x). Define ξ̃K := infx∈DISK Q0(x), θ̃ := θ̃(2ν, α), θ := θ(2ν).\nFrom Theorem 1 and 3 and some algebra, our algorithm requires Õ ( νθ̃ · (ν+ 2 log |H| δ −mξ̃K) ) labels.\nThe first alternative is passive learning that requests all labels for {Xt}m+nt=m+1 and finds an empirical risk minimizer using both logged data and online data. If standard importance sampling is used, the upper bound is Õ (\n1 ξ0 (ν+ 2 log |H| δ −mξ0)\n) . If multiple importance sam-\npling is used, the upper bound is Õ ( ν+ 2 log |H| δ −mξ̃K ) .\nBoth bounds are worse than ours since νθ̃ ≤ 1 and ξ0 ≤ ξ̃K ≤ 1.\nA second alternative is standard disagreement-based active learning with naive warm-start where the logged data is only used to construct an initial candidate set. For standard importance sampling, the upper bound is Õ ( νθ ξ0 (ν+ 2 log |H| δ −mξ0) ) . For multiple importance sampling (i.e., out algorithm without the debiasing step), the upper bound is Õ ( νθ · (ν+ 2 log |H| δ −mξ̃K) ) . Both\nbounds are worse than ours since νθ̃ ≤ νθ and ξ0 ≤ ξ̃K ≤ 1.\nA third alternative is to merely use past policy to label data – that is, query on x with probability Q0(x) in the online phase. The upper bound here is Õ (\nE[Q0(X)] ξ0 (ν+ 2 log |H| δ −mξ0)\n) . This is worse than ours\nsince ξ0 ≤ E[Q0(X)] and ξ0 ≤ ξ̃K ≤ 1."
+  }, {
+    "heading": "5. Experiments",
+    "text": "We now empirically validate our theoretical results by comparing our algorithm with a few alternatives on several datasets and logging policies. In particular, we confirm that the test error of our classifier drops faster than several alternatives as the expected number of label queries increases. Furthermore, we investigate the effectiveness of two key components of our algorithm: multiple importance sampling and the debiasing query strategy."
+  }, {
+    "heading": "5.1. Methodology",
+    "text": ""
+  }, {
+    "heading": "5.1.1. ALGORITHMS AND IMPLEMENTATIONS",
+    "text": "To the best of our knowledge, no algorithms with theoretical guarantees have been proposed in the literature. We consider the overall performance of our algorithm against two natural baselines: standard passive learning (PASSIVE) and the disagreement-based active learning algorithm with warm start (DBALW). To understand the contribution of multiple importance sampling and the debiasing query strategy, we also compare the results with the disagreement-based active learning with warm start that uses multiple importance sampling (DBALWM). We do not compare with the standard disagreement-based active learning that ignores the logged data since the contribution of warm start is clear: it always results in a smaller initial candidate set, and thus leads to less label queries.\nPrecisely, the algorithms we implement are:\n• PASSIVE: A passive learning algorithm that queries labels for all examples in the online sequence and uses the standard importance sampling estimator to combine logged data and online data.\n• DBALW: A disagreement-based active learning algorithm that uses the standard importance sampling estimator, and constructs the initial candidate set with logged data. This algorithm only uses only our first key idea – warm start.\n• DBALWM: A disagreement-based active learning algorithm that uses the multiple importance sampling estimator, and constructs the initial candidate set with logged data. This algorithm uses our first and second key ideas, but not the debiasing query strategy. In other words, this method sets Qk ≡ 1 in Algorithm 1.\n• IDBAL: The method proposed in this paper: improved disagreement-based active learning algorithm with warm start that uses the multiple importance sampling estimator and the debiasing query strategy.\nOur implementation of above algorithms follows Vowpal Wabbit (vw). Details can be found in Appendix."
+  }, {
+    "heading": "5.1.2. DATA",
+    "text": "Due to lack of public datasets for learning with logged data, we convert datasets for standard binary classification into our setting. Specifically, we first randomly select 80% of the whole dataset as training data and the remaining 20% is test data. We randomly select 50% of the training set as logged data, and the remaining 50% is online data. We then run an artificial logging policy (to be specified later) on the logged data to determine whether each label should be revealed to the learning algorithm or not.\nExperiments are conducted on synthetic data and 11 datasets from UCI datasets (Lichman, 2013) and LIBSVM datasets (Chang & Lin, 2011). The synthetic data is generated as follows: we generate 6000 30-dimensional points uniformly from hypercube [−1, 1]30, and labels are assigned by a random linear classifier and then flipped with probability 0.1 independently.\nWe use the following four logging policies:\n• IDENTICAL: Each label is revealed with probability 0.005.\n• UNIFORM: We first assign each instance in the instance space to three groups with (approximately) equal probability. Then the labels in each group are revealed with probability 0.005, 0.05, and 0.5 respectively.\n• UNCERTAINTY: We first train a coarse linear classifier using 10% of the data. Then, for an instance at distance r to the decision boundary, we reveal its label with probability exp(−cr2) where c is some constant. This policy is intended to simulate uncertainty sampling used in active learning.\n• CERTAINTY: We first train a coarse linear classifier using 10% of the data. Then, for an instance at distance r to the decision boundary, we reveal its label with probability cr2 where c is some constant. This policy is intended to simulate a scenario where an action (i.e. querying for labels in our setting) is taken only if the current model is certain about its consequence."
+  }, {
+    "heading": "5.1.3. METRICS AND PARAMETER TUNING",
+    "text": "The experiments are conducted as follows. For a fixed policy, for each dataset d, we repeat the following process 10 times. At time k, we first randomly generate a simulated logged dataset, an online dataset, and a test dataset as stated above. Then for i = 1, 2, · · · , we set the horizon of the online data stream ai = 10 × 2i (in other words, we only allow the algorithm to use first ai examples in the online dataset), and run algorithm A with parameter set p (to be specified later) using the logged dataset and first ai examples in the online dataset. We record n(d, k, i, A, p) to be the number of label queries, and e(d, k, i, A, p) to be the test error of the learned linear classifier.\nLet n̄(d, i, A, p) = 110 ∑ k n(d, k, i, A, p), ē(d, i, A, p) =\n1 10 ∑ k e(d, k, i, A, p). To evaluate the overall performance of algorithm A with parameter set p, we use the following area under the curve metric (see also (Huang et al., 2015)):\nAUC(d,A, p) = ∑ i ē(d, i, A, p) + ē(d, i+ 1, A, p) 2\n· (n̄(d, i+ 1, A, p)− n̄(d, i, A, p)).\nA small value of AUC means that the test error decays fast as the number of label queries increases.\nThe parameter set p consists of two parameters:\n• Model capacity C (see also item 4 in Appendix F.1). In our theoretical analysis there is a term C := O(log Hδ ) in the bounds, which is known to be loose in practice (Hsu, 2010). Therefore, in experiments, we treat C as a parameter to tune. We try C in {0.01 × 2k | k = 0, 2, 4, . . . , 18}\n• Learning rate η (see also item 3 in Appendix F.1). We use online gradient descent with stepsize √ η t+η . We\ntry η in {0.0001× 2k | k = 0, 2, 4, . . . , 18}.\nFor each policy, we report AUC(d,A) = minp AUC(d,A, p), the AUC under the parameter set that minimizes AUC for dataset d and algorithm A."
+  }, {
+    "heading": "5.2. Results and Discussion",
+    "text": "We report the AUCs for each algorithm under each policy and each dataset in Tables 1 to 4. The test error curves can be found in Appendix.\nTable 1: AUC under Identical policy\nDataset Passive DBALw DBALwm IDBAL\nsynthetic 121.77 123.61 111.16 106.66 letter 4.40 3.65 3.82 3.48 skin 27.53 27.29 21.48 21.44 magic 109.46 101.77 89.95 83.82 covtype 228.04 209.56 208.82 220.27 mushrooms 19.22 25.29 18.54 23.67 phishing 78.49 73.40 70.54 71.68 splice 65.97 67.54 65.73 65.66 svmguide1 59.36 55.78 46.79 48.04 a5a 53.34 50.8 51.10 51.21 cod-rna 175.88 176.42 167.42 164.96 german 65.76 68.68 59.31 61.54\nTable 2: AUC under Uniform policy\nDataset Passive DBALw DBALwm IDBAL\nsynthetic 113.49 106.24 92.67 88.38 letter 1.68 1.29 1.45 1.59 skin 23.76 21.42 20.67 19.58 magic 53.63 51.43 51.78 50.19 covtype 262.34 287.40 274.81 263.82 mushrooms 7.31 6.81 6.51 6.90 phishing 42.53 39.56 39.19 37.02 splice 88.61 89.61 90.98 87.75 svmguide1 110.06 105.63 98.41 96.46 a5a 46.96 48.79 49.50 47.60 cod-rna 63.39 63.30 66.32 58.48 german 63.60 55.87 56.22 55.79\nOverall Performance The results confirm that the test error of the classifier output by our algorithm (IDBAL) drops faster than the baselines PASSIVE and DBALW: as demonstrated in Tables 1 to 4, IDBAL achieves lower AUC than both PASSIVE and DBALW for a majority of datasets under all policies. We also see that IDBAL performs better than or close to DBALWM for all policies other than Identical. This confirms that among our two key novel ideas, using multiple importance sampling consistently results in a performance gain. Using the debiasing query strategy over multiple importance sampling also leads to performance gains, but these are less consistent.\nThe Effectiveness of Multiple Importance Sampling As noted in Section 2.3, multiple importance sampling estimators have lower variance than standard importance sampling estimators, and thus can lead to a lower label complexity. This is verified in our experiments that DBALWM (DBAL with multiple importance sampling estimators) has a lower AUC than DBALW (DBAL with standard impor-\ntance sampling estimator) on a majority of datasets under all policies.\nThe Effectiveness of the Debiasing Query Strategy Under Identical policy, all labels in the logged data are revealed with equal probability. In this case, our algorithm IDBAL queries all examples in the disagreement region as DBALWM does. As shown in Table 1, IDBAL and DBALWM achieves the best AUC on similar number of datasets, and both methods outperform DBALW over most datasets.\nUnder Uniform, Uncertainty, and Certainty policies, labels in the logged data are revealed with different probabilities. In this case, IDBAL’s debiasing query strategy takes effect: it queries less frequently the instances that are wellrepresented in the logged data, and we show that this could lead to a lower label complexity theoretically. In our experiments, as shown in Tables 2 to 4, IDBAL does indeed outperform DBALWM on these policies empirically."
+  }, {
+    "heading": "6. Related Work",
+    "text": "Learning from logged observational data is a fundamental problem in machine learning with applications to causal inference (Shalit et al., 2017), information retrieval (Strehl et al., 2010; Li et al., 2015; Hofmann et al., 2016), recommender systems (Li et al., 2010; Schnabel et al., 2016), online learning (Agarwal et al., 2014; Wang et al., 2017), and reinforcement learning (Thomas, 2015; Thomas et al., 2015; Mandel et al., 2016). This problem is also closely related to covariate shift (Zadrozny, 2004; Sugiyama et al., 2007; Ben-David et al., 2010). Two variants are widely studied – first, when the logging policy is known, a problem known as learning from logged data (Li et al., 2015; Thomas et al., 2015; Swaminathan & Joachims, 2015a;b), and second, when this policy is unknown (Johansson et al., 2016; Athey & Imbens, 2016; Kallus, 2017; Shalit et al., 2017), a problem known as learning from observational data. Our work addresses the first problem.\nWhen the logging policy is unknown, the direct method (Dudı́k et al., 2011) finds a classifier using observed data. This method, however, is vulnerable to selection bias (Hofmann et al., 2016; Johansson et al., 2016). Existing debiasing procedures include (Athey & Imbens, 2016; Kallus, 2017), which proposes a tree-based method to partition the data space, and (Johansson et al., 2016; Shalit et al., 2017), which proposes to use deep neural networks to learn a good representation for both the logged and population data.\nWhen the logging policy is known, we can learn a classifier by optimizing a loss function that is an unbiased estimator of the expected error rate. Even in this case, however, estimating the expected error rate of a classifier is not completely straightforward and has been one of the central problems in contextual bandit (Wang et al., 2017), off-policy evaluation (Jiang & Li, 2016), and other related fields. The most common solution is to use importance sampling according to the inverse propensity scores (Rosenbaum & Rubin, 1983). This method is unbiased when propensity scores are accurate, but may have high variance when some propensity scores are close to zero. To resolve this, (Bottou et al., 2013; Strehl et al., 2010; Swaminathan & Joachims, 2015a) propose to truncate the inverse propensity score, (Swaminathan & Joachims, 2015b) proposes to use normalized importance sampling, and (Jiang & Li, 2016; Dudı́k et al., 2011; Thomas & Brunskill, 2016; Wang et al., 2017) propose doubly robust estimators. Recently, (Thomas et al., 2015) and (Agarwal et al., 2017) suggest adjusting the importance weights according to data to further reduce the variance. We use the multiple importance sampling estimator (which have also been recently studied in (Agarwal et al., 2017) for policy evaluation), and we prove this estimator concentrates around the true expected loss tightly.\nMost existing work on learning with logged data falls into\nthe passive learning paradigm, that is, they first collect the observational data and then train a classifier. In this work, we allow for active learning, that is, the algorithm could adaptively collect some labeled data. It has been shown in the active learning literature that adaptively selecting data to label can achieve high accuracy at low labeling cost (Balcan et al., 2009; Beygelzimer et al., 2010; Hanneke et al., 2014; Zhang & Chaudhuri, 2014; Huang et al., 2015). Krishnamurthy et al. (2017) study active learning with bandit feedback and give a disagreement-based learning algorithm.\nTo the best of our knowledge, there is no prior work with theoretical guarantees that combines passive and active learning with a logged observational dataset. Beygelzimer et al. (2009) consider active learning with warm-start where the algorithm is presented with a labeled dataset prior to active learning, but the labeled dataset is not observational: it is assumed to be drawn from the same distribution for the entire population, while in our work, we assume the logged dataset is in general drawn from a different distribution by a logging policy."
+  }, {
+    "heading": "7. Conclusion and Future Work",
+    "text": "We consider active learning with logged data. The logged data are collected by a predetermined logging policy while the learner’s goal is to learn a classifier over the entire population. We propose a new disagreement-based active learning algorithm that makes use of warm start, multiple importance sampling, and a debiasing query strategy. We show that theoretically our algorithm achieves better label complexity than alternative methods. Our theoretical results are further validated by empirical experiments on different datasets and logging policies.\nThis work can be extended in several ways. First, the derivation and analysis of the debiasing strategy are based on a variant of the concentration inequality (3) in subsection 3.1. The inequality relates the generalization error with the best error rate l(h?), but has a looser variance term than some existing bounds (for example (Cortes et al., 2010)). A more refined analysis on the concentration of weighted estimators could better characterize the performance of the proposed algorithm, and might also improve the debiasing strategy. Second, due to the dependency of multiple importance sampling, in Algorithm 1, the candidate set Vk+1 is constructed with only the k-th segment of data S̃k instead of all data collected so far ∪ki=0S̃i. One future direction is to investigate how to utilize all collected data while provably controlling the variance of the weighted estimator. Finally, it would be interesting to investigate how to perform active learning from logged observational data without knowing the logging policy.\nAcknowledgements We thank NSF under CCF 1719133 for support. We thank Chris Meek, Adith Swaminathan, and Chicheng Zhang for helpful discussions. We also thank anonymous reviewers for constructive comments."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Taming the monster: A fast and simple algorithm for contextual bandits",
+    "authors": ["A. Agarwal", "D. Hsu", "S. Kale", "J. Langford", "L. Li", "R. Schapire"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2014
+  }, {
+    "title": "Effective evaluation using logged bandit feedback from multiple loggers",
+    "authors": ["A. Agarwal", "S. Basu", "T. Schnabel", "T. Joachims"],
+    "venue": "arXiv preprint arXiv:1703.06180,",
+    "year": 2017
+  }, {
+    "title": "Recursive partitioning for heterogeneous causal effects",
+    "authors": ["S. Athey", "G. Imbens"],
+    "venue": "Proceedings of the National Academy of Sciences,",
+    "year": 2016
+  }, {
+    "title": "Agnostic active learning",
+    "authors": ["Balcan", "M.-F", "A. Beygelzimer", "J. Langford"],
+    "venue": "J. Comput. Syst. Sci.,",
+    "year": 2009
+  }, {
+    "title": "A theory of learning from different domains",
+    "authors": ["S. Ben-David", "J. Blitzer", "K. Crammer", "A. Kulesza", "F. Pereira", "J.W. Vaughan"],
+    "venue": "Machine learning,",
+    "year": 2010
+  }, {
+    "title": "Importance weighted active learning",
+    "authors": ["A. Beygelzimer", "S. Dasgupta", "J. Langford"],
+    "venue": "In ICML,",
+    "year": 2009
+  }, {
+    "title": "Agnostic active learning without constraints",
+    "authors": ["A. Beygelzimer", "D. Hsu", "J. Langford", "T. Zhang"],
+    "venue": "In NIPS,",
+    "year": 2010
+  }, {
+    "title": "Libsvm: a library for support vector machines",
+    "authors": ["Chang", "C.-C", "Lin", "C.-J"],
+    "venue": "ACM transactions on intelligent systems and technology (TIST),",
+    "year": 2011
+  }, {
+    "title": "Adaptive multiple importance sampling",
+    "authors": ["J. Cornuet", "MARIN", "J.-M", "A. Mira", "C.P. Robert"],
+    "venue": "Scandinavian Journal of Statistics,",
+    "year": 2012
+  }, {
+    "title": "Learning bounds for importance weighting",
+    "authors": ["C. Cortes", "Y. Mansour", "M. Mohri"],
+    "venue": "In Advances in neural information processing systems,",
+    "year": 2010
+  }, {
+    "title": "Doubly robust policy evaluation and learning",
+    "authors": ["M. Dudı́k", "J. Langford", "L. Li"],
+    "venue": "In Proceedings of the 28th International Conference on International Conference on Machine Learning,",
+    "year": 2011
+  }, {
+    "title": "A bound on the label complexity of agnostic active learning",
+    "authors": ["S. Hanneke"],
+    "venue": "In ICML,",
+    "year": 2007
+  }, {
+    "title": "Minimax analysis of active learning",
+    "authors": ["S. Hanneke", "L. Yang"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2015
+  }, {
+    "title": "Algorithms for Active Learning",
+    "authors": ["D. Hsu"],
+    "venue": "PhD thesis, UC San Diego,",
+    "year": 2010
+  }, {
+    "title": "Efficient and parsimonious agnostic active learning",
+    "authors": ["Huang", "T.-K", "A. Agarwal", "D.J. Hsu", "J. Langford", "R.E. Schapire"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2015
+  }, {
+    "title": "Doubly robust off-policy value evaluation for reinforcement learning",
+    "authors": ["N. Jiang", "L. Li"],
+    "venue": "In Proceedings of the 33rd International Conference on International Conference on Machine Learning-Volume",
+    "year": 2016
+  }, {
+    "title": "Learning representations for counterfactual inference",
+    "authors": ["F. Johansson", "U. Shalit", "D. Sontag"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2016
+  }, {
+    "title": "Recursive partitioning for personalization using observational data",
+    "authors": ["N. Kallus"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2017
+  }, {
+    "title": "Online importance weight aware updates",
+    "authors": ["N. Karampatziakis", "J. Langford"],
+    "venue": "In Proceedings of the TwentySeventh Conference on Uncertainty in Artificial Intelligence,",
+    "year": 2011
+  }, {
+    "title": "A contextual-bandit approach to personalized news article recommendation",
+    "authors": ["L. Li", "W. Chu", "J. Langford", "R.E. Schapire"],
+    "venue": "In Proceedings of the 19th international conference on World wide web,",
+    "year": 2010
+  }, {
+    "title": "Offline evaluation of online reinforcement learning",
+    "authors": ["T. Mandel", "Liu", "Y.-E", "E. Brunskill", "Z. Popovic"],
+    "year": 2016
+  }, {
+    "title": "Safe and effective importance sampling",
+    "authors": ["A. Owen", "Y. Zhou"],
+    "venue": "Journal of the American Statistical Association,",
+    "year": 2000
+  }, {
+    "title": "The central role of the propensity score in observational studies for causal effects",
+    "authors": ["P.R. Rosenbaum", "D.B. Rubin"],
+    "year": 1983
+  }, {
+    "title": "Recommendations as treatments: Debiasing learning and evaluation",
+    "authors": ["T. Schnabel", "A. Swaminathan", "A. Singh", "N. Chandak", "T. Joachims"],
+    "venue": "arXiv preprint arXiv:1602.05352,",
+    "year": 2016
+  }, {
+    "title": "Learning from logged implicit exploration data",
+    "authors": ["A. Strehl", "J. Langford", "L. Li", "S.M. Kakade"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2010
+  }, {
+    "title": "Covariate shift adaptation by importance weighted cross validation",
+    "authors": ["M. Sugiyama", "M. Krauledat", "MÃžller", "K.-R"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2007
+  }, {
+    "title": "Counterfactual risk minimization: Learning from logged bandit feedback",
+    "authors": ["A. Swaminathan", "T. Joachims"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2015
+  }, {
+    "title": "The self-normalized estimator for counterfactual learning",
+    "authors": ["A. Swaminathan", "T. Joachims"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2015
+  }, {
+    "title": "Data-efficient off-policy policy evaluation for reinforcement learning",
+    "authors": ["P. Thomas", "E. Brunskill"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2016
+  }, {
+    "title": "High-confidence off-policy evaluation",
+    "authors": ["P.S. Thomas", "G. Theocharous", "M. Ghavamzadeh"],
+    "venue": "In AAAI,",
+    "year": 2015
+  }, {
+    "title": "On the uniform convergence of relative frequencies of events to their probabilities",
+    "authors": ["V. Vapnik", "A.Y. Chervonenkis"],
+    "venue": "Theory of Probability and its Applications,",
+    "year": 1971
+  }, {
+    "title": "Optimally combining sampling techniques for monte carlo rendering",
+    "authors": ["E. Veach", "L.J. Guibas"],
+    "venue": "In Proceedings of the 22nd annual conference on Computer graphics and interactive techniques,",
+    "year": 1995
+  }, {
+    "title": "Optimal and adaptive off-policy evaluation in contextual bandits",
+    "authors": ["Wang", "Y.-X", "A. Agarwal", "M. Dudik"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2017
+  }, {
+    "title": "Learning and evaluating classifiers under sample selection bias",
+    "authors": ["B. Zadrozny"],
+    "venue": "In Proceedings of the twenty-first international conference on Machine learning,",
+    "year": 2004
+  }, {
+    "title": "Beyond disagreement-based agnostic active learning",
+    "authors": ["C. Zhang", "K. Chaudhuri"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2014
+  }],
+  "id": "SP:5ed2c32ba7fc4cf9260d12a3ad5cd2ae0cca8ba7",
+  "authors": [{
+    "name": "Songbai Yan",
+    "affiliations": []
+  }, {
+    "name": "Kamalika Chaudhuri",
+    "affiliations": []
+  }, {
+    "name": "Tara Javidi",
+    "affiliations": []
+  }],
+  "abstractText": "We consider active learning with logged data, where labeled examples are drawn conditioned on a predetermined logging policy, and the goal is to learn a classifier on the entire population, not just conditioned on the logging policy. Prior work addresses this problem either when only logged data is available, or purely in a controlled random experimentation setting where the logged data is ignored. In this work, we combine both approaches to provide an algorithm that uses logged data to bootstrap and inform experimentation, thus achieving the best of both worlds. Our work is inspired by a connection between controlled random experimentation and active learning, and modifies existing disagreement-based active learning algorithms to exploit logged data.",
+  "title": "Active Learning with Logged Data"
+}

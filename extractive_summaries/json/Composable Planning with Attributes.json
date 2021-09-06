@@ -1,0 +1,232 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Researchers have demonstrated impressive successes in building agents that can achieve excellent performance in difficult tasks, e.g. (Mnih et al., 2015; Silver et al., 2016). However, these successes have mostly been confined to situations where it is possible to train a large number of times on a single known task. On the other hand, in some situations, the tasks of interest are not known at training time or the space of tasks is so large that an agent will not realistically be able to train many times on any single task in the space.\nWe might hope that the tasks of interest are compositional: for example, cracking an egg is the same whether one is\n*Equal contribution 1Facebook AI Research, New York, NY, USA 2New York University, New York, NY, USA. Correspondence to: Adam Lerer <alerer@fb.com>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\nmaking pancakes or an omelette. If the space of tasks we want an agent to be able to solve has compositional structure, then a state abstraction that exposes this structure could be used both to specify instructions to the agent, and to plan through sub-tasks that allow the agent to complete its instructions.\nIn this work we show how to train agents that can solve complex tasks by planning over a sequence of previously experienced simpler ones. The training protocol relies on a state abstraction that is manually specified, consisting of a set of binary attributes designed to capture properties of the environment we consider important. These attributes, learned at train time from a set of (state, attribute) pairs, provide a natural way to specify tasks, and a natural state abstraction for planning. Once the agent learns how its actions affect the environment in terms of the attribute representation, novel tasks can be solved compositionally by executing a plan consisting of a sequence of transitions between abstract states defined by those attributes. Thus, as in (Dayan & Hinton, 1992; Dietterich, 2000; Vezhnevets et al., 2017), temporal abstractions are explicitly linked with state abstractions.\nOur approach is thus a form of model-based planning, where the agent first learns a model of its environment (the mapping from states to attributes, and the attribute transition graph), and then later uses that model for planning. There is no supervision or reward given for completing the tasks of interest; outside of the (state, attribute) pairs, the agent receives no other reward or extrinsic supervision. In the experiments below, we will show empirically that this kind of approach can be useful on problems that can be challenging for standard reinforcement learning.\nWe evaluate compositional planning in several environments. We first consider 3D block stacking, and show that we can compose single-action tasks seen during training to perform multi-step tasks. Second, we plan over multi-step policies in 2-D grid world tasks. Finally, we see how our approach scales to a unit-building task in StarCraft.\n2. The Attribute Planner Model We consider an agent in a Markov environment, i.e. at each time the agent observes the state s and takes action\na, which uniquely determines the probability P (s, a, s0) of transitioning from s to s0. We augment the environment with a map f : S ! {⇢} from states to a set of userdefined attributes ⇢. We assume that either f is provided or a small set of hand-labeled (s, ⇢) pairs are provided in order to learning a mapping f̂ . Hence, the attributes are human defined and constitute a form of supervision. Here we consider attributes that are sets of binary vectors. These user-specified attributes parameterize the set of goals that can be specified at test time.\nThe agent’s objective at test time is, given a set of goal attributes ⇢g , to take a sequence of actions in the environment that end with the agent in a state that maps to ⇢g. During training, the agent constructs a model with three parts:\n1. a neural-net based attribute detector f̂ , which maps states s to a set of attributes ⇢, i.e. ⇢ = f̂(s).\n2. a neural net-based policy ⇡(s, ⇢g) which takes a pair of inputs: the current state s and attributes of an (intermediate) goal state ⇢g , and outputs a distribution over actions.\n3. a transition table c⇡(⇢i, ⇢j) that records the empirical probability that ⇡(s⇢i , ⇢j) can succeed at transiting successfully from ⇢i to ⇢j in a small number of steps.\nThe transition table c⇡ can be interpreted as a graph where the edge weights are probabilities. This high-level attribute graph is then searched at test time to find a path to the goal with maximum probability of success, with the policy network performing the low-level actions to transition between adjacent attribute sets."
+  }, {
+    "heading": "2.1. Training the Attribute Planner",
+    "text": "The first step in training the Attribute Planner is to fit the neural network detector f̂ that maps states s to attributes ⇢, using the labeled states provided. If a hardcoded function f is provided, then this step can be elided.\nIn the second step, the agent explores its environment using an exploratory policy. Every time an attribute transition (⇢i, ⇢j) is observed, it is recorded in an intermediate transition table c⇡e . This table will be used in later steps to keep track of which transitions are possible.\nThe most naive exploratory policy takes random actions, but the agent can explore more efficiently if it performs count-based exploration in attribute space. We use a neural network exploration policy that we train via reinforcement learning with a count-based reward1 proportional to c⇡e(⇢i, ⇢j) 0.5 upon every attribute transition (⇢i, ⇢j), where c⇡e(⇢i, ⇢j) is the visit count of this transition during exploration. This bonus is as in (Strehl & Littman, 2008), but with no empirical reward from the environment. The precise choice of exploration bonus is discussed in App. A.\nNow that we have a graph of possible transitions, we next train the low-level goal-conditional policy ⇡ and the main transition table c⇡ . From state s with attributes ⇢, the model picks an attribute set ⇢g randomly from the neighbors of ⇢ in c⇡e weighted by their visit count in the Explore phase and sets that as the goal for ⇡. Once the goal is achieved or a timeout is reached, the policy is updated and the main transition table c⇡ is updated to reflect the success or failure. ⇡ is updated via reinforcement learning, with a reward r of\n1Although the reward is non-stationary, we find (as in the literature) that it is empirically effective.\n1 if ⇢g was reached and 0 otherwise2. See Algorithm 1 for pseudocode of AP training.\nIn the case of block stacking (Sec. 4.1), the attribute transitions consist of a single step, so we treat ⇡ as an “inverse model” in the style of (Agrawal et al., 2016; Andrychowicz et al., 2017), and rather than using reinforcement learning, we can train ⇡ in a supervised fashion by taking random actions and training ⇡ to predict the action taken given the initial state and final attributes.\nAlgorithm 1 Attribute Planner Training Input: Labeled pairs {(si, ⇢i)}, exploratory policy ⇡e, N1, N2, tmax.\n// Step 1: Train attribute detector Fit f̂ on {(si, ⇢i)} with supervised learning.\n// Step 2: Explore\nfor t = 1 ... N1 do Act according to ⇡e(st 1). Compute attributes ⇢t f̂(st) if ⇢t 6= ⇢t 1 then\nRecord the transition: c⇡e(⇢t 1, ⇢t) += 1 Optional: Update ⇡e with count-based reward.\n// Step 3: Train policy ⇡ and c⇡ tlast 0, ⇢s ;, ⇢e RandNeighbor(c⇡e , ⇢s) for t = 1 ... N2 do\nCompute attributes ⇢t f̂(st) if t = 1 or ⇢t 6= ⇢s or t tlast tmax then\nr 1 if ⇢t = ⇢e, otherwise 0. UpdatePolicy(⇡, r) Record attempt: A⇡(⇢t 1, ⇢t) += 1 Record success: S⇡(⇢t 1, ⇢t) += r ⇢s ⇢t, ⇢e RandNeighbor(c⇡e , ⇢s) tlast t\nTake an action according to ⇡(st 1, ⇢e)\nfor (⇢i, ⇢j) 2 A⇡ do c⇡(⇢i, ⇢j) S⇡(⇢i, ⇢j)/A⇡(⇢i, ⇢j)."
+  }, {
+    "heading": "2.2. Evaluating the model",
+    "text": "Once the model has been built we can use it for planning. That is, given an input state s and target set of attributes ⇢T , we find a path [⇢0, ⇢1, ..., ⇢m] on the graph G with ⇢0 = f(s) and ⇢m = ⇢T minimizing Pm 1 i=0 log c⇡(⇢i, ⇢i+1) which maximizes the probability of success of the path (assuming independence). The probability c⇡ is computed in Algorithm 1 as the ratio of observed successes and attempts\n2Since c⇡ is collecting statistics about ⇡ which is nonstationary. So c⇡ should really be updated only after a burn-in period of ⇡, or a moving average should be used for the statistics.\nduring training.\nThe optimal path can be found using Dijkstra’s algorithm with a distance metric of log(c⇡(⇢i, ⇢i+1)). The policy is then used to move along the resulting path between attribute set, i.e. we take actions according to a = ⇡(s, ⇢1), then once f(s) = ⇢1, we change to a = ⇡(s, ⇢2) and so on. At each intermediate step, if the current attributes don’t match the attributes on the computed path, then a new path is computed using the current attributes as a starting point (or, equivalently, the whole path is recomputed at each step).\nAlgorithm 2 Attribute Planner Inference Input: Low-level policy ⇡, graph c⇡, attribute detector f̂ , target attributes ⇢T . do\n⇢ f̂(s) [⇢0, ..., ⇢m] ShortestPath(c⇡, ⇢, ⇢g) Act according to ⇡(st 1, ⇢1).\nwhile ⇢ 6= ⇢T\n2.3. An Aside: Which attributes should we include?\nSince we use user-specified attributes for planning, which attributes are important to include? The set of attributes must be able to specify our goals of interest, and should be parsimonious since extra attributes will increase the size of the graph and thus degrade the statistics on each edge/.\nOn the other hand, the attributes should have a property that we will call “ignorability” which says that the probability of being able to transition from ⇢i to ⇢j should only depend on the attributes ⇢i, not the exact state; i.e. P⇡(f(st0) = ⇢j |f(st)) = P⇡(f(st0) = ⇢j |st) 3. To the extent that this condition is violated, then transitions are aliased, and a planned transition may not be achievable by the policy from the particular state s even though it’s achievable from other states with the same properties, causing the model to fail to achieve its goal. For example, in the block stacking task in 4.1, there will be nontrivial aliasing; we will show that some amount of aliasing is not deadly for our model."
+  }, {
+    "heading": "3. Related work",
+    "text": "Many researchers have recognized the importance of methods that can divide a MDP into subprocesses (Thrun & Schwartz, 1994; Parr & Russell, 1998; Sutton et al., 1999; Dietterich, 2000). Perhaps the most standard formalism today is the options framework of (Sutton et al., 1999), which deals with multistep “macro-actions” in the setting of reinforcement learning. Recent works, like (Kulkarni et al., 2016; Harb et al., 2017), have shown how options can be used (and even discovered in (Harb et al., 2017)) with\n3The particular sequence of actions that effects the transition from ⇢i to ⇢j may still be conditional on the state.\nfunction approximation via deep learning.\nOur work is also a hierarchical approach to controlling an agent in a Markovian environment. However, the paradigm we consider differs from reinforcement learning: we consider a setup where no reward or supervision is provided other than the (s, f(s)) pairs, and show than an agent can learn to decompose a transition between far away ⇢, ⇢0 into a sequence of short transitions. If we were to frame the problem as HRL, considering each ⇡(·, ⇢) as a macro action4, in order for the agent to learn to sequence the ⇡(·, ⇢i), the environment would need to give reward for the completion of complex tasks, not just simple ones.\nAs in (Sutton et al., 2011; Schaul et al., 2015; Dosovitskiy & Koltun, 2016; Fern et al., 2004), we have policies parameterized by state and target attributes. In (Dosovitskiy & Koltun, 2016), an agent is given supervision of future values of attributes of the state considered important for describing tasks. Unlike in that work, our attributes are functions of the current state, and the model uses its own estimator to learn the dynamics at the level of attributes as a graph. Thus, our model gets no extrinsic supervision of environment dynamics or goal attainment at the level of attributes. Our training of c⇡ and then using cpi for task generation recalls (Fern et al., 2004). In that work, as training progresses, goals are farther and farther away (as measured by the steps of a random walk on attributes); but in our work the goals are always one attribute away. This is because our ⇡ only needs to know how to transition between nearby attribute sets, thanks to the planner. In contrast (Fern et al., 2004) aims to train a reactive policy that can handle long transitions too, obviating the need for a planner. Moreover, (Fern et al., 2004) works entirely in the symbolic space, whereas we interfaces the perceptual space with the symbolic space. In (van Seijen et al., 2017), human provided attributes are used as a general value function (GVF) in Ms. Pacman, showing that using a weighted combination of these can lead to higher scores than standard rewards; but again, in contrast to our work, their goal is a better reactive policy.\nOur approach is closely related to factored MDP (Boutilier et al., 1995; 2000; Guestrin et al., 2003b). In these works, it is assumed that the environment can be represented by discrete attributes, and that transitions between the attributes by an action can be modeled as a Bayesian network. The value of each attribute after an action is postulated to depend in a known way on attributes from before the action. The present work differs from these in that the attributes do not determine the state and the dependency graph is not assumed to be known. More importantly, the focus in this work is on\n4All the “macro actions’ in our examples in 4.1 are degenerate in the sense that they return after one step, but we still are able to show generalization to long trajectories from (unsupervised) training only on short ones\norganizing the space of tasks through the attributes rather than being able to better plan a specific task; and in particular being able to generalize to new, more complex tasks at test time.\nOur approach is also related to Relational MDP and Object Oriented MDP (Hernandez-Gardiol & Kaelbling, 2003; van Otterlo, 2005; Diuk et al., 2008; Abel et al., 2015), where states are described as a set of objects, each of which is an instantiation of canonical classes, and each instantiated object has a set of attributes. Our work is especially related to (Guestrin et al., 2003a), where the aim is to show that by using a relational representation of an MDP, a policy from one domain can generalize to a new domain. However, in the current work, the attributes are taken directly as functions of the state, as opposed to defined for object classes, and we do not have any explicit encoding of how objects interact. The model is given some examples of various attributes, and builds a parameterized model that maps into the attributes.\nThe Programmable Agents of (Denil et al., 2017) put the notions of objects and attributes (as in relational MDP) into an end-to-end differentiable neural architecture. Their model also learns mappings from states to attributes, and is evaluated on a block manipulation task. In their work, the attributes are used to generalize to different combinations of object properties at test time, while we use it to generalize compositionally to more complex tasks. Also, while our model uses explicit search to reason over attributes, they use an end-to-end neural architecture.\nThere is a large literature on quickly adapting to a new learning problem given a set or a history of related learning problems. Our approach in this work has a similar motivation to (Isele et al., 2016), where tasks are augmented with descriptors and featurized, and the coefficients of the task features in a sparse dictionary are used to weight a set of vectors defining the model for the associated task. Similarly, the task is specified by a feature as an input into a model in (Lopez-Paz & Ranzato, 2017). However, in our work, although the attributes are used to parameterize tasks, rather than directly featurize the tasks, they are features of a state; and we learn the mapping from state to attributes. This allows our agent to learn how to transit between sets of attributes unsupervised, and plan in that space.\nSeveral recent deep reinforcement learning works have used modular architectures and hierarchy to achieve generalization to new tasks. For example, (Tessler et al., 2017) uses pre-trained skills for transfer. (Oh et al., 2017) uses a metacontroller that selects parameterized skills and analogical supervision on outer-product structured tasks. However, our “meta-controller” is the search over attributes, rather than a reactive model, which allows explicit planning. Furthermore, although our assignments of attributes serves a similar purpose to their analogical supervision (and outer-\nproduct task structure),the methods are complementary; we can imagine augmenting our attributes with analogical supervision.\nIn (Andreas et al., 2017), generalization is achieved through supervision in the form of “policy sketches”, which are symbolic representations of the high level steps necessary to complete a given task. The low level steps in executing modules in the sketches are composable. Our work is similar in that high level annotation is used to enable generalization, but the mechanism in this work is different. Note that the approaches in (Andreas et al., 2017) is also complementary to the one described here; in future work we wish to explore combining them.\nIn this work we use an explicit memory of sets of attributes the model has seen. Several previous works have used nonparametric memories for lowering the sample complexity of learning, e.g. (Blundell et al., 2016; Pritzel et al., 2017). Like these, we lean on the fact that with a good representation of a state, it can be useful to memorize what to do in given situation (having only done it a small number of times) and explicitly look it up. In our case, the “good representation” is informed by the user-specified attributes.\nOur approach is also related to (Machado et al., 2017), which builds up a multiscale representation of an MDP using Eigenvectors of the transition matrix of the MDP, in the sense that we collect data on possible transitions between attributes in a first phase of training, and then use this knowledge at test time.\nThere is a large literature on using symbolic representations for planning, for example the STRIPS formalism (Fikes & Nilsson, 1971). In (Konidaris et al., 2018), the authors propose a model that learns the symbols for a STRIPS-style representation. Like in our work, their model learns the interface between the raw state observations and the planner. However, in that work, the abstract structure is given by a set of pre-defined options with fixed policies."
+  }, {
+    "heading": "4. Experiments",
+    "text": "We perform experiments with the Attribute Planner (AP) in three environments. First, we consider a 3D block stacking environment. Here, we demonstrate that AP allows compositional generalization by training a low level policy on single-action tasks in a supervised fashion and showing that with the AP algorithm it can perform multi-step tasks at test time.\nSecond, we consider 2D grid worlds in Mazebase (Sukhbaatar et al., 2015), where we evaluate AP’s performance when the low-level policy is temporally extended and must be learned via RL.\nFinally, we evaluate AP on a build order planning task in\nStarcraft to see how AP scales to a more complex task that is of broader interest We further show that an exploratory policy over attributes allows the agent to explore attribute transitions where random search fails.\nBaselines: In all experiments, we compare against baseline policies trained with reinforcement learning. These baseline policies take the state and goal as inputs, and use the same neural network architecture as the policy used for the Attribute Planner. We consider several training regimes for the baseline policies: (i) training only with nearby goals like AP; (ii) training on the multi-step evaluation tasks; and (iii) training on a curriculum that transitions from nearby goals to evaluation tasks. Policies (ii) and (iii) are trained on full sequences, thus have an inherent advantage over our model.\nIn the block stacking task, we further compare against a state-of-the-art algorithm for hierarchical RL: Option-Critic with deliberation cost (Harb et al., 2017), as well as an inverse model trained by supervised learning."
+  }, {
+    "heading": "4.1. Block Stacking",
+    "text": "We consider a 3D block stacking environment in Mujoco (Todorov et al., 2012). In this experiment, we train AP only on single-action trajectories and evaluate on multi-step tasks, in order to evaluate AP’s ability to generalize using planning. We compare AP with baselines trained on both single-action, multi-action, and curriculum tasks.\nIn this environment, there are 4 blocks of different colors, and actions consist of dropping a block in a 3 ⇥ 3 grid of positions, resulting in 36 total actions. A block cannot be moved when it is underneath another block, so some actions have no effect.\nThe input to the model is the observed image, and there are a total of 36 binary properties corresponding to the relative x and y positions of the blocks and whether blocks are stacked on one another. For example, one property corresponds to “blue is on top of yellow”. Each training episode is initiated from a random initial state and lasts only one step, i.e. dropping a single block in a new location. Further model and training details and results on a continuous variant of this environment are provided in Appendix B.\nTable 1 compares the performance of different models on several block stacking tasks. In the multi-step task, the goal is chosen as the properties of a new random initialization. These tasks typically require 3 8 steps to complete. In the 4-stack task, the goal is a vertical stack of blocks in the order red, green, blue, yellow. In the underspecified task, we consider a multi-step goal where only 70% of the attributes are provided at random. The AP model handles these naturally by finding the shorted path to any satisfactory attribute set.\nThe single-step reactive policies perform similarly to AP when evaluated on the single-step tasks it sees during training (see Table 5 in the Appendix), but perform poorly when transferred to multi-step tasks, while AP generalizes well to complex task. The AP model also solves underspecified tasks even though they are not seen explicitly during training.\nThe attribute detector f̂ predicts the full attribute set with < 0.1% error when trained on the full dataset of 1 million examples. If trained on only 10,000 examples, the attribute detector has an error rate of 1.4%. Training the AP model with this less-accurate attribute detector degrades multi-step performance by only 0.9%.\nWe also consider a variant of the block stacking task with a continuous action space, in which an action consists of dropping a block at any x-y position. While performance degrades substantially for all models in the continuous action space, AP continues to outperform reactive policies on multi-step tasks. See Appendix B for the full results.\nProperty Aliasing: The “ignorability” assumption we made in Section 2 is violated in the block stacking task. To see why, consider a transition from “red left of blue and yellow” to “red right of blue and yellow”. This can typically be accomplished in one step, but if blue and yellow are already on the far right, it cannot. Thus, states where this transition are possible and impossible are aliased with the same properties. Table 2 shows that the performance is nearly perfect for individual transitions (1-step tasks), and the graph is well-connected after 1 million training examples, so the main source of error on these tasks is in fact\naliasing. Figure 3 shows an example plan that becomes stuck due to aliasing.\nThe transition table c⇡ is important for mitigating the effects of aliasing in the block stacking task. The graph search finds the path with the highest probability of success (i.e. the product of probabilities on each edge), so it avoids edges that have high aliasing. In Table 1, we consider an ablation of c⇡ from the AP model, in which the probability of transitioning from an edge (⇢i, ⇢j) is estimated as the fraction of transitions from ⇢i that ended in ⇢j during the Explore phase. This ablation performs substantially worse than the full AP model."
+  }, {
+    "heading": "4.2. Grid Worlds",
+    "text": "We next consider tasks in which a multi-step low-level policy is required to transition between neighboring attributes.\nWe consider two classes of small 2-D environments in Mazebase (Sukhbaatar et al., 2015), where the worlds are randomly generated for each episode. The action space for each consists of movements in the four cardinal directions plus additional environment-specific actions.\nColored Switches The first environment consists of four switches, each with four possible colors. An extra toggle action cycles the color of a switch if the agent is standing on it. The attributes for this environment are the states of the switches and the tasks are to change the switches into\na specified configuration, as shown in Fig. 4(right). The locations and colors of the switches are randomly initialized for each episode.\nCrafting In the second environment, similar to the one used in (Andreas et al., 2017), an agent needs to collect resources and combine them to form items. In addition to moving in the cardinal directions, the agent has a “grab” action that allows it to pick up a resource from the current location and add it to its inventory. The agent also has a “craft” action that combines a set of items to create a new item if the agent has the prerequisite items in its inventory and the agent is standing on a special square (a “crafting table”) corresponding to the item to be crafted. The attributes for this environment are the items in the inventory, and the task is to add a specified (crafted) item to the inventory. In the environment, there are three types of resources and three types of products (see Fig. 4(left)). The game always starts with three resources and an empty inventory.\n+ ! =\n+ ! =\n+ ! =\n+ + ! =\n1\n+ ! =\n+ ! =\n+ ! =\n+ + ! =\n1\n+ ! =\n+ ! =\n+ ! =\n+ + ! =\n1\n+ ! =\n+ ! =\n+ ! =\n+ + ! =\n1\n+ ! =\n+ ! =\n+ ! =\n+ + ! =\n1\n+ ! =\n+ ! =\n+ ! =\n+ + ! =\n1\n+ ! =\n+ ! =\n+ ! =\n+ + ! =\n1\n+ ! =\n+ ! =\n+ ! =\n+ + ! =\n1\n+ ! =\n+ ! =\n+ ! =\n+ + ! =\n1\n+ ! =\n+ ! =\n+ ! =\n+ + ! =\n1\nGoal:\nCrafting key:\nSwitch color gameCrafting game\nGoal:\nFigure 4. Left: Crafting mazebase game. Right: Colored switches game. See text for details.\nIn both environments, the agent’s observation consists of a bag of words, where the words correspond to (feature, location). Features consist of item types, names, and their other properties. The locations include position relative to the agent in the maze, and also a few special slots for inventory, current, and target attributes.\nTraining proceeds according to Algorithm 1. During the explore phase, an exploratory policy is trained with reinforcement learning using a count-based reward proportional\nto c⇡e(⇢i, ⇢j)P i,j c⇡e(⇢i, ⇢j) + 0.001 ! 0.5\nfor making a transition (⇢i, ⇢j), where c⇡e(⇢i, ⇢j) is the number of times transition (⇢i, ⇢j) has been seen so far. We discuss this exploration bonus in Appendix A.\nDuring the final phase of training we simultaneously compute ⇡ and c⇡ , so we use an exponentially decaying average of the success rate of ⇡ to deal with it’s nonstationarity:\nc⇡(⇢i, ⇢j) =\nPT t=1\nT tSt⇡(⇢i, ⇢j)PT t=1 T tAt⇡(⇢i, ⇢j) ,\nwhere T is the number of training epochs, At⇡ is the number of attempted transitions (⇢i, ⇢j) during epoch t, and St⇡ is the number of successful transitions. A decay rate of = 0.9 is used. More details of the model and training are provided in Appendix C.\nIn the switches environment, multi-step test tasks are generated by setting a random attribute as target, which can require up to 12 attribute transitions. In the crafting environment, test tasks are generated by randomly selecting a (crafted) item as a target. Since we do not care about other items in the inventory, the target state is underspecified.\nWe produce a curriculum baseline by gradually increase the upper bound on the difficulty of tasks during training. In the switches environment, the difficulty corresponds to the number of toggles necessary for solving the task. The craft environment has two levels of difficulty: tasks can be completed by a single grab or craft action, and tasks that require multiple such actions.\nTable 3 compares our Attribute Planner (AP) to a reinforcement learning baseline on the mazebase tasks. The AP planning outperforms purely reactive training regardless of whether one-step, multi-step, or a curriculum of training examples is provided."
+  }, {
+    "heading": "4.3. StarCraft",
+    "text": "Finally, we test our approach for planning a build order in StarCraft: Brood War (Synnaeve et al., 2016). We consider the space of tasks of building particular units in a fixed time of 500 steps, e.g. “build 1 barracks and 2 marines“.\nThis task is challenging for RL because the agent must complete a number of distinct steps, e.g. mine enough ore, then build a barracks, and finally train marines using the barracks, before receiving a reward. Each of these steps requires the agent have to control multiple units of different types using low-level actions similar to how a human plays the game. See Appendix D for more details.\nAs in (Sukhbaatar et al., 2017), we restrict the game to the Terran race and only allow construction of certain units. In the small version, the agent can mine ore and build SCVs, supply depots, barracks, and marines. In the large version, an engineering bay and missile turrets are included as well. The attributes are chosen to be the number of units and resources of each type, specifically\n{min(bNore/25c, 40), NSCV , Ndepot, Nbarracks, Nmarine}\nwhere Nx is the number of x present in the game, including units under construction. The large version also include {Neng.bay, Nturrets}.\nModels are trained for a total of 30 million steps. AP uses 16 million steps for exploration and 14 million steps for training ⇡. Table 4 shows the final performance of the AP model and reactive RL baselines on this task after 30 million steps of training.\nAP exploration finds 120,000 and 420,000 edges for the small and large versions, respectively. The size and scaling of this graph show the limitations of a fully explicit graph. In fact, we represent the ore attribute as bNore/25c because it decreases the size of the graph by a factor of 25: otherwise for each transition w.r.t. the other attributes, the graph would have a separate edge for each valid value of total ore.\nCount-based exploration over attributes is vital during the Explore phase in StarCraft. If a random policy is used in the small version, only 2047 edges are discovered as opposed to 120,000 using count-based exploration, and the final performance is reduced from 31.7% to 6.4%."
+  }, {
+    "heading": "5. Discussion",
+    "text": "Our results show that structuring the space of tasks with high level attributes allows an agent to compose policies for simple tasks into solutions of more complex tasks. The agent plans a path to the final goal at the level of the attributes, and executes the steps in this path with a reactive policy. Thus, supervision of an agent by labeling attributes can lead to generalization from simple tasks at train time to more complex tasks at test time. There are several fronts for further work:\nSample complexity of the planning module: In Table 2 we can see both the benefits and the liabilities of the explicit non-parametric form for c⇡ . By 10K samples, the parametric lower level policy is already able to have a reasonable success rate. However, because in this environment, there are over 200K edges in the graph, most of the edges have not been seen, and without any weight-sharing, our model cannot estimate these transition probabilities. On the other hand, by 100K samples the model has seen enough of the graph to make nontrivial plans; and the non-parametric form of the graph makes planning straightforward.\nIn future work, we hope to combine parametric models for c⇡ with search to increase the sample efficiency of the planning module. Alternatively, we might hope to make progress on dynamic abstraction (projecting out some of the attributes) depending on the current state and goal, which would make the effective number of edges of the graph smaller.\nExploration We have shown that the attributes ⇢ and counts c⇡, in addition to their usefulness for planning, provide a framework for incentivizing exploration. In this work we considered a simple count-based exploration strategy, which achieved better exploration in attribute space than random exploration. However, this setting of pure exploration where there are no empirical rewards is different from the classic problem of exploration in an MDP, and warrants further exploration (see Appendix A).\nLearning the attributes: Discovering the attributes automatically would remove much of the need for human supervision. Recent work, such as (Thomas et al., 2017), demonstrates how this could be done. Another avenue for discovering attributes is to use a few “seed” attributes, which is necessary for task specification anyway, and use aliasing as a signal that some attributes need to be refined."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Goal-based action priors",
+    "authors": ["David Abel", "D. Ellis Hershkowitz", "Gabriel Barth-Maron", "Stephen Brawner", "Kevin O’Farrell", "James MacGlashan", "Stefanie Tellex"],
+    "venue": "In ICAPS,",
+    "year": 2015
+  }, {
+    "title": "Modular multitask reinforcement learning with policy sketches",
+    "authors": ["Jacob Andreas", "Dan Klein", "Sergey Levine"],
+    "venue": "In ICML,",
+    "year": 2017
+  }, {
+    "title": "Model-free episodic control",
+    "authors": ["Charles Blundell", "Benigno Uria", "Alexander Pritzel", "Yazhe Li", "Avraham Ruderman", "Joel Z. Leibo", "Jack Rae", "Daan Wierstra", "Demis Hassabis"],
+    "year": 2016
+  }, {
+    "title": "Stochastic dynamic programming with factored representations",
+    "authors": ["Craig Boutilier", "Richard Dearden", "Moisés Goldszmidt"],
+    "venue": "Artif. Intell.,",
+    "year": 2000
+  }, {
+    "title": "Feudal reinforcement learning",
+    "authors": ["Peter Dayan", "Geoffrey E. Hinton"],
+    "venue": "In Proceedings of the 5th International Conference on Neural Information Processing Systems,",
+    "year": 1992
+  }, {
+    "title": "Hierarchical reinforcement learning with the maxq value function decomposition",
+    "authors": ["Thomas G. Dietterich"],
+    "venue": "J. Artif. Int. Res.,",
+    "year": 2000
+  }, {
+    "title": "An object-oriented representation for efficient reinforcement learning",
+    "authors": ["Carlos Diuk", "Andre Cohen", "Michael L. Littman"],
+    "venue": "In ICML, volume 307 of ACM International Conference Proceeding Series,",
+    "year": 2008
+  }, {
+    "title": "Learning to act by predicting the future",
+    "authors": ["Alexey Dosovitskiy", "Vladlen Koltun"],
+    "venue": "CoRR, abs/1611.01779,",
+    "year": 2016
+  }, {
+    "title": "Strips: A new approach to the application of theorem proving to problem solving",
+    "authors": ["Richard E. Fikes", "Nils J. Nilsson"],
+    "venue": "In Proceedings of the 2Nd International Joint Conference on Artificial Intelligence,",
+    "year": 1971
+  }, {
+    "title": "Generalizing plans to new environments in relational mdps",
+    "authors": ["Carlos Guestrin", "Daphne Koller", "Chris Gearhart", "Neal Kanodia"],
+    "venue": "In Proceedings of the 18th International Joint Conference on Artificial Intelligence,",
+    "year": 2003
+  }, {
+    "title": "Efficient solution algorithms for factored mdps",
+    "authors": ["Carlos Guestrin", "Daphne Koller", "Ronald Parr", "Shobha Venkataraman"],
+    "venue": "J. Artif. Intell. Res.,",
+    "year": 2003
+  }, {
+    "title": "When Waiting is not an Option : Learning Options with a Deliberation Cost",
+    "authors": ["J. Harb", "P.-L. Bacon", "M. Klissarov", "D. Precup"],
+    "year": 2017
+  }, {
+    "title": "Envelope-based planning in relational mdps",
+    "authors": ["Natalia Hernandez-Gardiol", "Leslie Pack Kaelbling"],
+    "venue": "In NIPS,",
+    "year": 2003
+  }, {
+    "title": "Using task features for zero-shot knowledge transfer in lifelong learning",
+    "authors": ["David Isele", "Mohammad Rostami", "Eric Eaton"],
+    "venue": "In IJCAI,",
+    "year": 2016
+  }, {
+    "title": "From skills to symbols: Learning symbolic representations for abstract high-level planning",
+    "authors": ["George Konidaris", "Leslie Pack Kaelbling", "Tomás Lozano-Pérez"],
+    "venue": "J. Artif. Intell. Res.,",
+    "year": 2018
+  }, {
+    "title": "Hierarchical deep reinforcement learning: Integrating temporal abstraction and intrinsic motivation",
+    "authors": ["Tejas D. Kulkarni", "Karthik Narasimhan", "Ardavan Saeedi", "Josh Tenenbaum"],
+    "venue": "In NIPS,",
+    "year": 2016
+  }, {
+    "title": "Gradient episodic memory for continuum learning",
+    "authors": ["David Lopez-Paz", "Marc’Aurelio Ranzato"],
+    "year": 2017
+  }, {
+    "title": "A laplacian framework for option discovery in reinforcement learning",
+    "authors": ["Marlos C. Machado", "Marc G. Bellemare", "Michael H. Bowling"],
+    "venue": "In ICML,",
+    "year": 2017
+  }, {
+    "title": "Humanlevel control through deep reinforcement learning",
+    "authors": ["Daan Wierstra", "Shane Legg", "Demis Hassabis"],
+    "venue": "Nature,",
+    "year": 2015
+  }, {
+    "title": "Zero-shot task generalization with multi-task deep reinforcement learning",
+    "authors": ["Junhyuk Oh", "Satinder P. Singh", "Honglak Lee", "Pushmeet Kohli"],
+    "venue": "In ICML,",
+    "year": 2017
+  }, {
+    "title": "Reinforcement learning with hierarchies of machines",
+    "authors": ["Ronald Parr", "Stuart Russell"],
+    "venue": "In Proceedings of the 1997 Conference on Advances in Neural Information Processing Systems 10,",
+    "year": 1998
+  }, {
+    "title": "Neural episodic control",
+    "authors": ["Alexander Pritzel", "Benigno Uria", "Sriram Srinivasan", "Adrià Puigdomènech Badia", "Oriol Vinyals", "Demis Hassabis", "Daan Wierstra", "Charles Blundell"],
+    "venue": "In Proceedings of the 34th International Conference on Machine Learning,",
+    "year": 2017
+  }, {
+    "title": "Universal Value Function Approximators",
+    "authors": ["Tom Schaul", "Daniel Horgan", "Karol Gregor", "David Silver"],
+    "venue": "In International Conference on Machine Learning (ICML),",
+    "year": 2015
+  }, {
+    "title": "Mastering the game of Go with deep neural networks and tree",
+    "authors": ["Lillicrap", "Madeleine Leach", "Koray Kavukcuoglu", "Thore Graepel", "Demis Hassabis"],
+    "venue": "search. Nature,",
+    "year": 2016
+  }, {
+    "title": "An analysis of model-based interval estimation for markov decision processes",
+    "authors": ["Alexander L Strehl", "Michael L Littman"],
+    "venue": "Journal of Computer and System Sciences,",
+    "year": 2008
+  }, {
+    "title": "Mazebase: A sandbox for learning from games",
+    "authors": ["Sainbayar Sukhbaatar", "Arthur Szlam", "Gabriel Synnaeve", "Soumith Chintala", "Rob Fergus"],
+    "venue": "arXiv preprint arXiv:1511.07401,",
+    "year": 2015
+  }, {
+    "title": "Intrinsic motivation and automatic curricula via asymmetric self-play",
+    "authors": ["Sainbayar Sukhbaatar", "Ilya Kostrikov", "Arthur Szlam", "Rob Fergus"],
+    "venue": "CoRR, abs/1703.05407,",
+    "year": 2017
+  }, {
+    "title": "Between mdps and semi-mdps: A framework for temporal abstraction in reinforcement learning",
+    "authors": ["Richard Sutton", "Doina Precup", "Satinder Singh"],
+    "venue": "Artificial Intelligence,",
+    "year": 1999
+  }, {
+    "title": "Horde: a scalable real-time architecture for learning knowledge from unsupervised sensorimotor interaction",
+    "authors": ["Richard S. Sutton", "Joseph Modayil", "Michael Delp", "Thomas Degris", "Patrick M. Pilarski", "Adam White", "Doina Precup"],
+    "venue": "In AAMAS,",
+    "year": 2011
+  }, {
+    "title": "Torchcraft: a library for machine learning research on real-time strategy games",
+    "authors": ["Gabriel Synnaeve", "Nantas Nardelli", "Alex Auvolat", "Soumith Chintala", "Timothée Lacroix", "Zeming Lin", "Florian Richoux", "Nicolas Usunier"],
+    "venue": "arXiv preprint arXiv:1611.00625,",
+    "year": 2016
+  }, {
+    "title": "A deep hierarchical approach to lifelong learning in minecraft",
+    "authors": ["Chen Tessler", "Shahar Givony", "Tom Zahavy", "Daniel J. Mankowitz", "Shie Mannor"],
+    "venue": "In AAAI,",
+    "year": 2017
+  }, {
+    "title": "Independently controllable factors",
+    "authors": ["Valentin Thomas", "Jules Pondard", "Emmanuel Bengio", "Marc Sarfati", "Philippe Beaudoin", "Marie-Jean Meurs", "Joelle Pineau", "Doina Precup", "Yoshua Bengio"],
+    "venue": "CoRR, abs/1708.01289,",
+    "year": 2017
+  }, {
+    "title": "Finding structure in reinforcement learning",
+    "authors": ["Sebastian Thrun", "Anton Schwartz"],
+    "venue": "In NIPS,",
+    "year": 1994
+  }, {
+    "title": "Mujoco: A physics engine for model-based control",
+    "authors": ["Emanuel Todorov", "Tom Erez", "Yuval Tassa"],
+    "venue": "In IROS,",
+    "year": 2012
+  }, {
+    "title": "A Survey of Reinforcement Learning in Relational Domains. Number 31 in TR-CTIT-05, ISSN 1381-3625",
+    "authors": ["M. van Otterlo"],
+    "venue": "Centre for Telematics and Information Technology University of Twente,",
+    "year": 2005
+  }, {
+    "title": "Hybrid reward architecture for reinforcement learning",
+    "authors": ["Harm van Seijen", "Mehdi Fatemi", "Joshua Romoff", "Romain Laroche", "Tavian Barnes", "Jeffrey Tsang"],
+    "year": 2017
+  }, {
+    "title": "Simple statistical gradient-following algorithms for connectionist reinforcement learning",
+    "authors": ["Ronald J. Williams"],
+    "venue": "In Machine Learning,",
+    "year": 1992
+  }],
+  "id": "SP:2990e31c08939d59c67564628aaad6a63f41f84e",
+  "authors": [{
+    "name": "Amy Zhang",
+    "affiliations": []
+  }, {
+    "name": "Adam Lerer",
+    "affiliations": []
+  }, {
+    "name": "Sainbayar Sukhbaatar",
+    "affiliations": []
+  }, {
+    "name": "Rob Fergus",
+    "affiliations": []
+  }, {
+    "name": "Arthur Szlam",
+    "affiliations": []
+  }],
+  "abstractText": "The tasks that an agent will need to solve often are not known during training. However, if the agent knows which properties of the environment are important then, after learning how its actions affect those properties, it may be able to use this knowledge to solve complex tasks without training specifically for them. Towards this end, we consider a setup in which an environment is augmented with a set of user defined attributes that parameterize the features of interest. We propose a method that learns a policy for transitioning between “nearby” sets of attributes, and maintains a graph of possible transitions. Given a task at test time that can be expressed in terms of a target set of attributes, and a current state, our model infers the attributes of the current state and searches over paths through attribute space to get a high level plan, and then uses its low level policy to execute the plan. We show in 3D block stacking, gridworld games, and StarCraft that our model is able to generalize to longer, more complex tasks at test time by composing simpler learned policies.",
+  "title": "Composable Planning with Attributes"
+}

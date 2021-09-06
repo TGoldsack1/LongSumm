@@ -1,0 +1,270 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Combining deep learning with Bayesian uncertainty estimation has the potential to fit flexible and scalable models that are resistant to overfitting (MacKay, 1992b; Neal, 1995; Hinton & Van Camp, 1993). Stochastic variational inference is especially appealing because it closely resembles ordinary backprop (Graves, 2011; Blundell et al., 2015), but such methods typically impose restrictive factorization assumptions on the approximate posterior, such as fully independent weights. There have been attempts to fit more expressive approximating distributions which capture correlations such as matrix-variate Gaussians (Louizos & Welling, 2016; Sun et al., 2017) or multiplicative normalizing flows (Louizos\n*Equal contribution 1Department of Computer Science, University of Toronto, Canada 2Vector Institute, Toronto, Canada. Correspondence to: Guodong Zhang <gdzhang@cs.toronto.edu>, Shengyang Sun <ssy@cs.toronto.edu>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\n& Welling, 2017), but fitting such models can be expensive without further approximations.\nIn this work, we introduce and exploit a surprising connection between natural gradient descent (Amari, 1998) and variational inference. In particular, several approximate natural gradient optimizers have been proposed which fit tractable approximations to the Fisher matrix to gradients sampled during training (Kingma & Ba, 2014; Martens & Grosse, 2015). While these procedures were described as natural gradient descent on the weights using an approximate Fisher matrix, we reinterpret these algorithms as natural gradient on a variational posterior using the exact Fisher matrix. Both the weight updates and the Fisher matrix estimation can be seen as natural gradient ascent on a unified evidence lower bound (ELBO), analogously to how Neal and Hinton (Neal & Hinton, 1998) interpreted the E and M steps of Expectation-Maximization (E-M) as coordinate ascent on a single objective.\nUsing this insight, we give an alternative training method for variational Bayesian neural networks. For a factorial Gaussian posterior, it corresponds to a diagonal natural gradient method with weight noise, and matches the performance of Bayes By Backprop (Blundell et al., 2015), but converges faster. We also present noisy K-FAC, an efficient and GPUfriendly method for fitting a full matrix-variate Gaussian posterior, using a variant of Kronecker-Factored Approximate Curvature (K-FAC) (Martens & Grosse, 2015) with correlated weight noise."
+  }, {
+    "heading": "2. Background",
+    "text": ""
+  }, {
+    "heading": "2.1. Variational Inference for Bayesian Neural Nets",
+    "text": "Given a dataset D = {(xi, yi)ni=1}, a Bayesian neural net (BNN) is defined in terms of a prior p(w) on the weights, as well as the likelihood p(D |w). Variational Bayesian methods (Hinton & Van Camp, 1993; Graves, 2011; Blundell et al., 2015) attempt to fit an approximate posterior q(w) to maximize the evidence lower bound (ELBO):\nL[q] = Eq[log p(D |w)]− λDKL(q(w) ‖ p(w)) (1)\nwhere λ is a regularization parameter. Proper Bayesian inference corresponds to λ = 1, but other values may work better in practice on some problems."
+  }, {
+    "heading": "2.2. Gradient Estimators for Gaussian Distribution",
+    "text": "To optimize the ELBO, we must estimate the derivative of eq. (1) w.r.t. variational parameters φ. The standard approach uses the pathwise derivative estimator, also known as the reparameterization trick (Williams, 1992; Blundell et al., 2015; Kingma & Welling, 2013; Rezende et al., 2014). However, in the case of Gaussian distribution with parameters φ = {µ,Σ}, there is another estimator given by Opper & Archambeau (2009):\n∇µEN (µ,Σ)[f(w)] = EN (µ,Σ) [∇wf(w)]\n∇ΣEN (µ,Σ)[f(w)] = 1\n2 EN (µ,Σ)\n[ ∇2wf(w) ] (2) which are due to Bonnet (1964) and Price (1958), respectively. Both equations can be proved through integration by parts. In the case of Gaussian distribution, eq. (2) is equivalent to the pathwise derivative estimator for µ."
+  }, {
+    "heading": "2.3. Natural Gradient",
+    "text": "Natural gradient descent is a second-order optimization method originally proposed by Amari (1997). There are two variants of natural gradient commonly used in machine learning, which do not have standard names, but which we refer to as natural gradient for point estimation (NGPE) and natural gradient for variational inference (NGVI).\nIn natural gradient for point estimation (NGPE), we assume the neural network computes a predictive distribution p(y|x; w) and we wish to maximize a cost function h(w), which may be the data log-likelihood. The natural gradient is the direction of steepest ascent in the Fisher information norm, and is given by ∇̃wh = F−1∇wh, where F = Covx∼pD,y∼p(y|x,w) [∇w log p(y|x,w)], and the covariance is with respect to x sampled from the data distribution and y sampled from the model’s predictions. NGPE is typically justified as a way to speed up optimization; see Martens (2014) for a comprehensive overview.\nWe now describe natural gradient for variational inference (NGVI) in the context of BNNs. We wish to fit the parameters of a variational posterior q(w) to maximize the\nELBO (eq. (1)). Analogously to the point estimation setting, the natural gradient is defined as ∇̃φL = F−1∇φL; but in this case, F is the Fisher matrix of q, i.e. F = Covw∼q [∇φ log q(w;φ)]. Note that in contrast with point estimation, F is a metric on φ, rather than w, and its definition doesn’t directly involve the data. Interestingly, because q is chosen to be tractable, the natural gradient can be computed exactly, and in many cases is even simpler than the ordinary gradient.\nIn general, NGPE and NGVI need not behave similarly; however, in Section 3, we show that in the case of Gaussian variational posteriors, the two are closely related."
+  }, {
+    "heading": "2.4. Kronecker-Factored Approximate Curvature",
+    "text": "As modern neural networks may contain millions of parameters, computing and storing the exact Fisher matrix and its inverse is impractical. Kronecker-factored approximate curvature (K-FAC) (Martens & Grosse, 2015) uses a Kronecker-factored approximation to the Fisher matrix to perform efficient approximate natural gradient updates. Considering the lth layer in the neural network whose input activations are al ∈ Rn1 , weights Wl ∈ Rn1×n2 , and outputs sl ∈ Rn2 , we have sl = WTl al. For simplicity, we define the following additional notation:\nDv = ∇v log p(y|x,w) and gl = Dsl Therefore, the weight gradient is DWl = algTl . With this gradient formula, K-FAC decouples this layer’s Fisher matrix Fl by approximating al and gl as independent:\nFl = E[vec{DWl}vec{DWl}>] = E[glg>l ⊗ ala>l ]\n≈ E[glg>l ]⊗ E[ala>l ] = Sl ⊗Al = F̃l (3)\nFurthermore, assuming between-layer independence, the whole Fisher matrix can be approximated as block diagonal consisting of layerwise Fisher matrices F̃l. Decoupling F̃l into Al and Sl not only avoids the quadratic storage cost of the exact Fisher, but also enables tractable computation of the approximate natural gradient:\nF̃−1l vec{∇Wlh} = (S −1 l ⊗A −1 l ) vec{∇Wlh}\n= vec[A−1l ∇WlhS −1 l ]\n(4)\nAs shown by eq. (4), computing natural gradient using KFAC only consists of matrix transformations comparable to size of Wl, making it very efficient."
+  }, {
+    "heading": "3. Variational Inference using Noisy Natural Gradient",
+    "text": "In this section, we draw a surprising relationship between natural gradient for point estimation (NGPE) of the weights of a neural net, and natural gradient for variational inference (NGVI) of a Gaussian posterior. (These terms are explained in Section 2.3.) In particular, we show that the NGVI updates can be approximated with a variant of NGPE with adaptive weight noise which we term Noisy Natural Gradient (NNG). This insight allows us to train variational posteriors with a variety of structures using noisy versions of existing optimization algorithms (see Figure 1).\nIn NGVI, our goal is to maximize the ELBO L (eq. (1)) with respect to the parameters φ of a variational posterior distribution q(w). We assume q is a multivariate Gaussian parameterized by φ = (µ,Σ). Building on eq. (2), we determine the natural gradient of the ELBO with respect to µ and the precision matrix Λ = Σ−1 (see supplement for details):\n∇̃µL = Λ−1Eq [∇w log p(D |w) + λ∇w log p(w)] (5) ∇̃ΛL = −Eq [ ∇2w log p(D |w) + λ∇2w log p(w) ] − λΛ\nWe make several observations. First, the term inside the expectation in eq. (5) is the gradient for MAP estimation of w. Second, the update for µ is preconditioned by Λ−1, which encourages faster movement in directions of higher posterior uncertainty. Finally, the fixed point equation for Λ is given by\nΛ = −Eq [ 1\nλ ∇2w log p(D |w) +∇2w log p(w)\n] (6)\nHence, if λ = 1, Λ will tend towards the expected Hessian of − log p(w,D), so the update rule for µ will somewhat resemble a Newton-Raphson update. For simplicity, we further assume a spherical Gaussian prior w ∼ N (0, ηI), so that ∇2w log p(w) = −η−1I. In each iteration, we sample (x, y) ∼ pD and w ∼ q and apply a stochastic natural gradient update based on eq. (5):\nµ← µ + αΛ−1 [ Dw − λ\nNη w\n] (7)\nΛ← (\n1− λβ N\n) Λ− β [ ∇2w log p(y|x,w)− λ\nNη I ] where α and β are separate learning rates for µ and Λ, and N is the number of training examples. Roughly speaking, the update rule for Λ corresponds to an exponential moving average of the Hessian, and the update rule for µ is a stochastic Newton step using Λ.\nThis update rule has two problems. First, the log-likelihood Hessian may be hard to compute, and is undefined at some points for neural nets which use not-everywheredifferentiable activation functions such as ReLU. Second, if the negative log-likelihood is non-convex (as is the case for neural networks), the Hessian could have negative eigenvalues, so the update may result in Λ which is not positive semidefinite. We circumvent both of these problems by approximating the negative log-likelihood Hessian with the NGPE Fisher matrix F = Covx∼pD,y∼p(y|x,w)(Dw):\nΛ← (\n1− λβ N\n) Λ + β [ DwDw> + λ\nNη I\n] (8)\nThis approximation guarantees that Λ is positive semidefinite, and it allows for tractable approximations such as K-FAC (see below). In the context of BNNs, approximating the log-likelihood Hessian with the Fisher was first proposed by Graves (2011), so we refer to it as the Graves approximation. In the case where the output layer of the network represents the natural parameters of an exponential family distribution (as is typical in regression or classification), the Graves approximation can be justified in terms of the generalized Gauss-Newton approximation to the Hessian; see Martens (2014) for details.1"
+  }, {
+    "heading": "3.1. Simplifying the Update Rules",
+    "text": "We have now derived a stochastic natural gradient update rule for Gaussian variational posteriors. In this section, we rewrite the update rules in order to disentangle hyperparameters and highlight relationships with NGPE. First, if the prior variance η is fixed2, then Λ is a damped version of the moving average of the Fisher matrix and we can rewrite the update eq. (8):\nΛ = N\nλ F̄ + η−1I\nF̄← (1− β̃)F̄ + β̃DwDw> (9)\nIn eq. (9), we avoid an awkward interaction between the KL weight λ and the learning rates α, β by writing the update rules in terms of alternative learning rates α̃ = αλ/N and β̃ = βλ/N . We also rewrite the update rule for µ:\nµ← µ + α̃ ( F̄ + λ\nNη I\n)−1 [ Dw − λ\nNη w\n] (10)\n1eq. (8) leaves ambiguous what distribution the gradients are sampled from. Throughout our experiments, we sample the targets from the model’s predictions, as done in K-FAC (Martens & Grosse, 2015). The resulting F is known as the true Fisher. The alternative is to use the SGD gradients, giving the empirical Fisher. The true Fisher is a better approximation to the Hessian (Martens, 2014).\n2For simplicity, we assume the prior is a spherical Gaussian and its variance η is fixed. Otherwise, we can keep an exponential moving average of the prior Hessian.\nObserve that if µ is viewed as a point estimate of the weights, this update rule resembles NGPE with an exponential moving average of the Fisher matrix. The differences are that the Fisher matrix F is damped by adding λNη I, and that the weights are sampled from q, which is a Gaussian with covariance Σ = (Nλ F̄ + η\n−1I)−1. Because our update rule so closely resembles NGPE with correlated weight noise, we refer to this method as Noisy Natural Gradient (NNG)."
+  }, {
+    "heading": "3.2. Damping",
+    "text": "Interestingly, in second-order optimization, it is very common to dampen the updates by adding a multiple of the identity matrix to the curvature before inversion in order to compensate for error in the quadratic approximation to the cost. NNG automatically achieves this effect, with the strength of the damping being λ/Nη; we refer to this as intrinsic damping. In practice, it may be advantageous to add additional extrinsic damping for purposes of stability."
+  }, {
+    "heading": "3.3. Fitting Fully Factorized Gaussian Posteriors with Noisy Adam",
+    "text": "The discussion so far has concerned NGVI updates for a full covariance Gaussian posterior. Unfortunately, the number of parameters needed to represent a full covariance Gaussian is of order (dim w)2. Since dim w can be in the millions even for a relatively small network, representing a full covariance Gaussian is impractical. There has been much work on tractable approximations to second-order optimization. In the context of NNG, imposing structure on F also imposes structure on the form of the variational posterior. We now discuss two kinds of structure one can impose.\nPerhaps the simplest approach is to approximate F with a diagonal matrix diag(f), as done by Adagrad (Duchi et al., 2011) and Adam (Kingma & Ba, 2014). For our NNG approach, this yields the following updates:\nµ← µ + α̃ [ Dw − λ\nNη w\n] / ( f̄ + λ\nNη ) f̄ ← (1− β̃)f̄ + β̃Dw2\n(11)\nThese update rules are similar in spirit to methods such as Adam, but with the addition of adaptive weight noise. We note that these update rules also differ from Adam in some details: (1) Adam keeps exponential moving averages of the gradients, which is equivalent to momentum, and (2) Adam applies the square root to the entries of f in the denominator. We define noisy Adam by adding momentum for consistency with Adam. We regard difference (2) as inessential because the preconditioner may affect optimization performance, but doesn’t change the fixed points. I.e., with or without the square root, the algorithm is fitting the same functional form of the variational posterior using the same variational objective. The full procedure is given in Alg. 1."
+  }, {
+    "heading": "3.4. Fitting Matrix Variate Gaussian Posteriors with Noisy K-FAC",
+    "text": "There has been much interest in fitting BNNs with matrixvariate Gaussian (MVG) posteriors3 in order to compactly capture posterior correlations between different weights (Louizos & Welling, 2016; Sun et al., 2017). Let Wl denote the weights for one layer of a fully connected network. An MVG distribution is a Gaussian distribution whose covariance is a Kronecker product, i.e. MN (W; M,Σ1,Σ2) = N (vec(W); vec(M),Σ2 ⊗ Σ1). MVGs are potentially powerful due to their compact representation4 of posterior covariances between weights. However, fitting MVG posteriors is difficult, since computing the gradients and enforcing the positive semidefinite constraint for Σ1 and Σ2 typically requires expensive matrix operations such as inversion. Therefore, existing methods for fitting MVG posteriors typically impose additional structure such as diagonal covariance (Louizos & Welling, 2016) or products of Householder transformations (Sun et al., 2017) to ensure efficient updates.\nWe observe that K-FAC (Martens & Grosse, 2015) uses a Kronecker-factored approximation to the Fisher matrix for each layer’s weights, as in eq. (3). By plugging this approximation in to eq. (9), we obtain an MVG posterior. In more detail, each block obeys the Kronecker factorization Sl ⊗Al, where Al and Sl are the covariance matrices of the activations and pre-activation gradients, respectively. KFAC estimates Al and Sl online using exponential moving averages which, conveniently for our purposes, are closely analogous to the exponential moving averages defining F̄ in eq. (9):\nĀl ← (1− β̃)Āl + β̃ala>l S̄l ← (1− β̃)S̄l + β̃DslDsl>\n(12)\nConveniently, because these factors are estimated from the empirical covariances, they (and hence also Λ) are automatically positive semidefinite.\nPlugging the above formulas into eq. (9) does not quite yield an MVG posterior due to the addition of the prior Hessian. In general, there may be no compact representation of Λ. However, for spherical Gaussian priors5, we can approximate Σ using a trick proposed by Martens & Grosse (2015) in the context of damping. In this way, the covariance\n3When we refer to a BNN with an “MVG posterior”, we mean that the weights in different layers are independent, and the weights for each layer follow an MVG distribution.\n4If W is of size m× n, then the MVG covariance requires approximatelym2/2+n2/2 parameters to represent, in contrast with a full covariance matrix over w, which would require m2n2/2.\n5We consider spherical Gaussian priors for simplicity, but this trick can be extended to any prior whose Hessian is Kroneckerfactored, such as group sparsity.\nAlgorithm 1 Noisy Adam. Differences from standard Adam are shown in blue. Require: α: Stepsize Require: β1, β2: Exponential decay rates for updating µ\nand the Fisher F Require: λ, η, γex : KL weighting, prior variance, extrinsic\ndamping term m← 0 Calculate the intrinsic damping term γin = λNη , total damping term γ = γin + γex while stopping criterion not met do\nw ∼ N (µ, λN diag(f + γin) −1) v← ∇w log p(y|x,w)− γin ·w m← β1 ·m + (1− β1) · v (Update momentum) f ← β2 · f + (1− β2) · (∇w log p(y|x,w)2 m̃←m/(1− βk1 ) m̂← m̃/(f + γ) µ← µ + α · m̂ (Update parameters)\nend while\nΣl decomposes as the Kronecker product of two terms:\nΣl = λ\nN [Sγl ] −1 ⊗ [Aγl ] −1 (13)\n, λ\nN\n( S̄l + 1\nπl\n√ λ\nNη I\n)−1 ⊗ ( Āl + πl √ λ\nNη I )−1 This factorization corresponds to a matrix-variate Gaussian posterior MN (Wl; Ml, λN [A γ l ] −1, [Sγl ]\n−1), where the λ/N factor is arbitrarily assigned to the first factor. We refer to this BNN training method as noisy K-FAC. The full algorithm is given as Alg. 2."
+  }, {
+    "heading": "3.5. Block Tridiagonal Covariance",
+    "text": "Both the fully factorized and MVG posteriors assumed independence between layers. However, in practice the weights in different layers can be tightly coupled. To better capture these dependencies, we propose to approximate F using the block tridiagonal approximation from Martens & Grosse (2015). The resulting posterior covariance is block tridiagonal, so it accounts for dependencies between adjacent layers. The noisy version of block tridiagonal K-FAC is completely analogous to the block diagonal version, but since the approximation is rather complicated, we refer the reader to Martens & Grosse (2015) for details."
+  }, {
+    "heading": "4. Related Work",
+    "text": "Variational inference was first applied to neural networks by Peterson (1987) and Hinton & Van Camp (1993). More recently, Graves (2011) proposed a practical method for variational inference with fully factorized Gaussian posteriors which used a simple (but biased) gradient estimator.\nAlgorithm 2 Noisy K-FAC. Subscript l denotes layers, wl = vec(Wl), and µl = vec(Ml). We assume zero momentum for simplicity. Differences from standard K-FAC are shown in blue. Require: α: stepsize Require: β: exponential moving average parameter Require: λ, η, γex : KL weighting, prior variance, extrinsic\ndamping term Require: stats and inverse update intervals Tstats and Tinv k ← 0 and initialize {µl}Ll=1, {Sl}Ll=1, {Al}Ll=1 Calculate the intrinsic damping term γin = λNη , total damping term γ = γin + γex while stopping criterion not met do k ← k + 1 Wl ∼MN (Ml, λN [A γin l ] −1, [Sγinl ]\n−1) if k ≡ 0 (mod Tstats) then\nUpdate the factors {Sl}Ll=1, {Al} L−1 l=0 using eq. (12)\nend if if k ≡ 0 (mod Tinv) then\nCalculate the inverses {[Sγl ]−1}Ll=1, {[A γ l ] −1}L−1l=0\nusing eq. (13). end if Vl = ∇Wl log p(y|x,w)− γin ·Wl Ml ←Ml + α[Aγl ]−1Vl[S γ l ] −1\nend while\nImproving on that work, Blundell et al. (2015) proposed a unbiased gradient estimator using the reparameterization trick of Kingma & Welling (2013). Kingma et al. (2015) observed that variance of stochastic gradients can be significantly reduced by local reparameterization trick where global uncertainty in the weights is translated into local uncertainty in the activations.\nThere has also been much work on modeling the correlations between weights using more complex Gaussian variational posteriors. Louizos & Welling (2016) introduced the matrix variate Gaussian posterior as well as a Gaussian process approximation. Sun et al. (2017) decoupled the correlations of a matrix variate Gaussian posterior to unitary transformations and factorial Gaussian. Inspired by the idea of normalizing flows in latent variable models (Rezende & Mohamed, 2015), Louizos & Welling (2017) applied normalizing flows to auxiliary latent variables to produce more flexible approximate posteriors.\nSince natural gradient was proposed by Amari (1998), there has been much work on tractable approximations. Hoffman et al. (2013) observed that for exponential family posteriors, the exact natural gradient could be tractably computed using stochastic versions of variational Bayes E-M updates. Martens & Grosse (2015) proposed K-FAC for performing efficient natural gradient optimization in deep neural networks. Following on that work, K-FAC has been adopted\nin many tasks to gain optimization benefits, including convolutional networks (Grosse & Martens, 2016) and reinforcement learning (Wu et al., 2017), and was shown to be amenable to distributed computation (Ba et al., 2017).\nKhan et al. (2017) independently derived a stochastic Newton update similar to eq. (5). Their focus was on variational optimization (VO) (Staines & Barber, 2012) which one can relate to NNG by omitting the KL term, and they only derived the diagonal version (see Section 3.3). Assuming the variational distribution is Gaussian distribution, we can apply noisy Adam and noisy K-FAC to VO by setting KL weight λ as 0, and keeping a running sum of individual Fisher matrices, rather than an exponential moving average. It can be implemented in the same way as NNG by modifying the update rule of the Fisher matrix."
+  }, {
+    "heading": "5. Experiments",
+    "text": "In this section, we conducted a series of experiments to investigate the following questions: (1) How does noisy natural gradient (NNG) compare with existing methods in terms of prediction performance? (2) Is NNG able to scale to large datasets and modern-size convolutional neural networks? (3) Can NNG achieve better uncertainty estimates? (4) Does it enable more efficient exploration in active learning and reinforcement learning?\nOur method with a full-covariance multivariate Gaussian, a fully-factorized Gaussian, a matrix-variate Gaussian and block-tridiagonal posterior are denoted as NNG-full, NNGFFG (noise Adam), NNG-MVG (noisy K-FAC) and NNGBlkTri, respectively."
+  }, {
+    "heading": "5.1. Regression",
+    "text": "We first experimented with regression datasets from the UCI collection (Asuncion & Newman, 2007). All experiments used networks with one hidden layer unless stated otherwise. We compared our method with Bayes By Backprop (BBB) (Blundell et al., 2015) and probabilistic backpropagation (PBP) with a factorial gaussian posterior (Hernández-\nLobato & Adams, 2015). The results for PBP MV (Sun et al., 2017) and VMG (Louizos & Welling, 2016) can be found in supplement.\nFollowing previous work (Hernández-Lobato & Adams, 2015; Louizos & Welling, 2016), we report the standard metrics including root mean square error (RMSE) and test log-likelihood. The results are summarized in Table 1. As we can see from the results, NNG-FFG performed similarly to BBB (Blundell et al., 2015), indicating that the Graves approximation did not cause a performance hit. NNG-MVG achieved substantially better RMSE and log-likelihoods than BBB and PBP due to the more flexible posterior. Moreover, NNG-MVG outperformed PBP MV (Sun et al., 2017) on all datasets other than Yacht and Year, even though PBP MV also uses an MVG posterior."
+  }, {
+    "heading": "5.2. Classification",
+    "text": "To evaluate the scalability of our method to large networks, we applied noisy K-FAC to a modified version of the VGG166 network (Simonyan & Zisserman, 2014) and tested it on CIFAR10 benchmark (Krizhevsky, 2009). It is straight-\n6We reduced the number of filters in each conv layer by half. The detailed network architecture is 32-32-M-64-64-M-128-128128-M-256-256-256-M-256-256-256-M-FC10, where each number represents the number of filters in a convolutional layer, and M denotes max-pooling.\nforward to incorporate noisy K-FAC into convolutional layers using Kronecker Factors for Convolution (Grosse & Martens, 2016). We compared our method to SGD with momentum, K-FAC and BBB in terms of test accuracy. Results are shown in Table 2. Noisy K-FAC achieved the highest accuracy on all configurations except where both data augmentation and batch normalization (BN) (Ioffe & Szegedy, 2015) are used. When no extra regularization was used, noisy K-FAC showed a gain of 3% (85.52% versus 82.39%).\nWe observed that point estimates tend to make poorly calibrated predictions, as shown in Figure 2. By contrast, models trained with noisy K-FAC are well-calibrated (i.e. the bars align roughly along the diagonal), which benefits interpretability.\nWe note that noisy K-FAC imposes a weight decay term intrinsically. To check that this by itself doesn’t explain the performance gains, we modified K-FAC to use weight decay of the same magnitude. K-FAC with this weight decay setting achieved 83.51% accuracy (compared with 82.52% originally). However, as shown in Table 2, noisy K-FAC achieved 85.52%, demonstrating the importance of adaptive weight noise."
+  }, {
+    "heading": "5.3. Active Learning",
+    "text": "One particularly promising application of uncertainty estimation is to guiding an agent’s exploration towards part of a space which it’s most unfamiliar with. We have evaluated our BNN algorithms in two instances of this general approach: active learning, and intrinsic motivation for reinforcement learning. The next two sections present experiments in these two domains, respectively.\nIn the simplest active learning setting (Settles, 2010), an algorithm is given a set of unlabeled examples and, in each round, chooses one unlabeled example to have labeled. A classic Bayesian approach to active learning is the information gain criterion (MacKay, 1992a), which in each step attempts to achieve the maximum reduction in posterior entropy. Under the assumption of i.i.d. Gaussian noise, this is equivalent to choosing the unlabeled example with the largest predictive variance. We first investigated how ac-\ncurately each of the algorithms could estimate predictive variances. In each trial, we randomly selected 20 labeled training examples and 100 unlabeled examples; we then computed each algorithm’s posterior predictive variances for the unlabeled examples. 10 independent trials were run. As is common practice, we treated the predictive variance of HMC as the “ground truth” predictive variance. Table 4 reports the average and standard error of Pearson correlations between the predictive variances of each algorithm and those of HMC. In all of the datasets, our two methods NNG-MVG and NNG-BlkTri matched the HMC predictive variances significantly better than the other approaches, and NNG-BlkTri consistently matched them slightly better than NNG-MVG due to the more flexible variational posterior.\nNext, we evaluated the performance of all methods on active learning, following the protocol of Hernández-Lobato & Adams (2015). As a control, we evaluated each algorithm with labeled examples selected uniformly at random; this is denoted with the R suffix. Active learning results are denoted with the A suffix. The average test RMSE\nfor all methods is reported in Table 3. These results show that NNG-MVG A performed better than NNG-MVG R on most datasets and was closer to HMC A compared to PBP A and NNG-FFG A. However, we note that better predictive variance estimates do not reliably yield better active learning results, and in fact, active learning methods sometimes perform worse than random. Therefore, while information gain is a useful criterion for benchmarking purposes, it is important to explore other uncertainty-based active learning criteria."
+  }, {
+    "heading": "5.4. Reinforcement Learning",
+    "text": "We next experimented with using uncertainty to provide intrinsic motivation in reinforcement learning. Houthooft et al. (2016) proposed Variational Information Maximizing Exploration (VIME), which encourages the agent to seek novelty through an information gain criterion. VIME involves training a separate BNN to predict the dynamics, i.e. learn to model the distribution p(st+1|st, at; θ). With the idea that surprising states lead to larger updates to the dynamics network, the reward function was augmented with an “intrinsic term” corresponding to the information gain for the BNN. If the history of the agent up until time step t is denoted as ξ = {s1, a1, ..., st}, then the modified reward can be written in the following form:\nr∗(st, at, st+1) = r(st, at)\n+ ηDKL(p(θ|ξt, at, st+1) ‖ p(θ|ξt)) (14)\nIn the above formulation, the true posterior is generally intractable. Houthooft et al. (2016) approximated it using Bayes by Backprop (BBB) (Blundell et al., 2015). We experimented with replacing the fully factorized posterior with our NNG-MVG model.\nFollowing the experimental setup of Houthooft et al. (2016), we tested our method in three continuous control tasks with sparsified rewards (see supplement for details). We compared our NNG-MVG dynamics model with a Gaussian noise baseline, as well as the original VIME formulation using BBB. All experiments used TRPO to optimize the policy itself (Schulman et al., 2015).\nPerformance is measured by the average return (under the original MDP’s rewards, not including the intrinsic term) at each iteration. Figure 3 shows the performance results in three tasks. Consistently with Houthooft et al. (2016), we observed that the Gaussian noise baseline completely broke down and rarely achieved the goal, and VIME significantly improved the performance. However, replacing the dynamics network with NNG-MVG considerably improved the exploration efficiency on all three tasks. Since the policy search algorithm was shared between all three conditions, we attribute this improvement to the improved uncertainty modeling by the dynamics network."
+  }, {
+    "heading": "6. Conclusion",
+    "text": "We drew a surprising connection between natural gradient ascent for point estimation and for variational inference. We exploited this connection to derive surprisingly simple variational BNN training procedures which can be instantiated as noisy versions of widely used optimization algorithms for point estimation. This let us efficiently fit MVG variational posteriors, which capture correlations between different weights. Our variational BNNs with MVG posteriors matched the predictive variances of HMC much better than fully factorized posteriors, and led to more efficient exploration in the settings of active learning and reinforcement learning with intrinsic motivation."
+  }, {
+    "heading": "Acknowledgements",
+    "text": "GZ was supported by an NSERC Discovery Grant, and SS was supported by a Connaught New Researcher Award and a Connaught Fellowship. We thank Emtiyaz Khan and Mark van der Wilk for helpful discussions."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Neural learning in structured parameter spacesnatural riemannian gradient",
+    "authors": ["Amari", "S.-i"],
+    "venue": "In Advances in neural information processing systems,",
+    "year": 1997
+  }, {
+    "title": "Natural gradient works efficiently in learning",
+    "authors": ["Amari", "S.-I"],
+    "venue": "Neural computation,",
+    "year": 1998
+  }, {
+    "title": "Distributed second-order optimization using kronecker-factored approximations",
+    "authors": ["J. Ba", "J. Martens", "R. Grosse"],
+    "venue": "In International Conference on Learning Representations,",
+    "year": 2017
+  }, {
+    "title": "Transformations des signaux aléatoires a travers les systemes non linéaires sans mémoire",
+    "authors": ["G. Bonnet"],
+    "venue": "Annals of Telecommunications,",
+    "year": 1964
+  }, {
+    "title": "Adaptive subgradient methods for online learning and stochastic optimization",
+    "authors": ["J. Duchi", "E. Hazan", "Y. Singer"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2011
+  }, {
+    "title": "Practical variational inference for neural networks",
+    "authors": ["A. Graves"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2011
+  }, {
+    "title": "A kronecker-factored approximate fisher matrix for convolution layers",
+    "authors": ["R. Grosse", "J. Martens"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2016
+  }, {
+    "title": "On calibration of modern neural networks",
+    "authors": ["C. Guo", "G. Pleiss", "Y. Sun", "K.Q. Weinberger"],
+    "venue": "arXiv preprint arXiv:1706.04599,",
+    "year": 2017
+  }, {
+    "title": "Probabilistic backpropagation for scalable learning of bayesian neural networks",
+    "authors": ["J.M. Hernández-Lobato", "R. Adams"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2015
+  }, {
+    "title": "Keeping the neural networks simple by minimizing the description length of the weights",
+    "authors": ["G.E. Hinton", "D. Van Camp"],
+    "venue": "In Proceedings of the sixth annual conference on Computational learning theory,",
+    "year": 1993
+  }, {
+    "title": "Stochastic variational inference",
+    "authors": ["M.D. Hoffman", "D.M. Blei", "C. Wang", "J. Paisley"],
+    "venue": "The Journal of Machine Learning Research,",
+    "year": 2013
+  }, {
+    "title": "Vime: Variational information maximizing exploration",
+    "authors": ["R. Houthooft", "X. Chen", "Y. Duan", "J. Schulman", "F. De Turck", "P. Abbeel"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2016
+  }, {
+    "title": "Batch normalization: Accelerating deep network training by reducing internal covariate shift",
+    "authors": ["S. Ioffe", "C. Szegedy"],
+    "venue": "In International conference on machine learning,",
+    "year": 2015
+  }, {
+    "title": "Variational adaptive-Newton method for explorative learning",
+    "authors": ["M.E. Khan", "W. Lin", "V. Tangkaratt", "Z. Liu", "D. Nielsen"],
+    "venue": "arXiv preprint arXiv:1711.05560,",
+    "year": 2017
+  }, {
+    "title": "Adam: A method for stochastic optimization",
+    "authors": ["D. Kingma", "J. Ba"],
+    "venue": "arXiv preprint arXiv:1412.6980,",
+    "year": 2014
+  }, {
+    "title": "Auto-encoding variational bayes",
+    "authors": ["D.P. Kingma", "M. Welling"],
+    "venue": "arXiv preprint arXiv:1312.6114,",
+    "year": 2013
+  }, {
+    "title": "Variational dropout and the local reparameterization trick",
+    "authors": ["D.P. Kingma", "T. Salimans", "M. Welling"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2015
+  }, {
+    "title": "Learning multiple layers of features from tiny images",
+    "authors": ["A. Krizhevsky"],
+    "year": 2009
+  }, {
+    "title": "Structured and efficient variational deep learning with matrix gaussian posteriors",
+    "authors": ["C. Louizos", "M. Welling"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2016
+  }, {
+    "title": "Multiplicative normalizing flows for variational bayesian neural networks",
+    "authors": ["C. Louizos", "M. Welling"],
+    "venue": "arXiv preprint arXiv:1703.01961,",
+    "year": 2017
+  }, {
+    "title": "Information-based objective functions for active data selection",
+    "authors": ["D.J. MacKay"],
+    "venue": "Neural computation,",
+    "year": 1992
+  }, {
+    "title": "A practical Bayesian framework for backpropagation networks",
+    "authors": ["D.J. MacKay"],
+    "venue": "Neural Computation,",
+    "year": 1992
+  }, {
+    "title": "New insights and perspectives on the natural gradient method",
+    "authors": ["J. Martens"],
+    "venue": "arXiv preprint arXiv:1412.1193,",
+    "year": 2014
+  }, {
+    "title": "Optimizing neural networks with kronecker-factored approximate curvature",
+    "authors": ["J. Martens", "R. Grosse"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2015
+  }, {
+    "title": "BAYESIAN LEARNING FOR NEURAL NETWORKS",
+    "authors": ["R.M. Neal"],
+    "venue": "PhD thesis, University of Toronto,",
+    "year": 1995
+  }, {
+    "title": "A view of the em algorithm that justifies incremental, sparse, and other variants",
+    "authors": ["R.M. Neal", "G.E. Hinton"],
+    "venue": "In Learning in graphical models,",
+    "year": 1998
+  }, {
+    "title": "Predicting good probabilities with supervised learning",
+    "authors": ["A. Niculescu-Mizil", "R. Caruana"],
+    "venue": "In Proceedings of the 22nd international conference on Machine learning,",
+    "year": 2005
+  }, {
+    "title": "The variational gaussian approximation revisited",
+    "authors": ["M. Opper", "C. Archambeau"],
+    "venue": "Neural computation,",
+    "year": 2009
+  }, {
+    "title": "A mean field theory learning algorithm for neural networks",
+    "authors": ["C. Peterson"],
+    "venue": "Complex systems,",
+    "year": 1987
+  }, {
+    "title": "A useful theorem for nonlinear devices having gaussian inputs",
+    "authors": ["R. Price"],
+    "venue": "IRE Transactions on Information Theory,",
+    "year": 1958
+  }, {
+    "title": "Variational inference with normalizing flows",
+    "authors": ["D.J. Rezende", "S. Mohamed"],
+    "venue": "arXiv preprint arXiv:1505.05770,",
+    "year": 2015
+  }, {
+    "title": "Stochastic backpropagation and approximate inference in deep generative models",
+    "authors": ["D.J. Rezende", "S. Mohamed", "D. Wierstra"],
+    "venue": "arXiv preprint arXiv:1401.4082,",
+    "year": 2014
+  }, {
+    "title": "Trust region policy optimization",
+    "authors": ["J. Schulman", "S. Levine", "P. Abbeel", "M. Jordan", "P. Moritz"],
+    "venue": "In Proceedings of the 32nd International Conference on Machine Learning",
+    "year": 2015
+  }, {
+    "title": "Active learning literature survey",
+    "authors": ["B. Settles"],
+    "venue": "University of Wisconsin, Madison,",
+    "year": 2010
+  }, {
+    "title": "Very deep convolutional networks for large-scale image recognition",
+    "authors": ["K. Simonyan", "A. Zisserman"],
+    "venue": "arXiv preprint arXiv:1409.1556,",
+    "year": 2014
+  }, {
+    "title": "Learning structured weight uncertainty in bayesian neural networks",
+    "authors": ["S. Sun", "C. Chen", "L. Carin"],
+    "venue": "In Artificial Intelligence and Statistics,",
+    "year": 2017
+  }, {
+    "title": "Simple statistical gradient-following algorithms for connectionist reinforcement learning",
+    "authors": ["R.J. Williams"],
+    "venue": "Machine learning,",
+    "year": 1992
+  }, {
+    "title": "Scalable trust-region method for deep reinforcement learning using kronecker-factored approximation",
+    "authors": ["Y. Wu", "E. Mansimov", "S. Liao", "R. Grosse", "J. Ba"],
+    "venue": "arXiv preprint arXiv:1708.05144,",
+    "year": 2017
+  }],
+  "id": "SP:1cdbf8eb1c858825e8209d59a42485712af09452",
+  "authors": [{
+    "name": "Guodong Zhang",
+    "affiliations": []
+  }, {
+    "name": "Shengyang Sun",
+    "affiliations": []
+  }, {
+    "name": "David Duvenaud",
+    "affiliations": []
+  }, {
+    "name": "Roger Grosse",
+    "affiliations": []
+  }],
+  "abstractText": "Variational Bayesian neural nets combine the flexibility of deep learning with Bayesian uncertainty estimation. Unfortunately, there is a tradeoff between cheap but simple variational families (e.g. fully factorized) or expensive and complicated inference procedures. We show that natural gradient ascent with adaptive weight noise implicitly fits a variational posterior to maximize the evidence lower bound (ELBO). This insight allows us to train full-covariance, fully factorized, or matrix-variate Gaussian variational posteriors using noisy versions of natural gradient, Adam, and K-FAC, respectively, making it possible to scale up to modern-size conv nets. On standard regression benchmarks, our noisy K-FAC algorithm makes better predictions and matches Hamiltonian Monte Carlo’s predictive variances better than existing methods. Its improved uncertainty estimates lead to more efficient exploration in active learning, and intrinsic motivation for reinforcement learning.",
+  "title": "Noisy Natural Gradient as Variational Inference"
+}

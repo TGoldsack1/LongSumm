@@ -1,0 +1,269 @@
+{
+  "sections": [{
+    "text": "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 3612–3621 Brussels, Belgium, October 31 - November 4, 2018. c©2018 Association for Computational Linguistics\n3612"
+  }, {
+    "heading": "1 Introduction",
+    "text": "Recently, neural machine translation (NMT) (Bahdanau et al., 2015; Hassan et al., 2018; Wu et al., 2016; He et al., 2017; Xia et al., 2016, 2017; Wu et al., 2018b,a) has become more and more popular given its superior performance without the demand of heavily hand-crafted engineering efforts. It is usually trained to maximize the likelihood of each token in the target sentence, by taking the source sentence and the preceding (ground-truth) target tokens as inputs. Such training approach is referred as maximum likelihood estimation (MLE) (Scholz, 1985). Although easy to implement, the token-level\n∗This work was conducted at Microsoft Research Asia.\nobjective function during training is inconsistent with sequence-level evaluation metrics such as BLEU (Papineni et al., 2002).\nTo address the inconsistency issue, reinforcement learning (RL) methods have been adopted to optimize sequence-level objectives. For example, policy optimization methods such as REINFORCE (Ranzato et al., 2016; Wu et al., 2017b) and actorcritic (Bahdanau et al., 2017) are leveraged for sequence generation tasks including NMT. In machine translation community, a similar method is proposed with the name ‘minimum risk training’ (Shen et al., 2016). All these works demonstrate the effectiveness of RL techniques for NMT models (Wu et al., 2016).\nHowever, effectively applying RL to real-world NMT systems has not been fulfilled by previous works. First, most of, if not all, previous works verified their methods based on shallow recurrent neural network (RNN) models. However, to obtain state-of-the-art (SOTA) performance, it is essential to leverage recently derived deep models (Gehring et al., 2017; Vaswani et al., 2017), which are much more powerful.\nSecond, it is not easy to make RL practically effective given quite a few widely acknowledged limitations of RL method (Henderson et al., 2018) such as high variance of gradient estimation (Weaver and Tao, 2001), and objective instability (Mnih et al., 2013). Therefore, several tricks are proposed in previous works. However, it remains unclear, and no agreement is achieved on how to use these tricks in machine translation. For example, baseline reward method (Weaver and Tao, 2001) is suggested in (Ranzato et al., 2016; Nguyen et al., 2017; Wu et al., 2016) but not leveraged in (He and Deng, 2012; Shen et al., 2016).\nThird, large-scale datasets, especially monolingual datasets are shown to significantly improve translation quality (Sennrich et al., 2015a; Xia et al.,\n2016) with MLE training, while it remains nearly empty on how to combine RL with monolingual data in NMT.\nIn this paper, we try to fulfill these gaps and study how to practically apply RL to obtain strong NMT systems with quite competitive, even stateof-the-art performance. Several comprehensive studies are conducted on different aspects of RL training to figure out how to: 1) set efficient rewards; 2) combine MLE and RL objectives with different weights, which aims to stabilize the training procedure; 3) reduce the variance of gradient estimation.\nIn addition, given the effectiveness of leveraging monolingual data in improving translation quality, we further propose a new method to combine the strength of both RL training and source/target monolingual data. To the best of our knowledge, this is the first work that tries to explore the power of monolingual data when training NMT model with RL method.\nWe obtain some useful findings through the experiments on WMT17 Chinese-English (Zh-En), WMT17 English-Chinese (En-Zh) and WMT14 English-German (En-De) translation tasks. For instance, multinomial sampling is better than beam search in reward computation, and the combination of RL and monolingual data significantly enhances the NMT model performance. Our main contributions are summarized as follows.\n• We provide the first comprehensive study on different aspects of RL training, such as how to setup reward and baseline reward, on top of quite competitive NMT models.\n• We propose a new method that effectively leverages large-scale monolingual data, from both the source and target side, when training NMT models with RL.\n• Combined with several of our findings and method, we obtain the SOTA translation quality on WMT17 Zh-En translation task, surpassing strong baseline (Transformer big model + back translation) by nearly 1.5 BLEU points. Furthermore, on WMT14 En-De and WMT17 En-Zh translation tasks, we can also obtain strong competitive results.\nWe hope that our studies and findings will benefit the community to better understand and leverage reinforcement learning for developing strong\nNMT models, especially in real-world scenarios faced with deep models and large amount of training data (including both parallel and monolingual data). Towards this end, we open source all our codes/dataset at https://github.com/ apeterswu/RL4NMT to provide a clear recipe for performance reproduction."
+  }, {
+    "heading": "2 Background",
+    "text": "In this section, we first introduce the attentionbased sequence-to-sequence learning framework for neural machine translation (NMT), and then introduce the basis of applying reinforcement learning to training NMT models."
+  }, {
+    "heading": "2.1 Neural Machine Translation",
+    "text": "Typical NMT models are based on the encoderdecoder framework with attention mechanism. The encoder first maps a source sentence x = (x1, x2, ..., xn) to a set of continuous representations z = (z1, z2, ..., zn). Given z, the decoder then generates a target sentence y = (y1, y2, ..., ym) of word tokens one by one. At each decoding step t of model training, the probability of generating a token yt is maximized conditioned on x and y<t = (y1, ..., yt−1). Given N training sentence pairs {xi, yi}Ni=1, maximum likelihood estimation (MLE) is usually adopted to optimize the model, and the training objective is defined as:\nLmle = N∑ i=1 log p(yi|xi)\n= N∑ i=1 m∑ t=1 log p(yit|yi1, ..., yit−1, xi), (1)\nwhere m is the length of sentence yi. Among all the encoder-decoder models, the recently proposed Transformer (Vaswani et al., 2017) architecture achieves the best translation quality so far. The main difference between Transformer and previous RNNSearch (Bahdanau et al., 2015) or ConvS2S (Gehring et al., 2017) is that Transformer relies entirely on self-attention (Lin et al., 2017) to compute representations of source and target side sentences, without using recurrent or convolutional operations."
+  }, {
+    "heading": "2.2 Training NMT with Reinforcement Learning",
+    "text": "As aforementioned, reinforcement learning (RL) is leveraged to bridge the gap between training and\ninference of NMT, by directly optimizing the evaluation measure (e.g., BLEU) at training time. Specifically, NMT model can be viewed as an agent, which interacts with the environment (the previous words y<t and the context vector z available at each step t). The parameters of the agent define a policy, i.e., a conditional probability p(yt|x, y<t). The agent will pick an action , i.e., a candidate word out from the vocabulary, according to the policy. A terminal reward is observed once the agent generates a complete sequence ŷ. The reward for machine translation is the BLEU (Papineni et al., 2002) score, denoted as R(ŷ, y), which is defined by comparing the generated ŷ with the ground-truth sentence y. Note that here the reward R(ŷ, y) is the sentence-level reward, i.e., a scalar for each complete sentence ŷ. The goal of the RL training is to maximize the expected reward:\nLrl = N∑ i=1 Eŷ∼p(ŷ|xi)R(ŷ, y i)\n= N∑ i=1 ∑ ŷ∈Y p(ŷ|xi)R(ŷ, yi), (2)\nwhere Y is the space of all candidate translation sentences, which is exponentially large due to the large vocabulary size, making it impossible to exactly maximize Lrl. In practice, REINFORCE (Williams, 1992) is usually leveraged to approximate the above expectation via sampling ŷ from the policy p(y|x), leading to the objective as maximizing:\nL̂rl = N∑ i=1 R(ŷi, yi), ŷi ∼ p(y|xi),∀i ∈ [N ]. (3)\nThroughout the paper we will use REINFORCE as our policy optimization method for RL training."
+  }, {
+    "heading": "3 Strategies for RL Training",
+    "text": "Although training NMT with RL can fill in the gap between training objectives and evaluation metrics, it is not easy to successfully put RL training into practice. A key challenge is that RL methods are highly unstable and inefficient, due to the noise in gradient estimation and reward computation. To our best knowledge, currently there is no consensus, or even a systematic study on how to configure different setups for RL training to avoid such problems, especially for training deep NMT models on large scale datasets. We therefore aim to shed light\non practical applications of RL for NMT training. For this purpose, we provide a comprehensive review of several important methods to stabilize RL training process in this section."
+  }, {
+    "heading": "3.1 Reward Computation",
+    "text": "It is critical to set up appropriate rewards for RL training, i.e., the R(ŷ, y) in Eqn. (3). There are two important aspects to consider in configuring the reward R(ŷ, y): how to sample training instance ŷ and whether to use reward shaping.\nGenerate ŷ There are two strategies to sample ŷ for computing the BLEU reward R(ŷ, y). The first one is beam search (Sutskever et al., 2014), it is a breadth-first search method that maintains a “beam” of the top-K scoring candidates (prefix hypothesis sentences) at each generation step. Then, for each candidate sentence in the beam,K most likely words are appended, resulting in a pool of K ×K new candidates. Out from this pool, the top-K translations with largest probabilities are selected, and the beam search process continues. The second strategy is multinomial sampling (Chatterjee and Cancedda, 2010), which produces each word one by one through multinomial sampling over the model’s output distribution. Both sampling strategies terminate the expansion of a candidate sentence when an ‘end of sentence’ (<EOS>) token is met.\nThe choice of different sampling strategies reflects the exploration-exploitation dilemma. Beam search strategy generates more accurate ŷ by exploiting the probabilistic space output via current NMT model, while multinomial sampling pays more attention to explore more diverse candidates.\nWhether to Use Reward Shaping From Eqn. (3) we can see that for the entire sequence ŷ, there is only one terminal reward R(ŷ, y) available for model training. Note that the agent needs to take tens of actions (with the number depending on the length of ŷ) to generate a complete sentence ŷ, but only one reward is available for all those actions. Consequently, RL training is inefficient due to the sparsity of rewards, and the model updates each token in the training sentence with the same reward value without distinction. Reward shaping (Ng et al., 1999) is a strategy to overcome this shortcoming. In reward shaping, intermediate reward at each decoding step t is imposed and denoted as rt(ŷt, y). Bahdanau et al. (2017) sets up the intermediate reward as rt(ŷt, y) = R(ŷ1...t, y) − R(ŷ1...t−1, y), where R(ŷ1...t, y) is defined as the BLEU score\nof ŷ1...t with respect to y. Note that we have R(ŷ, y) = ∑m t=1 rt(ŷt, y), where m is the length\nof ŷ. During RL training, the cumulative reward∑m τ=t rτ (ŷτ , y) is used to update the policy at time step t. It is verified that using the shaped reward rt instead of awarding the whole score R(ŷ, y) does not change the optimal policy (Ng et al., 1999)."
+  }, {
+    "heading": "3.2 Variance Reduction of Gradient Estimation",
+    "text": "As mentioned before, the REINFORCE algorithm suffers from high variance in gradient estimation, mainly caused by using single sample ŷ to estimate the expectation. To reduce the variance, Ranzato et al. (2016) subtracts an average reward from the returned reward at each time step t, and the actual reward used to update the policy is\nR(ŷ, y)− r̂t, (4)\nwhere r̂t is the estimated average reward at step t, named as baseline reward (Weaver and Tao, 2001). Together with reward shaping, the updated reward becomes ∑m τ=t rτ (ŷτ , y)− r̂t at step t.\nIntuitively speaking, a baseline reward r̂t is established, which either encourages a word choice ŷt if the induced reward R satisfies R > r̂t, or discourages it if R < r̂t. Here R is either the terminal reward R(ŷ, y) or the cumulative reward∑m\nτ=t rτ (ŷτ , y). Such estimated baseline reward r̂t is designed to decrease the high variance of the gradient estimator.\nIn practice, the baseline reward r̂t can be obtained through different approaches. For example, one may sample multiple sentences and use the mean terminal reward for these sentences as baseline reward. In our work, we adopt the function learning approach, using simple network (e.g., multi-layer perceptron) to build the learning function, which is the same as used in (Ranzato et al., 2016; Bahdanau et al., 2017)."
+  }, {
+    "heading": "3.3 Combine MLE and RL Objectives",
+    "text": "The last important strategy we would like to mention is the combination of MLE training objective with RL objective, which is assumed to further stabilize RL training process (Wu et al., 2016; Li et al., 2017; Wu et al., 2017a).\nA simple way is to linearly combine the MLE (Eqn. (1)) and RL (Eqn. (3)) objectives as follows:\nLcom = α ∗ Lmle + (1− α) ∗ L̂rl, (5)\nwhere α is the hyperparamter controlling the tradeoff between MLE and RL objectives. We will empirically evaluate how different values of α impact the final translation accuracy."
+  }, {
+    "heading": "4 RL Training with Monolingual Data",
+    "text": "Previous works typically conduct RL training with only bilingual data for NMT. Monolingual data has been proved to be able to significantly improve the performance of NMT systems (Sennrich et al., 2015a; Xia et al., 2016; Cheng et al., 2016). It remains an open problem whether it is possible to combine the benefits of RL training and monolingual data such that even more competitive results can be obtained. In this section we provide several solutions for combination and will study them in next section. Note that all the settings discussed in this section are semi-supervised learning, i.e., both bilingual and monolingual data are available."
+  }, {
+    "heading": "4.1 With Source-Side Monolingual Data",
+    "text": "We first provide a solution to RL training with source-side monolingual data. As shown in Eqn. (3), in RL training we need to calculate the reward signal R(ŷ, y) for each generated sentence ŷ, and therefore the reference sentence y seems to be a must-have, which unfortunately is missing for source-side monolingual data.\nWe tackle this challenge via generating pseudo target reference y by bootstrapping with the model itself. Apparently, for the source-side monolingual data, the pseudo target reference y should have good translation quality. Therefore, for each source-side monolingual sentence, we use the NMT model trained from the bilingual data to beam search a target sentence and treat it as the pseudo target reference y. Afterwards ŷ is obtained via multinomial sampling to calculate the reward. Although multinomial sampling is usually not as good as sampling via beam search, the combination of beam search (to get the pseudo target reference sentence) and the multinomial sampling (to generate the action sequence of the agent) achieves good exploration-exploitation trade-off, since the pseudo target reference exploits the accuracy of current NMT model while ŷ achieves better exploration."
+  }, {
+    "heading": "4.2 With Target-Side Monolingual Data",
+    "text": "For a target-side monolingual sentence, its source sentence x is missing, and consequently ŷ is unavailable since it is sampled based on x. We tackle\nthis challenge via back translation (Sennrich et al., 2015a). We first train a reverse NMT model from the target language to the source language with bilingual data. For each target-side monolingual sentence, using the reverse NMT model, we back translate it to get its pseudo source sentence x. We then pair the target monolingual data and its backtranslated sentence as a pseudo bilingual sentence pair, which can be used for RL training in the same way as the genuine bilingual sentence pairs."
+  }, {
+    "heading": "4.3 With both Source-Side and Target-Side Monolingual Data",
+    "text": "A natural extension of previous discussions is to combine both the source-side and target-side monolingual data for RL training. We consider two combinations, the sequential method and the unified method. The former one sequentially leverages the source-side and target-side monolingual data for RL training. Specifically, we first train an MLE model using the bilingual data and source-side (or target-side) monolingual data; based on this MLE model, we then use REINFORCE for training with target-side (or source-side) monolingual data. For unified approach, we pack the paired data out from three domains together: the genuine bilingual data, the source monolingual data with its pseudo target references (introduced in subsection 4.1), and the target monolingual data with its back-translated samples (introduced in subsection 4.2). Then we treat the combined data as normal bilingual data on which the NMT model is trained via MLE or RL principles. Our goal is to investigate the model performance with different training data and find the best recipe of how to use these data in RL training. More details are introduced in next section."
+  }, {
+    "heading": "5 Experiments",
+    "text": "In this section, we provide a systematic study on aforementioned RL training strategies and the solutions of leveraging monolingual data. The RL training strategies are evaluated on bilingual datasets from three translation tasks, WMT14 EnglishGerman (En-De), WMT17 English-Chinese (EnZh) and WMT17 Chinese-English (Zh-En), and we further conduct the experiments to leverage monolingual data in WMT17 Zh-En translation."
+  }, {
+    "heading": "5.1 Experimental Settings",
+    "text": "For the bilingual datasets, WMT17 (Bojar et al., 2017) En-Zh 1 and WMT17 Zh-En use the same dataset, which contains about 24M sentences pairs, including CWMT Corpus 2017 and UN Parallel Corpus V1.0. The Jieba2 segmenter is used to perform Chinese word segmentation. We use byte pair encoding (BPE) (Sennrich et al., 2015b) to preprocess the source and target sentences, forming source-side and target-side dictionary with 40, 000 and 37, 000 types, respectively. We use the newsdev2017 as the dev set and newstest2017 as the test set. For the WMT14 En-De dataset, it contains about 4.5M training pairs, newstest2012 and newstest2013 are concatenated as the dev set and newstest2014 acts as test set. Same as (Vaswani et al., 2017), we also perform BPE to process the En-De dataset, the shared source-target vocabulary contains about 37, 000 tokens.\nFor the monolingual dataset on Zh-En translation task, similar to (Sennrich et al., 2017), the Chinese monolingual data comes from LDC Chinese Gigaword (4th edition) and the English monolingual data comes from News Crawl 2016 articles. After preprocessing (e.g., language detection and filtering sentences with more than 80 words), we keep 4M Chinese sentences and 7M English sentences.\nWe adopt the Transformer model with transformer big setting as defined in (Vaswani et al., 2017) for Zh-En and En-Zh translations, which achieves SOTA translation quality in several other datasets. For En-De translation, we utilize the transformer base v1 setting. These settings are exactly same as used in the original paper, except we set the layer prepostprocess dropout for Zh-En and En-Zh translation to be 0.05. The optimizer used for MLE training is Adam (Kingma and Ba, 2015) with initial learning rate is 0.1, and we follow the same learning rate schedule in (Vaswani et al., 2017). During training, roughly 4, 096 source tokens and 4, 096 target tokens are paired in one mini batch. Each model is trained using 8 NVIDIA Tesla M40 GPUs. For RL training, the model is initialized with parameters of the MLE model (trained with only bilingual data), and we continue training it with learning rate 0.0001. Same as (Bahdanau et al., 2017), to calculate the BLEU reward, we start all n-gram counts from 1 instead of 0 and\n1http://www.statmt.org/wmt17/ translation-task.html\n2https://github.com/fxsjy/jieba\nmultiply the resulting score by the length of the target reference sentence. For inference, we use beam search with width 6. We run each setting for at least 5 times and report the averaged case sensitive BLEU scores3 (Papineni et al., 2002) on test set. The test set BLEU is chosen via the best configuration based on the validation set."
+  }, {
+    "heading": "5.2 Results of of RL Training Strategies",
+    "text": "We first evaluate different strategies for RL training, based only on bilingual datasets from previously introduced three translation tasks.\nReward Computation As reviewed in subsection 3.1, for reward computation, we need to consider how to sample ŷ and whether to use reward shaping.\nThe results are shown in Table 1, where “RL” stands for RL training with the REINFORCE algorithm. We also report the performance of the pretrained NMT model with the MLE loss. From the table, an interesting finding is that ŷ sampled via beam search strategy is worse than that by multinomial sampling, with a gap of roughly 0.2-0.3 BLEU points on the test set (with significant test score ρ < 0.05). We therefore conjecture that exploration is more important than exploitation in reward computing: multinomial sampling brings more data diversity to the training of NMT model, while sentences generated by beam search are usually very similar to each other. Furthermore, we find that there is no big difference between the leverage of reward shaping or terminal reward, with only slightly better performance of reward shaping. We therefore use multinomial sampling and reward shaping in later experiments.\n3Calculated by SacréBLEU toolkit, which produces exactly the same evaluation result as that in WMT17 Zh-En campaign. https://github.com/awslabs/sockeye/ tree/master/contrib/sacrebleu"
+  }, {
+    "heading": "34.47 34.50 34.63 34.56 34.44 34.40",
+    "text": "Variance Reduction of Gradient Estimation Next we evaluate the strategies for reducing variance of gradient estimation (see section3.2). We want to know whether the baseline reward is necessary. To compute the baseline reward, similar to (Ranzato et al., 2016; Bahdanau et al., 2017), we build a two-layer MLP regressor with Relu (Nair and Hinton, 2010) activation units. The function takes the hidden states from decoder as input, and the parameters of the regressor are trained to minimize the mean squared loss of Eqn. (4). We first pre-train the baseline function for 20k steps/minibatches, and then jointly train NMT model (with RL) and the baseline reward function.\nTable 2 shows that the learning of baseline reward does not help RL training. This contradicts with previous observations (Ranzato et al., 2016), and seems to suggest that the variance of gradient estimation in NMT is not as large as we expected. The reason might be that the probability mass on the target-side language space induced by the NMT model is highly concentrated, making the sampled ŷ representative enough in terms of estimating the expectation. Therefore, for the economic perspective, it is not necessary to add the additional steps of using baseline reward on RL training for NMT.\nCombine MLE and RL Objectives As shown in Eqn. (5), the hyperparameter α controls the trade-off between MLE and RL objectives. For comparison, we set α to be [0, 0.1, 0.3, 0.5, 0.7, 0.9] in our experiments. The results are presented in Figure 1.\nThe results show that combining the MLE objective with the RL objective achieves better performance (27.48 for En-De, 34.63 for En-Zh and 25.04 for Zh-En with α = 0.3). This indicates that MLE objective is helpful to stabilize the training and improve the model performance, as we expected. However, further increasing α does not bring more gain. The best trade-off between MLE and RL objectives in our experiment is α = 0.3. Therefore, we set α = 0.3 in the following experiments."
+  }, {
+    "heading": "5.3 Results of RL Training with Monolingual Data",
+    "text": "In this subsection, we report the results on both valid and test set of RL training using bilingual and monolingual data in Zh-En translation. From Table 3 to Table 6, “RL” denotes the model trained with RL using multinomial sampling, reward shaping, no baseline reward, and combined objective, based on the observations in the last subsection. “B” denotes bilingual data, “Ms” denotes sourceside monolingual data and “Mt” denotes target-side monolingual data, “&” denotes data combination.\nWith Source-Side Monolingual Data As discussed before, we use beam search with beam width 4 to sample the pseudo target sentence y for each monolingual sentence x. We consider several settings for RL training: 1) only source-side monolingual data; 2) the combination of bilingual and source-side monolingual data. We first train an MLE model using the augmented dataset combining the genuine bilingual data with the pseudo bilingual data generated from the monolingual data, and then perform RL training on this combined dataset. The results are shown in Table 3.\nWith Target-Side Monolingual Data For target-side monolingual data, we first pre-train a translation model from English to Chinese 4, and use it to back translate target-side monolingual\n4The BLEU score of the En-Zh model is 34.12.\nsentence y to get pseudo source sentence x. Similarly, we consider several settings for RL training: 1) only target-side monolingual data; 2) the combination of bilingual data and target-side monolingual data. We train an MLE model using both the genuine and the generated pseudo bilingual data, and then perform RL training on this data. The results are presented in Table 4.\nFrom Table 3 and 4, we have several observations. First, monolingual data helps RL training, improving BLEU score from 25.04 to 25.22 (ρ < 0.05) in Table 3. Second, when we only add monolingual data for RL training, the model achieves similar performance compared to MLE training with bilingual and monolingual data (e.g., 25.15 vs. 25.24 (ρ < 0.05) in Table 4).\nWith both Source-Side and Target-Side Monolingual Data We have two approaches to use both source-side and target-side monolingual data, as described in subsection 4.3. The results are reported in Table 5 and Table 6.\nFrom Table 5, we can observe that the sequen-\ntial training of monolingual data can benefit the model performance. Taking the last three rows as an example, the BLEU score of the MLE model trained on the combination of bilingual data and target-side monolingual data is 25.24; based on this model, RL training using the source-side monolingual data further improves the model performance by 0.7 (ρ < 0.01) BLEU points. From Table 6, we can observe on top of a quite strong MLE baseline (26.13), through the unified RL training, we can still improve the test set by 0.6 points to 26.73 (ρ < 0.01), which shows the effectiveness of combining source/target monolingual data and reinforcement learning."
+  }, {
+    "heading": "5.4 Comparison with Other Models",
+    "text": "At last, as a summary of our empirical results, we compare several representataive end-to-end NMT systems to our work in Table 7, which includes the Transformer (Vaswani et al., 2017) model, with/without back-translation (Sennrich et al., 2015a) and the best NMT system in WMT17 Chinese-English translation challenge5 (SougouKnowing-ensemble). The results clearly show that after combing both source-side and target-side monolingual data with RL training, we obtain the state-of-the-art BLEU score 26.73, even surpassing the best ensemble model in WMT17 Zh-En translation challenge."
+  }, {
+    "heading": "6 Related Work",
+    "text": "Our work is mainly related with the literature of using reinforcement learning to directly optimize the evaluation measure for neural machine translation. Several representative works are (Ranzato et al.,\n5http://matrix.statmt.org/matrix/ systems_list/1878\n2016; Shen et al., 2016; Bahdanau et al., 2017). In (Ranzato et al., 2016), the authors propose to train a neural translation model with the objective gradually shifting from maximizing token-level likelihood to optimizing the sentence-level BLEU score. Shen et al. (2016) proposes to adopt minimum risk training (Goel and Byrne, 2000) to minimize the task specific expected loss (i.e., induced by BLEU score) on NMT training data. Instead of the REINFORCE (Williams, 1992) algorithm used in the above two works, Bahdanau et al. (2017) further optimizes the policy by actor-critic algorithm. Wu et al. (2016) introduces a simple RL based method to optimize the stacked LSTM model for NMT, achieving better BLEU scores on English-French translation but not on English-German. Edunov et al. (2017) presents a comparative study of several classical structural prediction losses for NMT model, which also includes sequence-level loss but not exactly the same as RL.\nOur work is also related with the research works that leverage monolingual data for improving NMT models (Zhang and Zong, 2016; Sennrich et al., 2015a; Wang et al., 2018; Xia et al., 2016; Cheng et al., 2016). Zhang and Zong (2016) exploits the source-side monolingual data in NMT. Sennrich et al. (2015a) proposes back-translation method to leverage target-side monolingual data for NMT. Xia et al. (2016) formulates the machine translation as a communication game, which leverages the power of two directional translation models and source/target monolingual data. Cheng et al. (2016) proposes a similar semi-supervised approach. However, none of these works have explored the power of monolingual data in the context of training NMT model with reinforcement learning."
+  }, {
+    "heading": "7 Conclusion",
+    "text": "In this work, we presented a study of how to effectively train NMT models using reinforcement learning. Different RL strategies were evaluated in German-English, English-Chinese and ChineseEnglish translation tasks on large-scale bilingual datasets. We found that (1) multinomial sampling is better than beam search, (2) several previous tricks such as reward shaping and baseline reward does not make significant difference, and (3) the combination of the MLE and RL objectives is important. In addition, we explored the source/target monolingual data for RL training. By combing the power of RL and monolingual data, we achieve the state-of-the-art BLEU score on WMT17 ChineseEnglish translation task. We hope that our study and results can benefit the community and bring some insights on how to train deep NMT models with reinforcement learning and big data."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "An actor-critic algorithm for sequence prediction",
+    "authors": ["Dzmitry Bahdanau", "Philemon Brakel", "Kelvin Xu", "Anirudh Goyal", "Ryan Lowe", "Joelle Pineau", "Aaron Courville", "Yoshua Bengio."],
+    "venue": "Fifth International Conference on Learning Representations.",
+    "year": 2017
+  }, {
+    "title": "Neural machine translation by jointly learning to align and translate",
+    "authors": ["Dzmitry Bahdanau", "Kyunghyun Cho", "Yoshua Bengio."],
+    "venue": "Third International Conference on Learning Representations.",
+    "year": 2015
+  }, {
+    "title": "Minimum error rate training by sampling the translation lattice",
+    "authors": ["Samidh Chatterjee", "Nicola Cancedda."],
+    "venue": "Proceedings of the 2010 Conference on Empirical Methods in Natural Language Processing, pages 606–615. Association for Computational Lin-",
+    "year": 2010
+  }, {
+    "title": "Semisupervised learning for neural machine translation",
+    "authors": ["Yong Cheng", "Wei Xu", "Zhongjun He", "Wei He", "Hua Wu", "Maosong Sun", "Yang Liu."],
+    "venue": "meeting of the association for computational linguistics, pages 1965–1974.",
+    "year": 2016
+  }, {
+    "title": "Convolutional sequence to sequence learning",
+    "authors": ["Jonas Gehring", "Michael Auli", "David Grangier", "Denis Yarats", "Yann N Dauphin."],
+    "venue": "Proceedings of the 34th international conference on machine learning.",
+    "year": 2017
+  }, {
+    "title": "Minimum bayes-risk automatic speech recognition",
+    "authors": ["Vaibhava Goel", "William J Byrne."],
+    "venue": "Computer Speech & Language, 14(2):115–135.",
+    "year": 2000
+  }, {
+    "title": "Achieving human parity on automatic chinese to english news",
+    "authors": ["Hany Hassan", "Anthony Aue", "Chang Chen", "Vishal Chowdhary", "Jonathan Clark", "Christian Federmann", "Xuedong Huang", "Marcin Junczys-Dowmunt", "William Lewis", "Mu Li"],
+    "year": 2018
+  }, {
+    "title": "Decoding with value networks for neural machine translation",
+    "authors": ["Di He", "Hanqing Lu", "Yingce Xia", "Tao Qin", "Liwei Wang", "Tieyan Liu."],
+    "venue": "Advances in Neural Information Processing Systems, pages 178– 187.",
+    "year": 2017
+  }, {
+    "title": "Maximum expected bleu training of phrase and lexicon translation models",
+    "authors": ["Xiaodong He", "Li Deng."],
+    "venue": "Proceedings of the 50th Annual Meeting of the Association for Computational Linguistics: Long Papers-Volume 1, pages 292–301. Association",
+    "year": 2012
+  }, {
+    "title": "Deep reinforcement learning that matters",
+    "authors": ["Peter Henderson", "Riashat Islam", "Philip Bachman", "Joelle Pineau", "Doina Precup", "David Meger."],
+    "venue": "Thirthy-Second AAAI Conference On Artificial Intelligence.",
+    "year": 2018
+  }, {
+    "title": "Adam: A method for stochastic optimization",
+    "authors": ["Diederik P Kingma", "Jimmy Ba."],
+    "venue": "Third International Conference on Learning Representations.",
+    "year": 2015
+  }, {
+    "title": "Adversarial learning for neural dialogue generation",
+    "authors": ["Jiwei Li", "Will Monroe", "Tianlin Shi", "Alan Ritter", "Dan Jurafsky."],
+    "venue": "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing.",
+    "year": 2017
+  }, {
+    "title": "A structured self-attentive sentence embedding",
+    "authors": ["Zhouhan Lin", "Minwei Feng", "Cicero Nogueira dos Santos", "Mo Yu", "Bing Xiang", "Bowen Zhou", "Yoshua Bengio."],
+    "venue": "Fifth International Conference on Learning Representations.",
+    "year": 2017
+  }, {
+    "title": "Playing atari with deep reinforcement learning",
+    "authors": ["Volodymyr Mnih", "Koray Kavukcuoglu", "David Silver", "Alex Graves", "Ioannis Antonoglou", "Daan Wierstra", "Martin Riedmiller."],
+    "venue": "Advances in neural information processing systems, workshop.",
+    "year": 2013
+  }, {
+    "title": "Rectified linear units improve restricted boltzmann machines",
+    "authors": ["Vinod Nair", "Geoffrey E Hinton."],
+    "venue": "Proceedings of the 27th international conference on machine learning, pages 807–814.",
+    "year": 2010
+  }, {
+    "title": "Policy invariance under reward transformations: Theory and application to reward shaping",
+    "authors": ["Andrew Y Ng", "Daishi Harada", "Stuart Russell."],
+    "venue": "ICML, volume 99, pages 278–287.",
+    "year": 1999
+  }, {
+    "title": "Reinforcement learning for bandit neural machine translation with simulated human feedback",
+    "authors": ["Khanh Nguyen", "Hal Daumé III", "Jordan BoydGraber."],
+    "venue": "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Process-",
+    "year": 2017
+  }, {
+    "title": "Bleu: a method for automatic evaluation of machine translation",
+    "authors": ["Kishore Papineni", "Salim Roukos", "Todd Ward", "WeiJing Zhu."],
+    "venue": "Proceedings of the 40th annual meeting on association for computational linguistics, pages 311–318. Association for",
+    "year": 2002
+  }, {
+    "title": "Sequence level training with recurrent neural networks",
+    "authors": ["Marc’Aurelio Ranzato", "Sumit Chopra", "Michael Auli", "Wojciech Zaremba"],
+    "venue": "Fourth International Conference on Learning Representations",
+    "year": 2016
+  }, {
+    "title": "Maximum likelihood estimation",
+    "authors": ["FW Scholz."],
+    "venue": "Encyclopedia of statistical sciences.",
+    "year": 1985
+  }, {
+    "title": "The university of edinburgh’s neural mt systems for wmt17",
+    "authors": ["Rico Sennrich", "Alexandra Birch", "Anna Currey", "Ulrich Germann", "Barry Haddow", "Kenneth Heafield", "Antonio Valerio Miceli Barone", "Philip Williams."],
+    "venue": "Proceedings of the Second Con-",
+    "year": 2017
+  }, {
+    "title": "Improving neural machine translation models with monolingual data",
+    "authors": ["Rico Sennrich", "Barry Haddow", "Alexandra Birch."],
+    "venue": "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics.",
+    "year": 2015
+  }, {
+    "title": "Neural machine translation of rare words with subword units",
+    "authors": ["Rico Sennrich", "Barry Haddow", "Alexandra Birch."],
+    "venue": "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics.",
+    "year": 2015
+  }, {
+    "title": "Minimum risk training for neural machine translation",
+    "authors": ["Shiqi Shen", "Yong Cheng", "Zhongjun He", "Wei He", "Hua Wu", "Maosong Sun", "Yang Liu."],
+    "venue": "meeting of the association for computational linguistics, pages 1683–1692.",
+    "year": 2016
+  }, {
+    "title": "Sequence to sequence learning with neural networks",
+    "authors": ["Ilya Sutskever", "Oriol Vinyals", "Quoc V Le."],
+    "venue": "Advances in neural information processing systems, pages 3104–3112.",
+    "year": 2014
+  }, {
+    "title": "Attention is all you need",
+    "authors": ["Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N Gomez", "Łukasz Kaiser", "Illia Polosukhin."],
+    "venue": "Advances in Neural Information Processing Systems, pages 6000–6010.",
+    "year": 2017
+  }, {
+    "title": "Dual transfer learning for neural machine translation with marginal distribution regularization",
+    "authors": ["Yijun Wang", "Yingce Xia", "Li Zhao", "Jiang Bian", "Tao Qin", "Guiquan Liu", "T Liu."],
+    "venue": "Proceedings of the Thirty-Second AAAI Conference on Artificial Intel-",
+    "year": 2018
+  }, {
+    "title": "The optimal reward baseline for gradient-based reinforcement learning",
+    "authors": ["Lex Weaver", "Nigel Tao."],
+    "venue": "Proceedings of the Seventeenth conference on Uncertainty in artificial intelligence, pages 538–545. Morgan Kaufmann Publishers Inc.",
+    "year": 2001
+  }, {
+    "title": "Simple statistical gradientfollowing algorithms for connectionist reinforcement learning",
+    "authors": ["Ronald J Williams."],
+    "venue": "Reinforcement Learning, pages 5–32. Springer.",
+    "year": 1992
+  }, {
+    "title": "Beyond error propagation in neural machine translation: Characteristics of language also matter",
+    "authors": ["Lijun Wu", "Xu Tan", "Di He", "Fei Tian", "Tao Qin", "Jianhuang Lai", "Tie-Yan Liu."],
+    "venue": "Proceedings of the 2018 Conference on Empirical Methods in Natural Lan-",
+    "year": 2018
+  }, {
+    "title": "Word attention for sequence to sequence text understanding",
+    "authors": ["Lijun Wu", "Fei Tian", "Li Zhao", "Jianhuang Lai", "TieYan Liu."],
+    "venue": "AAAI.",
+    "year": 2018
+  }, {
+    "title": "Adversarial neural machine translation",
+    "authors": ["Lijun Wu", "Yingce Xia", "Li Zhao", "Fei Tian", "Tao Qin", "Jianhuang Lai", "Tie-Yan Liu."],
+    "venue": "arXiv preprint arXiv:1704.06933.",
+    "year": 2017
+  }, {
+    "title": "Sequence prediction with unlabeled data by reward function learning",
+    "authors": ["Lijun Wu", "Li Zhao", "Tao Qin", "Jianhuang Lai", "TieYan Liu."],
+    "venue": "IJCAI-17, pages 3098–3104.",
+    "year": 2017
+  }, {
+    "title": "Google’s neural machine translation system: Bridging the gap between human and machine",
+    "authors": ["Yonghui Wu", "Mike Schuster", "Zhifeng Chen", "Quoc V Le", "Mohammad Norouzi", "Wolfgang Macherey", "Maxim Krikun", "Yuan Cao", "Qin Gao", "Klaus Macherey"],
+    "year": 2016
+  }, {
+    "title": "Dual learning for machine translation",
+    "authors": ["Yingce Xia", "Di He", "Tao Qin", "Liwei Wang", "Nenghai Yu", "Tieyan Liu", "Weiying Ma."],
+    "venue": "neural information processing systems, pages 820–828.",
+    "year": 2016
+  }, {
+    "title": "Deliberation networks: Sequence generation beyond one-pass decoding",
+    "authors": ["Yingce Xia", "Fei Tian", "Lijun Wu", "Jianxin Lin", "Tao Qin", "Nenghai Yu", "Tie-Yan Liu."],
+    "venue": "Advances in Neural Information Processing Systems, pages 1784–1794.",
+    "year": 2017
+  }, {
+    "title": "Exploiting source-side monolingual data in neural machine translation",
+    "authors": ["Jiajun Zhang", "Chengqing Zong."],
+    "venue": "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing, pages 1535–1545.",
+    "year": 2016
+  }],
+  "id": "SP:f54b36edae733ab9cd7a748595947710bd28a2e3",
+  "authors": [{
+    "name": "Lijun Wu",
+    "affiliations": []
+  }, {
+    "name": "Fei Tian",
+    "affiliations": []
+  }, {
+    "name": "Tao Qin",
+    "affiliations": []
+  }, {
+    "name": "Jianhuang Lai",
+    "affiliations": []
+  }, {
+    "name": "Tie-Yan Liu",
+    "affiliations": []
+  }],
+  "abstractText": "Recent studies have shown that reinforcement learning (RL) is an effective approach for improving the performance of neural machine translation (NMT) system. However, due to its instability, successfully RL training is challenging, especially in real-world systems where deep models and large datasets are leveraged. In this paper, taking several large-scale translation tasks as testbeds, we conduct a systematic study on how to train better NMT models using reinforcement learning. We provide a comprehensive comparison of several important factors (e.g., baseline reward, reward shaping) in RL training. Furthermore, to fill in the gap that it remains unclear whether RL is still beneficial when monolingual data is used, we propose a new method to leverage RL to further boost the performance of NMT systems trained with source/target monolingual data. By integrating all our findings, we obtain competitive results on WMT14 EnglishGerman, WMT17 English-Chinese, and WMT17 Chinese-English translation tasks, especially setting a state-of-the-art performance on WMT17 Chinese-English translation task.",
+  "title": "A Study of Reinforcement Learning for Neural Machine Translation"
+}

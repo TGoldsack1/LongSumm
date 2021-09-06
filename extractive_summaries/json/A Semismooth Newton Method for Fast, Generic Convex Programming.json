@@ -1,0 +1,268 @@
+{
+  "sections": [{
+    "heading": "1. Introduction and related work",
+    "text": "Conic optimization problems (or cone programs) are convex optimization problems of the form\nminimize x∈Rn cTx subject to b−Ax ∈ K, (1)\nwhere c ∈ Rn, A ∈ Rm×n, b ∈ Rm, K are problem data, specified by the user, and K is a proper cone (Nesterov & Nemirovskii, 1994; Ben-Tal & Nemirovski, 2001; Boyd & Vandenberghe, 2004); we give a formal treatment of proper cones in Section 2, but a simple example of a proper cone, for now, is the nonnegative orthant, i.e., the set of all points in Rm with nonnegative components. These problems are quite general, encapsulating a number of standard problem classes: e.g., taking K as the nonnegative orthant yields a linear program; taking K as the positive semidefinite cone,\n*Equal contribution 1Machine Learning Department, Carnegie Mellon University 2Computer Science Department, Carnegie Mellon University. Correspondence to: Alnur Ali <alnurali@cmu.edu>.\nProceedings of the 34 th International Conference on Machine Learning, Sydney, Australia, PMLR 70, 2017. Copyright 2017 by the author(s).\ni.e., the space of m×m positive semidefinite matrices Sm+ , yields a semidefinite program; and taking K as the secondorder (or Lorentz) cone {(x, y) ∈ Rm−1 × R : ‖x‖2 ≤ y} yields a second-order cone program (a quadratic program is a special case).\nDue, in part, to their generality, cone programs have been the focus of much recent work, and additionally form the basis of many convex optimization modeling frameworks, e.g., sdpsol (Wu & Boyd, 2000), YALMIP (Lofberg, 2005), and the CVX family of frameworks (Grant, 2004; Diamond & Boyd, 2016; Udell et al., 2014). These frameworks generally make it easy to quickly solve small and mediumsized convex optimization problems to high accuracy; they work by allowing the user to specify a generic convex optimization problem in a way that resembles its mathematical representation, then convert the problem into a form similar to (1), and finally solve the problem. Primal-dual interior point methods, e.g., SeDuMi (Sturm, 2002), SDPT3 (Toh et al., 2012), and CVXOPT (Andersen et al., 2011), are common for solving these cone programs. These methods are useful, as they generally converge to high accuracy in just tens of iterations, but they solve a Newton system on each iteration, and so have difficulty scaling to highdimensional (i.e., large-n) problems.\nIn recent work, O’Donoghue et al. (2016) use the alternating direction method of multipliers (ADMM) (Boyd et al., 2011) to solve generic cone programs; operator splitting methods (e.g., ADMM, Peaceman-Rachford splitting (Peaceman & Rachford, 1955), Douglas-Rachford splitting (Douglas & Rachford, 1956), and dual decomposition) generally converge to modest accuracy in just a few iterations, so the approach (called the splitting conic solver, or SCS) is scalable, and also has a number of other benefits, e.g., provding certificates of primal or dual infeasibility.\nIn this paper, we introduce a new method (called “NewtonADMM”) for solving large-scale, generic cone programs rapidly to high accuracy. The basic idea is to view the usual ADMM recurrence relation as a fixed point iteration, and then use a truncated, nonsmooth Newton method to find a fixed point; to justify the approach, we extend the theory of semismooth operators, coming out of the applied mathematics literature over the last two decades (Mifflin, 1977; Qi & Sun, 1993; Martı́nez & Qi, 1995; Facchinei et al.,\n1996), although it has received little attention from the machine learning community (Ferris & Munson, 2004). We apply the approach to the fixed point iteration associated with SCS, to obtain a general purpose conic optimizer. We show, under regularity conditions, that Newton-ADMM is quadratically convergent; empirically, Newton-ADMM is significantly faster than SCS, on a number of problems. Also, Newton-ADMM has essentially no tuning parameters, and generates certificates of infeasibility, helpful in diagnosing problem misspecification.\nThe rest of the paper is organized as follows. In Section 2, we give the background on cone programs, SCS, and semismooth operators, required to derive our method for solving generic cone programs, Newton-ADMM. . In Section 3, we present Newton-ADMM, and establish some of its basic properties. In Section 4, we give various convergence guarantees. In Section 5, we empirically evaluate Newton-ADMM, and describe an extension as a specialized solver. We conclude with a discussion in Section 6."
+  }, {
+    "heading": "2. Background",
+    "text": "We first give some background on cones. Using this background, we go on to describe SCS, the cone program solver of O’Donoghue et al. (2016), in more detail. Finally, we give an overview of semismoothness (Mifflin, 1977), a generalization of smoothness, central to our Newton method."
+  }, {
+    "heading": "2.1. Cone programming",
+    "text": "We say that a set C is a cone if, for all x ∈ C, and θ ≥ 0, we get that θx ∈ C. The dual cone C∗, associated with the cone C, is defined as the set {y : yTx ≥ 0, ∀x ∈ C}. Additionally, a cone C is a convex cone if, for all x, y ∈ C, and θ1, θ2 ≥ 0, we get that θ1x + θ2y ∈ C. A cone C is a proper cone if it is (i) convex; (ii) closed; (iii) solid, i.e., its interior is nonempty; and (iv) pointed, i.e., if both x,−x ∈ C, then we get that x = 0.\nThe nonnegative orthant, second-order cone, and positive semidefinite cone are all proper cones (Boyd & Vandenberghe, 2004, Section 2.4.1); these cones, along with the exponential cone (defined below), can be used to represent most convex optimization problems encountered in practice. The exponential cone (see, e.g., Serrano (2015)),Kexp, is a three-dimensional proper cone, defined as the closure of the epigraph of the perspective of exp(x), with x ∈ R:\nKexp = {(x, y, z) : x ∈ R, y > 0, z ≥ y exp(x/y)} ∪ {(x, 0, z) : x ≤ 0, z ≥ 0} .\nCone programs resembling (1) were first described by Nesterov & Nemirovskii (1994, page 67), although special cases were, of course, considered earlier. Standard refer-\nences include Ben-Tal & Nemirovski (2001) and Boyd & Vandenberghe (2004, Section 4.6.1)."
+  }, {
+    "heading": "2.2. SCS",
+    "text": "Roughly speaking, SCS is an application of ADMM to a particular feasibility problem arising from the KarushKuhn-Tucker (KKT) optimality conditions associated with a cone program. To see this, consider a reformulation of the cone program (1), with slack variable s ∈ Rm:\nminimize x∈Rn, s cTx subject to Ax+ s = b, s ∈ K. (2)\nThe KKT conditions can be seen, after introducing dual variables r ∈ Rn, y ∈ K∗, for the implicit constraint x ∈ Rn and the explicit constraints, respectively, to be\nAT y + c = r (stationarity) Ax+ s = b, s ∈ K (primal feasibility) r ∈ {0}n, y ∈ K∗ (dual feasibility) −cTx− bT y = 0 (complementary slackness),\nwhere K∗ is the dual cone of K; thus, we can obtain a solution to (2), by solving the KKT system 0 AT−A 0\n−cT −bT\n[ x y ] +  cb 0  =  rs 0  , (3) x ∈ Rn, y ∈ K∗, r ∈ {0}n, s ∈ K.\nSelf-dual homogeneous embedding. When the cone program (2) is primal/dual infeasible, there is no solution to the KKT system (3); so, consider embedding the system (3) in a larger system, with new variables τ, κ, and solving 0 AT c−A 0 b −cT −bT 0  xy τ  =  rs κ\n , (4) x ∈ Rn, y ∈ K∗, τ ∈ R+, r ∈ {0}n, s ∈ K, κ ∈ R+,\nwhich is always solvable. The embedding (4), due to Ye et al. (1994), has a number of other nice properties. Observe that when τ? = 1, κ? = 0 are solutions to the embedding (4), we recover the KKT system (3); it turns out that the solutions τ?, κ? characterize the primal or dual (in)feasibility of the cone program (2). In particular, if τ? > 0, κ? = 0, then the cone program (2) is feasible, with a primal-dual solution (1/τ?)(x?, y?, r?, s?); on the other hand, if τ? = 0, κ? ≥ 0, then (2) is primal or dual infeasible (or both), depending on the exact values of τ?, κ? (O’Donoghue et al., 2016, Section 2.3). The embedding (4) can also be seen as first-order homogeneous, in the sense that (x?, y?, τ?, r?, s?, κ?) being a solution to (4) implies that k(x?, y?, τ?, r?, s?, κ?), for k ≥ 0, is also a solution. Finally, viewing the embedding (4) as a feasibility problem, the dual of the feasibility problem turns out to be the original feasibility problem, i.e., the embedding is self-dual.\nADMM-based algorithm. As mentioned, the embedding (4) can be viewed as the feasibility problem\nfind u, v subject to Qu = v, (u, v) ∈ C × C∗,\nwhere we write C = Rn×K∗×R+, C∗ = {0}n×K×R+,\nQ =  0 AT c−A 0 b −cT −bT 0  , u =  xy τ  , v =  rs κ  . (5)\nIntroducing new variables ũ, ṽ ∈ Rk, where k = n+m+1, and rewriting so that we may apply ADMM, we get:\nminimize u, v, ũ, ṽ IC×C∗(u, v) + IQu?=v?(ũ, ṽ) subject to [ u v ] = [ ũ ṽ ] ,\nwhere IC×C∗ and IQu?=v? are the indicator functions of the product space C × C∗, and the affine space of solutions to Qu = v, respectively; after simplifying (see O’Donoghue et al. (2016, Section 3)), the ADMM recurrences are just\nũ← (I +Q)−1(u+ v). (6) u← PC(ũ− v) (7) v ← v − ũ+ u, (8)\nwhere PC denotes the projection onto C. For the update (6), Q is a skew-symmetric matrix, hence I+Q is nonsingular, so the update can be done efficiently via the Schur complement, matrix inversion lemma, and LDLT factorization.\nProjections onto dual cones. For the update (7), the projection onto C boils down to separate projections onto the “free” cone Rn, the dual cone ofK, and the nonnegative orthant R+. These projections, for many K, are well-known:\n• Free cone. Here, PRn(z) = z, for z ∈ Rn.\n• Nonnegative orthant, Kno. The projection onto Kno is simply given by applying the positive part operator:\nPKno(z) = max{z, 0}. (9)\n• Second-order cone, Ksoc. Write z = (z1, z2) ∈ Rm, z1 ∈ Rm−1, z2 ∈ R. Then the projection is\nPKsoc(z) =  0, ‖z1‖2 ≤ −z2 z, ‖z1‖2 ≤ z2 1 2 (1 + z2 ‖z1‖2 )(z1, ‖z1‖2), otherwise.\n(10)\n• Positive semidefinite cone, Kpsd. The projection is PKpsd(Z) = ∑ i max{λi, 0}qiqTi , (11)\nwhere Z = ∑ i λiqiq T i is the eigenvalue decomposition of Z.\n• Exponential cone, Kexp. If z ∈ Kexp, then PKexp(z) = z. If −z ∈ K∗exp, then PKexp(z) = 0. If z1, z2 < 0, i.e., the first two components of z are negative, then PKexp = (z1,max{z2, 0},max{z3, 0}). Otherwise, the projection is given by\nargmin z̃∈R3:z̃2>0 (1/2)‖z̃ − z‖22 subject to z̃2 exp(z̃1/z̃2) = z̃3,\n(12)\nwhich can be computed using a Newton method (Parikh & Boyd, 2014, Section 6.3.4).\nThe nonnegative orthant, second-order cone, and positive semidefinite cone are all self-dual, so projecting onto these cones is equivalent to projecting onto their dual cones; to project onto the dual of the exponential cone, we use the Moreau decomposition to get\nPK∗exp(z) = z + PKexp(−z). (13)"
+  }, {
+    "heading": "2.3. Semismooth operators",
+    "text": "Here, we give an overview of semismoothness; good references include Ulbrich (2011) and Izmailov & Solodov (2014). We consider maps F : Rk → Rk that are locally Lipschitz, i.e., for all z1 ∈ Rk, and z2 ∈ N (z1, δ), where N (z1, δ) is a ball centered at z1 with radius δ > 0, there exists some Lz1 > 0, such that ‖F (z1)− F (z2)‖2 ≤ Lz1‖z1 − z2‖2. By a result known as Rademacher’s theorem (Evans & Gariepy, 2015, Section 3.1.2, Theorem 2), we get that F is differentiable almost everywhere; we let D denote the points at which F is differentiable, so that Rk \\ D is a set of measure zero.\nThe generalized Jacobian. Clarke (1990) suggested the generalized Jacobian as a way to define the derivative of a locally Lipschitz map F : Rk → Rk, at all points. The generalized Jacobian is related to the subgradient, as well as the directional derivative, as we discuss later on; the generalized Jacobian, though, turns out to be quite useful for defining effective nonsmooth Newton methods. The generalized Jacobian J (z) at a point z ∈ Rk of a map F : Rk → Rk, is defined as (co denotes convex hull)\nJ (z) = co {\nlim i→∞\nJ(zi) : (zi) ∈ D, (zi)→ z } , (14)\nwhere J(zi) ∈ Rk×k is the usual Jacobian of F at zi. Two useful properties of the generalized Jacobian (Clarke, 1990,\nProposition 1.2): (i) J (z), at any z, is always nonempty; and (ii) if each component Fi is convex, then the ith row of any element of J (z) is just a subgradient of Fi at z.\n(Strong) semismoothness and consequences. We say that a map F : Rk → Rk is semismooth if it is locally Lipschitz, and if, for all z, δ ∈ Rk, the limit\nlim δ→0, J∈J (z+δ) Jδ (15)\nexists (see, e.g., Mifflin (1977, Definition 1) and Qi & Sun (1993, Section 2)). The above definition is somewhat opaque, so various works have provided an alternative characterization of semismoothness: F is semismooth if and only if it is (i) locally Lipschitz; (ii) directionally differentiable, in every direction; and (iii) we get\nlim δ→0, J∈J (z+δ) ‖F (z + δ)− F (z)− Jδ‖2 ‖δ‖2 = 0,\ni.e., ‖F (z + δ) − F (z) − Jδ‖2 = o(‖δ‖2), δ → 0 (see, e.g., Qi & Sun (1993, Theorem 2.3), Hintermüller (2010, Theorem 2.9), Qi & Sun (1999, page 2), and Martı́nez & Qi (1995, Proposition 2)). Examples of semismooth functions include log(1 + |x|), all convex functions, and all smooth functions (Mifflin, 1977; Śmietański, 2007); on the other hand, √ |x| is not semismooth. A linear combination of semismooth functions is semismooth (Izmailov & Solodov, 2014, Proposition 1.75). Finally, we say that a map is strongly semismooth if, under the same conditions as above, we can replace (15) with\nlim sup δ→0, J∈J (z+δ) ‖F (z + δ)− F (z)− Jδ‖2 ‖δ‖22 <∞,\ni.e., ‖F (z + δ) − F (z) − Jδ‖2 = O(‖δ‖22), δ → 0 (see Facchinei et al. (1996, Proposition 2.3) and Facchinei & Kanzow (1997, Definition 1))."
+  }, {
+    "heading": "3. Newton-ADMM and its basic properties",
+    "text": "Next, we describe Newton-ADMM, our nonsmooth Newton method for generic convex programming; again, the basic idea is to view the ADMM recurrences (6) – (8), used by SCS, as a fixed point iteration, and then use a nonsmooth Newton method to find a fixed point. Accordingly, we let\nF (z) =  ũ− (I +Q)−1(u+ v)u− PC(ũ− v) ũ− u  , which are just the residuals of the consecutive ADMM iterates given by (6) – (8), and z = (ũ, u, v) ∈ R3k; multiplying by diag(I +Q, I, I) to change coordinates gives\nF (z) =  (I +Q)ũ− (u+ v)u− PC(ũ− v) ũ− u  . (16)\nNow, we would like to apply a Newton method to F , but projections onto proper cones are not differentiable, in general. However, for many cones of interest, they are (strongly) semismooth; the following lemma summarizes.\nLemma 3.1. Projections onto the nonnegative orthant, second-order cone, and positive semidefinite cone are all strongly semismooth; see, e.g., Kong et al. (2009, Section 1), Kanzow & Fukushima (2006, Lemma 2.3), and Sun & Sun (2002, Corollary 4.15), respectively.\nAdditionally, we give the following new result, for the exponential cone, which may be of independent interest.\nLemma 3.2. The projection onto the exponential cone is semismooth.\nWe defer all proofs to the supplement.\nPutting the pieces together, the following lemma establishes that F , defined in (16), is (strongly) semismooth.\nLemma 3.3. When K, from the cone program (1), is the nonnegative orthant, second-order cone, or positive semidefinite cone, then the map F , defined in (16), is strongly semismooth; when K is the exponential cone, then the map F is semismooth.\nThe preceding results lay the groundwork for us to use a semismooth Newton method (Qi & Sun, 1993), applied to F , where we replace the usual Jacobian with any element of the generalized Jacobian (14); however, as many have observed (Khan & Barton, 2017), it is not always straightforward to compute an element of the generalized Jacobian. Fortunately, for us, we can just compute a subgradient of each row of F , as the following lemma establishes.\nLemma 3.4. The ith row of each element of the generalized Jacobian J (z) at z of the map F is just a subgradient of Fi, i = 1, . . . , 3k, at z.\nUsing the lemma, an element J ∈ R3k×3k of the generalized Jacobian of the map F ∈ R3k is then just\nJ =  I +Q −I −IJu I −I 0  , (17) where\nJu =  −I 0 0 I 0 0 I 0 00 −JPK∗ 0 0 I 0 0 JPK∗ 0 0 0 −` 0 0 1 0 0 `  (18) is a (k×3k)-dimensional matrix forming the second row of J ; ` equals 1 if ũτ − vκ ≥ 0 and 0 otherwise; and JPK∗ ∈ Rm×m is the Jacobian of the projection onto the dual cone K∗. Here and below, we use subscripts to select components, e.g., ũτ selects the τ -component of ũ from (5), and we write J to mean J(z), where z = (ũ, u, v) ∈ R3k."
+  }, {
+    "heading": "3.1. Final algorithm",
+    "text": "Later, we discuss computing JPK∗ , the Jacobian of the projection onto the dual cone K∗, for various cones K; these pieces let us compute an element J , given in (17) – (18), of the generalized Jacobian of the map F , defined in (16), which we use instead of the usual Jacobian, in a semismooth Newton method; below, we describe a way to scale the method to larger problems (i.e., values of n).\nTruncated, semismooth Newton method. The conjugate gradient method is, seemingly, an appropriate choice here, as it only approximately solves the Newton system\nJ∆ = −F, (19)\nwith variable ∆ ∈ R3k; unfortunately, in our case, J is nonsymmetric, so we appeal instead to the generalized minimum residual method (GMRES) (Saad & Schultz, 1986). We run GMRES until\n‖F + J∆̂‖2 ≤ ε‖F‖2, (20)\nwhere ∆̂ is the approximate solution from a particular iteration of GMRES, and ε is a user-defined tolerance; i.e., we run GMRES until the approximation error is acceptable. After GMRES computes an approximate Newton step, we use backtracking line search to compute a step size.\nNow recall, from Section 2, that ∆? = 0 is always a trivial solution to the Newton system (19), due to homogeneity; so, we initialize the ũτ , uτ , vκ-components of z to 1, which avoids converging to the trivial solution. Finally, we mention that when K, in the cone program (1), is the direct product of several proper cones, then Ju, in (18), simply consists of multiple such matrices, just stacked vertically.\nWe describe the entire method in Algorithm 1. The method has essentially no tuning parameters, since, for all the experiments, we just fix the maximum number of Newton iterations T = 100; the backtracking line search parameters α = 0.001, β = 0.5; and the GMRES tolerances ε(i) = 1/(i + 1), for each Newton iteration i. The cost of each Newton iteration is the number of backtracking line search iterations times the sum of two costs: the cost of projecting onto a dual cone and the cost of GMRES, i.e., O(max{n2,m2}), assuming GMRES returns early. Similarly, the cost of each ADMM iteration of SCS is the cost of projecting onto a dual cone plus O(max{n2,m2})."
+  }, {
+    "heading": "3.2. Jacobians of projections onto dual cones",
+    "text": "Here, we derive the Jacobians of projections onto the dual cones of the nonnegative orthant, second-order cone, positive semidefinite cone, and the exponential cone; here, we write JPK∗ to mean JPK∗ (z), where z = ũy − vs ∈ R m.\nAlgorithm 1 Newton-ADMM for convex optimization\nInput: problem data c ∈ Rn, A ∈ Rm×n, b ∈ Rm; cones K; maximum number of Newton iterations T ; backtracking line search parameters α ∈ (0, 1/2), β ∈ (0, 1); GMRES approximation tolerances (ε(i))Ti=1 Output: a solution to (2) initialize ũ(1) = u(1) = v(1) = 0 and ũ(1)τ = u(1)τ = v (1) κ = 1 // avoids trivial solution initialize z(1) = (ũ(1), u(1), v(1)) for i = 1, . . . , T do\ncompute J(z(i)), F (z(i)) // see (16), (17), Sec. 3.2 compute the Newton step ∆(i), i.e., by approximately solving J(z(i))∆(i) = −F (z(i)) using GMRES with approximation tolerance ε(i) // see (20) initialize t(i) = 1 // initialize step size t(i) while ‖F (z(i) + t(i)∆(i))‖22 ≥ (1− αt(i))‖F (z(i))‖22 do t(i) = βt(i) // for backtracking line search end while update z(i+1) = z(i) + t(i)∆(i)\nend for return the ux- divided by the uτ -components of z(T )\nNonnegative orthant. Since the nonnegative orthant is self-dual, we can simply find a subgradient of each component in (9), to get that JPK∗ is diagonal with, say, (JPK∗ )ii set to 1 if (ũy−vs)i ≥ 0 and 0 otherwise, for i = 1, . . . ,m.\nSecond-order cone. Write z = (z1, z2), z1 ∈ Rm−1, z2 ∈ R. The second-order cone is self-dual, as well, so we can find subgradients of (10), to get that\nJPK∗ =  0, ‖z1‖2 ≤ −z2 I, ‖z1‖2 ≤ z2 D, otherwise,\n(21)\nwhere D is a low-rank matrix (details in the supplement).\nPositive semidefinite cone. The projection map onto the (self-dual) positive semidefinite cone is matrix-valued, so computing the Jacobian is more involved. We leverage the fact that most implementations of GMRES need only the product JPK∗ (vecZ), provided by the below lemma using matrix differentials (Magnus & Neudecker, 1995); here, vec is the vectorization of a real, symmetric matrix Z. Lemma 3.5. Let Z = QΛQT be the eigenvalue decomposition of Z, and let Z̃ be a real, symmetric matrix. Then\nJPKpsd (vecZ)(vec Z̃) = vec ( (dQ) max(Λ, 0)QT\n+Q(dmax(Λ, 0))QT +Qmax(Λ, 0)(dQ)T ) ,\nwhere, here, the max is interpreted diagonally;\ndQi = (ΛiiI − Z)+Z̃Qi; [dmax(Λ, 0)]ii = I+(Λii)Q T i Z̃Qi;"
+  }, {
+    "heading": "Z+ denotes the pseudo-inverse of Z; and I+(·) is the indicator function of the nonnegative orthant.",
+    "text": "Exponential cone. Recall, from (12), that the projection onto the exponential cone is not analytic, so computing the Jacobian is much more involved, as well. The following lemma provides a Newton method for computing the Jacobian, using the KKT conditions for (12) and differentials. Lemma 3.6. Let z ∈ R3. Then JPK∗exp (z) = I − JPKexp (−z), where\nJPKexp (z) =  I, z ∈ Kexp −I, z ∈ K∗exp diag(1, I+(z2), I+(z3)), z1, z2 < 0;\notherwise, JPKexp (z) is a particular 3x3 matrix given in the supplement, due to space constraints."
+  }, {
+    "heading": "4. Convergence guarantees",
+    "text": "Here, we give some convergence results for NewtonADMM, the method presented in Algorithm 1.\nFirst, we show that, under standard regularity assumptions, the iterates (z(i))∞i=1 generated by Algorithm 1 are globally convergent, i.e., given some initial point, the iterates converge to a solution of F (z) = 0, where i is a Newton iteration counter. We break the statement (and proof) of the result up into two cases. Theorem 4.1 establishes the result, when the sequence of step sizes (t(i))∞i=1 converges to some number bounded away from zero and one. Theorem 4.2 establishes the result when the step sizes converge zero.\nBelow, we state our regularity conditions, which are similar to those given in Han et al. (1992); Martı́nez & Qi (1995); Facchinei et al. (1996); we elaborate in the supplement.\nA1. For Theorem 4.1, we assume lim supi→∞ t(i) < 1.\nA2. For Theorem 4.2, we assume lim supi→∞ t(i) = 0.\nA3. For Theorem 4.2, we assume (i) that the GMRES approximation tolerances ε(i) are uniformly bounded by ε as in ε(i) ≤ ε < 1 − α1/2, (ii) that (ε(i))∞i=1 → 0, and (iii) that ε(i) = O(‖F (z(i))‖2).\nA4. For Theorem 4.2, we assume, for every convergent sequence (z(i))∞i=1 → z, (γ(i))∞i=1 satisfying assumption (A2) above, and (∆(j))∞j=1 → ∆, that\nlim i,j→∞ ‖F (z(i) + γ(i)∆(j))‖22 − ‖F (z(i))‖22 γ(i)\n≤ lim i,j→∞ α1/2F (z(i))T F̂ (z(i),∆(j)),\nwhere, for notational convenience, we write\nF̂ (z(i),∆(j)) = J(z(i))∆(j).\nA5. For Theorem 4.2, we assume, for all z ∈ R3k and ∆ ∈ R3k, and for some C2 > 0, that\nC2‖∆‖2 ≤ ‖F̂ (z,∆)‖2.\nA6. For Theorem 4.3, we assume, for all z ∈ R3k, J(z) ∈ J (z), (i) that ‖J(z)‖2 ≤ C3, for some constant C3 > 0; and (ii) that every element of J (z) is invertible.\nThe two global convergence results are given below; the proofs are based on arguments in Martı́nez & Qi (1995, Theorem 5a), but we use fewer user-defined parameters, and a different line search method.\nTheorem 4.1 (Global convergence, with lim supi→∞ t\n(i) = t, for some 0 < t < 1). Assume condition (A1) stated above. Then limi→∞ F (z(i)) = 0.\nTheorem 4.2 (Global convergence, with lim supi→∞ t\n(i) = 0). Assume conditions (A2), (A3), (A4), and (A5) stated above. Suppose the sequence (z(i))∞i=1 converges to some z ∈ R3k. Then F (z) = 0.\nNext, we show, in Theorem 4.3, that when F is strongly semismooth, i.e., K is the nonnegative orthant, secondorder cone, or positive semidefinite cone, the iterates (z(i))∞i=1 generated by Algorithm 1 are locally quadratically convergent; the proof is similar to that of Facchinei et al. (1996, Theorem 3.2b), for semismooth maps.\nTheorem 4.3 (Local quadratic convergence). Assume condition (A6) stated above. Then the sequence of iterates (z(i))∞i=1 → z generated by Algorithm 1 converges quadratically, with F (z) = 0, for large enough i.\nWhen K is the exponential cone, i.e., F is semismooth, the iterates generated by Algorithm 1 are locally superlinearly convergent (Facchinei et al., 1996, Theorem 3.2b)."
+  }, {
+    "heading": "5. Numerical examples",
+    "text": "Next, we present an empirical evaluation of NewtonADMM, on several problems; in these, we directly compare to SCS, which Newton-ADMM builds on, as it is the most relevant benchmark for us (O’Donoghue et al. (2016) observe that, with an optimized implementation, SCS outperforms SeDuMi, as well as SDPT3). We evaluate, for both methods, the time taken to reach the solution as well as the optimal objective value; we obtained these by running an interior point method (Andersen et al., 2011) to high accuracy. Table 1 describes the problem sizes, for both the cone form of (1), as well as the familiar form that the problem is usually written in. Later, we also describe extending Newton-ADMM to accelerate any ADMM-based algorithm, applied to any convex problem; here, we compare to state-of-the-art baselines for specific problems."
+  }, {
+    "heading": "5.1. Random linear programs (LPs)",
+    "text": "We compare Newton-ADMM and SCS on a linear program\nminimize x∈Rp cTx subject to Gx = h, x ≥ 0,\nwhere c ∈ Rp, G ∈ RN×p, h ∈ RN are problem data, and the inequality is interpreted elementwise. To ensure primal feasibility, we generated a solution x? by sampling its entries from a normal distribution, then projecting onto the nonnegative orthant; we generated G (with p = 600, N = 300, soG is wide) by sampling entries from a normal distribution, then taking h = Gx?. To ensure dual feasibility, we generated dual solutions ν?, λ?, associated with the equality and inequality constraints, by sampling their entries from a normal and Uniform(0, 1) distribution, respectively; to ensure complementary slackness, we set c = −GT ν? + λ?. Finally, to put the linear program into the cone form of (1), and hence (2), we just take\nA =  G−G I  , b =  h−h 0  , K = Kno. The first column of Figure 1 presents the time taken, by both Newton-ADMM and SCS, to reach the optimal objective value, as well as to reach the solution; we see that Newton-ADMM outperforms SCS in both metrics."
+  }, {
+    "heading": "5.2. Minimum variance portfolio optimization",
+    "text": "We consider a minimum variance portfolio optimization problem (see, e.g., Khare et al. (2015); Ali et al. (2016)),\nminimize θ∈Rp\nθTΣθ subject to 1T θ = 1, (22)\nwhere, here, the problem data Σ ∈ Sp++ is the covariance matrix associated with the prices of p = 2, 500 assets; we generated Σ by sampling a positive definite matrix. The goal of the problem is to allocate wealth across p assets such that the overall risk is minimized; shorting is allowed. Putting the above problem into the cone form of (1) yields, for K, the direct product of the second-order cone and the nonnegative orthant (details in the supplement). The second column of Figure 1 shows the results; we again see that Newton-ADMM outperforms SCS.\n5.3. `1-penalized logistic regression\nWe consider `1-penalized logistic regression, i.e.,\nminimize θ∈Rp\n∑N i=1 log(1 + exp(yiXi·θ)) + λ‖θ‖1, (23)\nwhere, here, y ∈ RN here is a response vector; X ∈ RN×p is a data matrix, with Xi· denoting the ith row of X; and λ ≥ 0 is a tuning parameter. We generated p = 100 sparse underlying coefficients θ?, by sampling entries from a normal distribution, then setting ≈ 90% of the entries to zero; we generated X (with N = 1, 000) by sampling its entries from a normal distribution, then set y = Xθ? + δ, where δ is (additive) Gaussian noise. For simplicity, we set the tuning parameter λ = 1. Putting the above problem into the cone form of (1) yields, for K, the direct product of the exponential cone and the nonnegative orthant (details in the supplement); the problem size in cone form ends up being large (see Table 1). In the third column of Figure 1, we see that Newton-ADMM outperforms SCS."
+  }, {
+    "heading": "5.4. Robust principal components analysis (PCA)",
+    "text": "Finally, we consider robust PCA,\nminimize L,S∈RN×p ‖L‖∗ subject to ‖S‖1 ≤ λ, L+S = X, (24)\nwhere ‖ · ‖∗ and ‖ · ‖1 are the nuclear and elementwise `1- norms, respectively, andX ∈ RN×p, λ ≥ 0 (Candès et al., 2011, Equation 1.1). We generated a low-rank matrix L?, with rank ≈ 12N ; a sparse matrix S\n?, by sampling entries from Uniform(0, 1), then setting ≈ 90% of the entries to zero; and finally set X = L? + S?. We set λ = 1. The goal is to decompose the obsevations X into low-rank L and sparse S components. Putting the above problem into the cone form of (1) yields, for K, the direct product of the positive semidefinite cone and nonnegative orthant (details in the supplement). We see that Newton-ADMM and SCS are comparable, in the fourth column of Figure 1."
+  }, {
+    "heading": "5.5. Extension as a specialized solver",
+    "text": "Finally, we observe that the basic idea of treating the residuals of consecutive ADMM iterates as a fixed point iteration, and then finding a fixed point using a Newton method, is completely general, i.e., the same idea can be used to accelerate (virtually) any ADMM-based algorithm, for a convex problem. To illustrate, consider the lasso problem,\nminimize θ∈Rp (1/2)‖y −Xθ‖22 + λ‖θ‖1, (25)\nwhere y ∈ RN , X ∈ RN×p, λ ≥ 0; the ADMM recurrences (Parikh & Boyd, 2014, Section 6.4) are\nθ ← (XTX + ρI)−1(XT y + ρ(κ− µ)) (26) κ← Sλ/ρ(θ + µ) (27) µ← µ+ θ − κ, (28)\n10-12 10-11 10-10 10-9 10-8 10-7 10-6 10-5 10-4 10-3 10-2 10-1 100 101 102 S u b o p ti m a lit y\nSCS Newton-ADMM\n10-7\n10-6\n10-5\n10-4\n10-3\n10-2\nS u b o p ti m a lit y\nSCS Newton-ADMM\n10-12 10-10 10-8 10-6 10-4 10-2 100 102 104 106 108 1010 1012 1014 S u b o p ti m a lit y\nSCS Newton-ADMM\n10-8 10-6 10-4 10-2 100 102 104 106 108 1010 1012 1014 S u b o p ti m a lit y\nNewton-ADMM SCS\nwhere ρ > 0, κ, µ ∈ Rp are the tuning parameter and auxiliary variables, introduced by ADMM, respectively, and Sλ/ρ(·) is the soft-thresholding operator. The map F : R3p → R3p, from (16), with components set to the residuals of the ADMM iterates given in (26) – (28), is then\nF (z) =  (XTX + ρI)θ − (XT y + ρ(κ− µ))κ− Sλ/ρ(θ + µ) κ− θ  , where z = (θ, κ, µ) ∈ R3p, and we also changed coordinates, similar to before. An element J ∈ R3p×3p of the generalized Jacobian of F is then\nJ =  XTX + ρI −ρI ρI−D I D −I I 0  , whereD ∈ Rp×p is diagonal withDii set to 1 if |θi+µi| > λ/ρ and 0 otherwise, for i = 1, . . . ,m.\nIn the left panel of Figure 2, we compare a specialized Newton-ADMM applied directly to the lasso problem (25), with the ADMM algorithm for (26) – (28), a proximal gradient method (Beck & Teboulle, 2009), and a heavilyoptimized implementation of coordinate descent (Friedman et al., 2007); we set p = 400, N = 200, λ = 10, ρ = 1. Here, the specialized Newton-ADMM is quite competitive with these strong baselines; the specialized NewtonADMM outperforms Newton-ADMM applied to the cone program (2), so we omit the latter from the comparison. Stella et al. (2016) recently described a related approach.\nIn the right panel of Figure 2, we present a similar comparison, for sparse inverse covariance estimation, with the QUIC method of Hsieh et al. (2014); Newton-ADMM clearly performs best (p = N = 1, 000, λ = ρ = 1, details in the supplement)."
+  }, {
+    "heading": "6. Discussion",
+    "text": "We introduced Newton-ADMM, a new method for generic convex programming. The basic idea is use a nonsmooth Newton method to find a fixed point of the residuals of the consecutive ADMM iterates generated by SCS, a state-ofthe-art solver for cone programs; we showed that the basic idea is fairly general, and can be applied to accelerate (virtually) any ADMM-based algorithm. We presented theoretical and empirical support that Newton-ADMM converges rapidly (i.e., quadratically) to a solution, outperforming SCS across several problems.\nAcknowledgements. AA was supported by the DoE Computational Science Graduate Fellowship DE-FG0297ER25308. EW was supported by DARPA, under award number FA8750-17-2-0027. We thank Po-Wei Wang and the referees for a careful proof-reading."
+  }],
+  "year": 2017,
+  "references": [{
+    "title": "Generalized pseudolikelihood methods for inverse covariance estimation",
+    "authors": ["Ali", "Alnur", "Khare", "Kshitij", "Oh", "Sang-Yun", "Rajaratnam", "Bala"],
+    "venue": "Technical report,",
+    "year": 2016
+  }, {
+    "title": "Interior point methods for large-scale cone programming",
+    "authors": ["Andersen", "Martin", "Dahl", "Joachim", "Liu", "Zhang", "Vandenberghe", "Lieven"],
+    "venue": "Optimization for machine learning,",
+    "year": 2011
+  }, {
+    "title": "A fast iterative shrinkagethresholding algorithm for linear inverse problems",
+    "authors": ["Beck", "Amir", "Teboulle", "Marc"],
+    "venue": "SIAM Journal on Imaging Sciences,",
+    "year": 2009
+  }, {
+    "title": "Lectures on Modern Convex Optimization: Analysis, Algorithms, and Engineering Applications",
+    "authors": ["Ben-Tal", "Aharon", "Nemirovski", "Arkadi"],
+    "year": 2001
+  }, {
+    "title": "Convex Optimization",
+    "authors": ["Boyd", "Stephen", "Vandenberghe", "Lieven"],
+    "year": 2004
+  }, {
+    "title": "Distributed optimization and statistical learning via the alternating direction method of multipliers",
+    "authors": ["Boyd", "Stephen", "Parikh", "Neal", "Chu", "Eric", "Peleato", "Borja", "Eckstein", "Jonathan"],
+    "venue": "Foundations and Trends in Machine Learning,",
+    "year": 2011
+  }, {
+    "title": "Robust principal component analysis",
+    "authors": ["Candès", "Emmanuel", "Li", "Xiaodong", "Ma", "Yi", "Wright", "John"],
+    "venue": "Journal of the ACM,",
+    "year": 2011
+  }, {
+    "title": "Optimization and Nonsmooth Analysis",
+    "authors": ["Clarke", "Frank"],
+    "year": 1990
+  }, {
+    "title": "CVXPY: A Pythonembedded modeling language for convex optimization",
+    "authors": ["Diamond", "Steven", "Boyd", "Stephen"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2016
+  }, {
+    "title": "On the numerical solution of heat conduction problems in two and three space variables",
+    "authors": ["Douglas", "Jim", "Rachford", "Henry"],
+    "venue": "Transactions of the American Mathematical Society,",
+    "year": 1956
+  }, {
+    "title": "Measure Theory and Fine Properties of Functions",
+    "authors": ["Evans", "Lawrence", "Gariepy", "Ronald"],
+    "venue": "CRC Press,",
+    "year": 2015
+  }, {
+    "title": "A nonsmooth inexact Newton method for the solution of largescale nonlinear complementarity problems",
+    "authors": ["Facchinei", "Francisco", "Kanzow", "Christian"],
+    "venue": "Mathematical Programming,",
+    "year": 1997
+  }, {
+    "title": "Inexact Newton methods for semismooth equations with applications to variational inequality problems",
+    "authors": ["Facchinei", "Francisco", "Fischer", "Andreas", "Kanzow", "Christian"],
+    "year": 1996
+  }, {
+    "title": "Semismooth support vector machines",
+    "authors": ["Ferris", "Michael", "Munson", "Todd"],
+    "venue": "Mathematical Programming,",
+    "year": 2004
+  }, {
+    "title": "Pathwise coordinate optimization",
+    "authors": ["Friedman", "Jerome", "Hastie", "Trevor", "Höfling", "Holger", "Tibshirani", "Robert"],
+    "venue": "The Annals of Applied Statistics,",
+    "year": 2007
+  }, {
+    "title": "Disciplined Convex Programming",
+    "authors": ["Grant", "Michael"],
+    "venue": "PhD thesis, Stanford University,",
+    "year": 2004
+  }, {
+    "title": "Globally convergent Newton methods for nonsmooth equations",
+    "authors": ["Han", "Shih-Ping", "Pang", "Jong-Shi", "Rangaraj", "Narayan"],
+    "venue": "Mathematics of Operations Research,",
+    "year": 1992
+  }, {
+    "title": "Semismooth Newton methods and applications",
+    "authors": ["Hintermüller", "Michael"],
+    "venue": "Technical report,",
+    "year": 2010
+  }, {
+    "title": "QUIC: Quadratic approximation for sparse inverse covariance estimation",
+    "authors": ["Hsieh", "Cho-Jui", "Sustik", "Mátyás", "Dhillon", "Inderjit", "Ravikumar", "Pradeep"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2014
+  }, {
+    "title": "Newton-Type Methods for Optimization and Variational Problems",
+    "authors": ["Izmailov", "Alexey", "Solodov", "Mikhail"],
+    "year": 2014
+  }, {
+    "title": "Semismooth methods for linear and nonlinear second-order cone programs",
+    "authors": ["Kanzow", "Christian", "Fukushima", "Masao"],
+    "venue": "Technical report,",
+    "year": 2006
+  }, {
+    "title": "Generalized derivatives for hybrid systems",
+    "authors": ["Khan", "Kamil A", "Barton", "Paul"],
+    "venue": "IEEE Transactions on Automatic Control,",
+    "year": 2017
+  }, {
+    "title": "A convex pseudolikelihood framework for high dimensional partial correlation estimation with convergence guarantees",
+    "authors": ["Khare", "Kshitij", "Oh", "Sang-Yun", "Rajaratnam", "Bala"],
+    "venue": "Journal of the Royal Statistical Society: Series B,",
+    "year": 2015
+  }, {
+    "title": "Clarke generalized Jacobian of the projection onto symmetric cones",
+    "authors": ["Kong", "Lingchen", "Tunçel", "Levent", "Xiu", "Naihua"],
+    "venue": "Set-Valued and Variational Analysis,",
+    "year": 2009
+  }, {
+    "title": "YALMIP: A toolbox for modeling and optimization in MATLAB",
+    "authors": ["Lofberg", "Johan"],
+    "venue": "IEEE International Symposium on Computer Aided Control Systems Design,",
+    "year": 2004
+  }, {
+    "title": "Matrix Differential Calculus with Applications in Statistics and Econometrics",
+    "authors": ["Magnus", "Jan", "Neudecker", "Heinz"],
+    "year": 1995
+  }, {
+    "title": "Inexact Newton methods for solving nonsmooth equations",
+    "authors": ["Martı́nez", "José", "Qi", "Liqun"],
+    "venue": "Journal of Computational and Applied Mathematics,",
+    "year": 1995
+  }, {
+    "title": "Semismooth and semiconvex functions in constrained optimization",
+    "authors": ["Mifflin", "Robert"],
+    "venue": "SIAM Journal on Control and Optimization,",
+    "year": 1977
+  }, {
+    "title": "Interior Point Polynomial Algorithms in Convex Programming",
+    "authors": ["Nesterov", "Yurii", "Nemirovskii", "Arkadii"],
+    "year": 1994
+  }, {
+    "title": "Conic optimization via operator splitting and homogeneous self-dual embedding",
+    "authors": ["O’Donoghue", "Brendan", "Chu", "Eric", "Parikh", "Neal", "Boyd", "Stephen"],
+    "venue": "Journal of Optimization Theory and Applications,",
+    "year": 2016
+  }, {
+    "title": "The numerical solution of parabolic and elliptic differential equations",
+    "authors": ["Peaceman", "Donald", "Rachford", "Henry"],
+    "venue": "Journal of the Society for Industrial and Applied Mathematics,",
+    "year": 1955
+  }, {
+    "title": "A survey of some nonsmooth equations and smoothing",
+    "authors": ["Qi", "Liqun", "Sun", "Defeng"],
+    "venue": "Newton methods,",
+    "year": 1999
+  }, {
+    "title": "A nonsmooth version of Newton’s method",
+    "authors": ["Qi", "Liqun", "Sun", "Jie"],
+    "venue": "Mathematical Programming,",
+    "year": 1993
+  }, {
+    "title": "GMRES: A generalized minimal residual algorithm for solving nonsymmetric linear systems",
+    "authors": ["Saad", "Youcef", "Schultz", "Martin"],
+    "venue": "SIAM Journal on Scientific and Statistical Computing,",
+    "year": 1986
+  }, {
+    "title": "Algorithms for Unsymmetric Cone Optimization and an Implementation for Problems with the Exponential Cone",
+    "authors": ["Serrano", "Santiago"],
+    "venue": "PhD thesis, Stanford University,",
+    "year": 2015
+  }, {
+    "title": "A generalized Jacobian based Newton method for semismooth block triangular system of equations",
+    "authors": ["Śmietański", "Marek"],
+    "venue": "Journal of Computational and Applied Mathematics,",
+    "year": 2007
+  }, {
+    "title": "Forward-backward quasi-Newton methods for nonsmooth optimization problems",
+    "authors": ["Stella", "Lorenzo", "Themelis", "Andreas", "Patrinos", "Panagiotis"],
+    "venue": "Technical report,",
+    "year": 2016
+  }, {
+    "title": "Implementation of interior point methods for mixed semidefinite and second order cone optimization problems",
+    "authors": ["Sturm", "Jos"],
+    "venue": "Optimization Methods and Software,",
+    "year": 2002
+  }, {
+    "title": "Semismooth matrix-valued functions",
+    "authors": ["Sun", "Defeng", "Jie"],
+    "venue": "Mathematics of Operations Research,",
+    "year": 2002
+  }, {
+    "title": "Convex optimization in Julia",
+    "authors": ["Udell", "Madeleine", "Mohan", "Karanveer", "Zeng", "David", "Hong", "Jenny", "Diamond", "Steven", "Boyd", "Stephen"],
+    "venue": "In Proceedings of the 1st First Workshop for High Performance Technical Computing in Dynamic Languages,",
+    "year": 2014
+  }, {
+    "title": "Semismooth Newton Methods for Variational Inequalities and Constrained Optimization Problems in Function Spaces",
+    "authors": ["Ulbrich", "Michael"],
+    "year": 2011
+  }, {
+    "title": "sdpsol: A parser/solver for semidefinite programs with matrix structure",
+    "authors": ["Wu", "Shao-Po", "Boyd", "Stephen"],
+    "venue": "Advances in Linear Matrix Inequality Methods in Control,",
+    "year": 2000
+  }],
+  "id": "SP:f4455f914963d647f5ab125e12f9b11a0595e613",
+  "authors": [{
+    "name": "Alnur Ali",
+    "affiliations": []
+  }, {
+    "name": "Eric Wong",
+    "affiliations": []
+  }, {
+    "name": "J. Zico Kolter",
+    "affiliations": []
+  }],
+  "abstractText": "We introduce Newton-ADMM, a method for fast conic optimization. The basic idea is to view the residuals of consecutive iterates generated by the alternating direction method of multipliers (ADMM) as a set of fixed point equations, and then use a nonsmooth Newton method to find a solution; we apply the basic idea to the Splitting Cone Solver (SCS), a state-of-the-art method for solving generic conic optimization problems. We demonstrate theoretically, by extending the theory of semismooth operators, that NewtonADMM converges rapidly (i.e., quadratically) to a solution; empirically, Newton-ADMM is significantly faster than SCS on a number of problems. The method also has essentially no tuning parameters, generates certificates of primal or dual infeasibility, when appropriate, and can be specialized to solve specific convex problems.",
+  "title": "A Semismooth Newton Method for Fast, Generic Convex Programming"
+}

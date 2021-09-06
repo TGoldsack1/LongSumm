@@ -1,0 +1,158 @@
+{
+  "sections": [{
+    "text": "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing, pages 2271–2277, Austin, Texas, November 1-5, 2016. c©2016 Association for Computational Linguistics"
+  }, {
+    "heading": "1 Introduction",
+    "text": "Tree-to-tree machine translation models currently receive limited attention. However, we believe that using target-side syntax is important to achieve highquality translations between distant language pairs which require long range reorderings. Especially, using dependency trees on both source and target sides is promising for this purpose (Menezes and Quirk, 2007; Nakazawa and Kurohashi, 2010; Richardson et al., 2014). Tree-based translation models naturally realize word reorderings using the non-terminals or anchors for the attachment in the translation rules: therefore they do not need a re-\nordering model which string-based models require. For example, suppose we have a translation rule with the word alignment shown in Figure 1, it is easy to translate a new input sentence which has “図書館 (library)” instead of “公園 (park)” because we can accomplish it by simply substituting “library” for the target word “park” without considering the reordering. In this case, the source word “公園” and target word “park” work as the non-terminals.\nOn the other hand, it is problematic when we need to adjoin a subtree which is not presented in training sentences, which we call floating subtree in this paper. The floating subtrees are not necessarily adjuncts, but any words or phrases. For example, suppose the Japanese input sentence in Figure 1 has “ 突然 (suddenly)”, but the training corpus provides only a translation rule without the word. In this case we cannot directly use the rule for the translation because it does not know where to insert the translation of the floating word in the output. As another example, there is no context information available for the children of the OOV word in the input sentence, so we need some special process to translate them.\nPrevious work deals with this problem by using glue rules (Chiang, 2005) or limiting the dependency structures to be well-formed (Shen et al., 2008). Richardson et al. (2016) introduces the concept of flexible non-terminals. It provides multiple possible insertion positions for the floating subtree rather than fixed insertion positions. A possible insertion position must satisfy the following conditions:\n• it must be a child of the aligned word of the parent of the floating subtree\n2271\n• it must not violate the projectivity of the dependency tree\nFor example, possible insertion positions for the floating word “突然” are shown in gray arrows in Figure 1. Since “突然” is a child of “電話する”, and the translation of “電話する” is “called”, insertion positions must be a child of “called”. Also, insertion positions do not violate the projectivity of the target tree. Flexible non-terminals are analogous to the auxiliary tree of the tree adjoining grammars (TAG) (Joshi, 1985), which is successfully adopted in machine translation (DeNeefe and Knight, 2009). The difference is that TAG is defined on the constituency trees rather than the dependency trees.\nFlexible non-terminals are powerful to handle floating subtrees and it achieve better translation quality. However the computational cost of decoding becomes high even though they are compactly represented in the lattice form (Cromieres and Kurohashi, 2014). In our experiments, using flexible nonterminals causes the decoding to be 3 to 6 times slower than when they are not used. Flexible nonterminals increase the number of translation rules because the insertion positions are selected during the decoding. However, we think it is possible to restrict possible insertion positions or even select only one insertion position by looking at the tree structures on both sides.\nIn this paper, we propose a method to select the appropriate insertion position before decoding. This can not only reduce the decoding time but also improve the translation quality because of reduced search space."
+  }, {
+    "heading": "2 Insertion Position Selection",
+    "text": "We assume that correct insertion positions can be determined before decoding, using the word to be inserted (I) with the context on the source side and the context of the insertion positions on the target side. On the source side, we use the parent of I (Ps) and the distance of I from Ps (Ds). On the target side, we use the previous (Sp) and next (Sn) sibling of the insertion position, the parent of the insertion position (Pt) and the distance of the insertion position from Pt (Dt). The distances are calculated on the siblings rather than the words in the sentence, and it is a positive or negative value if the insertion\nposition is to the left or to the right of the parent respectively.\nTaking the insertion position between “park” and “yesterday” in Figure 1 as an example, I = “突然”, Ps = “電話した”, Ds = +2, Sp = “park”, Sn = “yesterday”, Pt = “called” and Dt = -3. In cases where Sp or Sn is empty, we use special words “[[LEFTSTART]]”, “[[LEFT-END]]”, “[[RIGHT-START]]” and “[[RIGHT-END]]”. In the case of “yesterday” in Figure 1, Sp = “in” and Sn = “[[RIGHT-END]]”. These clues are fed into the neural network model to solve the insertion position selection problem."
+  }, {
+    "heading": "2.1 Neural Network Model",
+    "text": "Figure 2 shows the neural network model for the insertion position selection. Given an insertion position candidate with an index k, the words (I , Ps, Skp , S k n, Pt) are first converted into vector representations through the same three embedding layers: surface form embedding (200 dimensions.), partof-speech embedding (10 dimensions) and dependency type (or phrase category) embedding (10 dimensions), and they are concatenated to create the 220-dimension vectors. The word embedding is a randomly initialized transformation from an one-hot vector to a 200 or 10-dimensional vector, and it is learned during the whole network training.\nUsing these words and the distances, we create source and target context vectors cks and c k t which represent the information of source and target sides, respectively. The distances (integer values) are directly inputted to the network. Then the context vec-\ntor of the given insertion position cki is created using cks and c k t . Finally we get the score of the given insertion position sk from cki . These vectors are calculated as follows:\ncks = tanh(Wcs [I; Ps; Ds]) ckt = tanh(Wct [Sp; Sn; Pt; D k t ]) cki = tanh(Wci [c k s ; c k t ]) sk = Wsc k i\nwhere “;” means concatenation of the vectors. The size of cks , c k t and c k i is 100 in our experiments.\nThe same network is applied to all the other insertion positions and get their scores. Finally the scores are normalized by the softmax function, and the loss is calculated by the softmax cross-entropy as the loss function. All the links between layers are fully-connected. We use dropout (50%) to avoid overfitting."
+  }, {
+    "heading": "2.2 Training Data Generation",
+    "text": "The data for training the neural network model can be automatically generated from the word-aligned parallel corpus with dependency parses in both sides by Algorithm 1. The ALIGNMENT function returns the aligned word in the target tree for the given source word1, and the ISPARENTCHILD function returns TRUE if Pt is the parent of Ct.\n1In case of the multiple word alignment, we only use the root word of them in both source and target sides.\nAlgorithm 1 Training Data Generation for NN for all Ps ∈ words in source tree do\nThe GENERATEDATA function generates one instance of training data to predict the position of Ct from Ps, Cs and Pt with their contexts by removing Ct in the target tree. The position where Ct exists is regarded as the correct insertion position, and others as incorrect insertion positions. Note that Cs corresponds to I in Figure 2."
+  }, {
+    "heading": "2.3 Insertion Position Selection in Translation",
+    "text": "Once the neural network model is trained, it can be applied to select the most appropriate insertion positions in the translation rules for the given floating subtree by looking at the score of each insertion position. Translation rules only contain part of the original parallel sentence in most of the cases. This means that the context used for selecting the insertion position is different from that in the training data for the neural network. For example, if the input sentence does not have “公園で (in the park)” in Figure 1, the number of possible insertion positions is 6 and we do not use “in” as the context. However, this is not so problematic because similar or same context may appear in the different part of the corpus."
+  }, {
+    "heading": "3 Experiments",
+    "text": "We conducted two kinds of experiments: the insertion position selection and translation. We used ASPEC (Nakazawa et al., 2016) as the dataset and the numbers of the sentences of the corpus are shown in Table 1. The Japanese morphological analyzer (Kurohashi et al., 1994) and dependency parser (Kurohashi and Nagao, 1994) are used for Japanese\nsentences. English sentences are first parsed by nlparser (Charniak and Johnson, 2005) and then converted into word dependency trees using Collins’ head percolation table (Collins, 1999). We used Chinese word segmenter KKN (Shen et al., 2014) and dependency parser SKP (Shen et al., 2012) for Chinese sentences. The supervised word alignment Nile (Riesa et al., 2011) was used.\nWe used a state-of-the-art dependency tree-to-tree decoder (Richardson et al., 2014) with the default settings. The neural network is constructed and trained using the Chainer (Tokui et al., 2015)."
+  }, {
+    "heading": "3.1 Insertion Position Selection",
+    "text": "The training, development and test data for the neural network is automatically generated by the procedure explained in Section 2.2. The size of the generated data from the ASPEC and the average number of insertion positions for each floating subtree are shown in Table 2. We trained the model for 100 epochs and used the best model on the development data for testing. The vocabulary size for the surface form was 50,000.\nFor comparison, we also tried the logistic regression to predict the correct insertion positions. Because our training data is huge, we used Multi-core LIBLINEAR2 with L2-regularized logistic regression (primal) solver. The format of training instances are: one-hot (binary) vectors for surface form, POS and dependency type, and distances scaled to [0, 1]. We first find the best value for the C parameter, then train the model. The best insertion position is selected using the estimated probabilities for each insertion position.\nThe experimental results are also shown in Table 2https://www.csie.ntu.edu.tw/∼cjlin/libsvmtools/multicore-\nliblinear/\n2. We evaluated the results by the mean loss of the model and the accuracy on the test data. The result shows that our model can select the correct insertion position with very high accuracy for every language pair while the classical logistic regression model cannot. This supports our claim stated in the beginning of Section 2.\nX → Ja is easier and achieved slightly better accuracy than the reverse direction because Japanese is a head-final language and all children are generally put on the left of their parents. There are some cases judged as incorrect but acceptable insertion positions, and hence the true accuracies are higher than the ones reported above. We also investigated the top-2 accuracy and found that it is above 99.0% for Ja → X and 99.5% for X → Ja.\nTable 3 shows the detailed result of Ja rightarrow En experiment. The number of insertion-position is at least 2 (left/right of the parent) and it is easy to solve (more than 99% accuracy). 3 is a situation where the parent has one child, and it is still not so difficult (97-98% accuracy). About 70% of the test data have only 2 or 3 insertion-positions. Difficult cases are the sentences which have many adjuncts as in Figure 1, but we used the scientific paper corpora, where not so many adjuncts appear."
+  }, {
+    "heading": "3.2 Translation",
+    "text": "We conducted translation experiment using the ASPEC in 3 settings:\n• No Flexible: not using the flexible nonterminals and using simple glue rules as in the baseline model of (Richardson et al., 2016) 3 • Baseline: using the flexible non-terminals without the insertion position selection • Proposed: using only the most appropriate insertion position for the flexible non-terminals\nWe also report the translation quality of conventional models for comparison: phrase-based SMT (PBSMT) and hierarchical phrase-based SMT (Hiero). We used the default settings of Moses except -distortion-limit=20 for PBSMT.\nThe translation quality is evaluated by the automatic evaluation measures BLEU (Papineni et al.,\n352.5% of all the translation rules require glue rule, but it is applied to 22.6% of the rules actually used in the translation.\n2002) and RIBES (Isozaki et al., 2010) with the significance testing by bootstrap resampling (Koehn, 2004). RIBES is more sensitive to word order than BLEU, so we expect an improvement in RIBES. We also investigated relative decoding time compared to the No Flexible setting. Note that we used the word “decoding” for only exploring the search space, and it does not include constructing the search space (as the table lookup in Phrase-based SMT). Our whole translation process is:\n1. translation rule extraction 2. insertion-position selection 3. decoding\nAt the time of the second step, we have all the translation rules applicable to the input sentence. The computation time for each step is 3 ≫ 1 ≫ 2 so we only focus on the time for step 3 in the experiments (the computation time for step 2 is negligibly small).\nThe results are shown in Table 4. The Proposed method achieved significantly better automatic evaluation scores than the Baseline for all the language pairs except the BLEU score of En → Ja direction. Also, the decoding time is reduced by about 60% relative to that of the Baseline.\nOur tree-based model is better than the conventional models except C → J, where the accuracy of\nChinese parsing for the input sentences has a bad effect."
+  }, {
+    "heading": "4 Conclusion",
+    "text": "In this paper we have proposed a neural network based insertion position selection model to reduce the computational cost of the decoding for dependency tree-to-tree translation with flexible nonterminals. The model successfully finds the appropriate insertion position from the candidates and it leads to faster translation speed and better translation quality due to the reduced search space.\nCurrently, we use only words as the context but it seems promising to use subtrees as well. For example, using the information of the subtree “in the park” is more informative than using only “in” in Figure 1. This is especially important for Japanese as the target language because children of verbs are often case markers and they do not provide enough information when selecting the appropriate insertion position. It is possible to adopt existing models of creating vector representation of dependency subtrees such as the model using recursive neural networks (Liu et al., 2015) and convolutional neural networks (Mou et al., 2015)."
+  }],
+  "year": 2016,
+  "references": [{
+    "title": "Coarse-tofine n-best parsing and maxent discriminative reranking",
+    "authors": ["Eugene Charniak", "Mark Johnson."],
+    "venue": "Proceedings of the 43rd Annual Meeting of the Association for Computational Linguistics (ACL’05), pages 173–180.",
+    "year": 2005
+  }, {
+    "title": "A hierarchical phrase-based model for statistical machine translation",
+    "authors": ["David Chiang."],
+    "venue": "Proceedings of the 43rd Annual Meeting of the Association for Computational Linguistics (ACL’05), pages 263–270. Association for Computational Linguistics.",
+    "year": 2005
+  }, {
+    "title": "Head-Driven Statistical Models for Natural Language Parsing",
+    "authors": ["Michael Collins."],
+    "venue": "Ph.D. thesis, University of Pennsylvania.",
+    "year": 1999
+  }, {
+    "title": "Translation rules with right-hand side lattices",
+    "authors": ["Fabien Cromieres", "Sadao Kurohashi."],
+    "venue": "Proceedings of the 2014 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 577–588. Association for Computational Linguistics.",
+    "year": 2014
+  }, {
+    "title": "Synchronous tree adjoining machine translation",
+    "authors": ["Steve DeNeefe", "Kevin Knight."],
+    "venue": "Proceedings of the 2009 Conference on Empirical Methods in Natural Language Processing, pages 727–736. Association for Computational Linguistics.",
+    "year": 2009
+  }, {
+    "title": "Automatic evaluation of translation quality for distant language pairs",
+    "authors": ["Hideki Isozaki", "Tsutomu Hirao", "Kevin Duh", "Katsuhito Sudoh", "Hajime Tsukada."],
+    "venue": "Proceedings of the 2010 Conference on Empirical Methods in Natural Language Processing, EMNLP",
+    "year": 2010
+  }, {
+    "title": "Tree adjoining grammars: How much context-sensitivity is required to provide reasonable structural descriptions? In D",
+    "authors": ["A.K. Joshi."],
+    "venue": "R. Dowty, L. Karttunen, and A. M. Zwicky, editors, Natural Language Parsing: Psychological, Computational, and Theoret-",
+    "year": 1985
+  }, {
+    "title": "Statistical significance tests for machine translation evaluation",
+    "authors": ["Philipp Koehn."],
+    "venue": "Dekang Lin and Dekai Wu, editors, Proceedings of EMNLP 2004, pages 388–395, Barcelona, Spain, July. Association for Computational Linguistics.",
+    "year": 2004
+  }, {
+    "title": "A syntactic analysis method of long Japanese sentences based on the detection of conjunctive structures",
+    "authors": ["Sadao Kurohashi", "Makoto Nagao."],
+    "venue": "Computational Linguistics, 20(4):507–534.",
+    "year": 1994
+  }, {
+    "title": "Improvements of Japanese morphological analyzer JUMAN",
+    "authors": ["Sadao Kurohashi", "Toshihisa Nakamura", "Yuji Matsumoto", "Makoto Nagao."],
+    "venue": "Proceedings of The International Workshop on Sharable Natural Language, pages 22–28.",
+    "year": 1994
+  }, {
+    "title": "A dependency-based neural network for relation classification",
+    "authors": ["Yang Liu", "Furu Wei", "Sujian Li", "Heng Ji", "Ming Zhou", "Houfeng WANG."],
+    "venue": "Proceedings of the 53rd Annual Meeting of the Association for Computational Linguistics and the 7th Interna-",
+    "year": 2015
+  }, {
+    "title": "Proceedings of the Second Workshop on Statistical Machine Translation, chapter Using Dependency Order Templates to Improve Generality in Translation, pages 1–8",
+    "authors": ["Arul Menezes", "Chris Quirk"],
+    "year": 2007
+  }, {
+    "title": "Discriminative neural sentence modeling by tree-based convolution",
+    "authors": ["Lili Mou", "Hao Peng", "Ge Li", "Yan Xu", "Lu Zhang", "Zhi Jin."],
+    "venue": "Proceedings of the 2015 Conference on Empirical Methods in Natural Language Processing, pages 2315–2325, Lisbon, Por-",
+    "year": 2015
+  }, {
+    "title": "Fully syntactic ebmt system of kyoto team in ntcir-8",
+    "authors": ["Toshiaki Nakazawa", "Sadao Kurohashi."],
+    "venue": "In Proceedings of the 8th NTCIR Workshop Meeting on Evaluation of Information Access Technologies (NTCIR-8), pages 403–410.",
+    "year": 2010
+  }, {
+    "title": "ASPEC: Asian scientific paper excerpt corpus",
+    "authors": ["Toshiaki Nakazawa", "Manabu Yaguchi", "Kiyotaka Uchimoto", "Masao Utiyama", "Eiichiro Sumita", "Sadao Kurohashi", "Hitoshi Isahara."],
+    "venue": "Proceedings of the Ninth International Conference on Language Re-",
+    "year": 2016
+  }, {
+    "title": "Bleu: a method for automatic evaluation of machine translation",
+    "authors": ["Kishore Papineni", "Salim Roukos", "Todd Ward", "WeiJing Zhu."],
+    "venue": "ACL, pages 311–318.",
+    "year": 2002
+  }, {
+    "title": "Kyotoebmt: An example-based dependency-to-dependency translation framework",
+    "authors": ["John Richardson", "Fabien Cromières", "Toshiaki Nakazawa", "Sadao Kurohashi."],
+    "venue": "Proceedings of 52nd Annual Meeting of the Association for Computational Linguistics: System",
+    "year": 2014
+  }, {
+    "title": "Flexible non-terminals for dependency tree-to-tree reordering",
+    "authors": ["John Richardson", "Fabien Cromierès", "Toshiaki Nakazawa", "Sadao Kurohashi."],
+    "venue": "Proceedings of the 2016 Conference of the North American Chapter of the Association for Computational Linguis-",
+    "year": 2016
+  }, {
+    "title": "Feature-rich language-independent syntax-based alignment for statistical machine translation",
+    "authors": ["Jason Riesa", "Ann Irvine", "Daniel Marcu."],
+    "venue": "Proceedings of the 2011 Conference on Empirical 2276",
+    "year": 2011
+  }, {
+    "title": "A new string-to-dependency machine translation algorithm with a target dependency language model",
+    "authors": ["Libin Shen", "Jinxi Xu", "Ralph M Weischedel."],
+    "venue": "Association for Computational Linguistics.",
+    "year": 2008
+  }, {
+    "title": "A reranking approach for dependency parsing with variable-sized subtree features",
+    "authors": ["Mo Shen", "Daisuke Kawahara", "Sadao Kurohashi."],
+    "venue": "Proceedings of 26th Pacific Asia Conference on Language Information and Computing, pages 308–317.",
+    "year": 2012
+  }, {
+    "title": "Chinese morphological analysis with character-level pos tagging (short paper)",
+    "authors": ["Mo Shen", "Hongxiao Liu", "Daisuke Kawahara", "Sadao Kurohashi."],
+    "venue": "Proceedings of the 52nd Annual Meeting of the Association for Computational Linguistics (ACL2014), Balti-",
+    "year": 2014
+  }, {
+    "title": "Chainer: a next-generation open source framework for deep learning",
+    "authors": ["Seiya Tokui", "Kenta Oono", "Shohei Hido", "Justin Clayton."],
+    "venue": "Proceedings of Workshop on Machine Learning Systems (LearningSys) in The Twenty-ninth Annual Conference on Neural Infor-",
+    "year": 2015
+  }],
+  "id": "SP:8e0dccbba2aa4e58b79b419a596775a6fba86a26",
+  "authors": [{
+    "name": "Toshiaki Nakazawa",
+    "affiliations": []
+  }, {
+    "name": "Sadao Kurohashi",
+    "affiliations": []
+  }],
+  "abstractText": "Dependency tree-to-tree translation models are powerful because they can naturally handle long range reorderings which is important for distant language pairs. The translation process is easy if it can be accomplished only by replacing non-terminals in translation rules with other rules. However it is sometimes necessary to adjoin translation rules. Flexible non-terminals have been proposed as a promising solution for this problem. A flexible non-terminal provides several insertion position candidates for the rules to be adjoined, but it increases the computational cost of decoding. In this paper we propose a neural network based insertion position selection model to reduce the computational cost by selecting the appropriate insertion positions. The experimental results show the proposed model can select the appropriate insertion position with a high accuracy. It reduces the decoding time and improves the translation quality owing to reduced search space.",
+  "title": "Insertion Position Selection Model for Flexible Non-Terminals in Dependency Tree-to-Tree Machine Translation"
+}

@@ -1,0 +1,224 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Methods for reasoning and making decisions under uncertainty are an important building block of accurate, reliable, and interpretable machine learning systems. In many applications — ranging from supply chain planning to medical diagnosis to autonomous driving — faithfully assessing uncertainty can be as important as obtaining high accuracy. This paper explores uncertainty estimation over continuous variables in the context of modern deep learning models.\nBayesian approaches provide a general framework for dealing with uncertainty (Gal, 2016). Bayesian methods define a probability distribution over model parameters and derive uncertainty estimates by intergrating over all possi-\n1Stanford University, Stanford, California 2Afresh Technologies, San Francisco, California. Correspondence to: Volodymyr Kuleshov <volodymyr@afreshtechnologies.com>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\nble model weights. Recent advances in variational inference have greatly increased the scalability and usefulness of these approaches (Blundell et al., 2015).\nIn practice, however, Bayesian uncertainty estimates often fail to capture the true data distribution (Lakshminarayanan et al., 2017) — e.g., a 90% posterior credible interval generally does not contain the true outcome 90% of the time (Figure 1). In such cases, we say that the model is miscalibrated. This problem arises because of model bias: a predictor may not be sufficiently expressive to assign the right probability to every credible interval, just as it may not be able to always assign the right label to a datapoint.\nRecently, Gal et al. (2017) and Lakshminarayanan et al. (2017) proposed uncertainty estimation techniques for deep neural networks, which include ensemble methods, heteroscedastic regression, and concrete dropout. These methods require modifying the model and may not always produce perfectly calibrated forecasts. Calibration has been extensively studied in the weather forecasting literature\n(Gneiting and Raftery, 2005); however these techniques tend to be specialized and difficult to generalize beyond applications in climate science.\nAn alternative way to calibrate models has been explored in the support vector classification literature. These techniques — of which Platt scaling (Platt, 1999) is the most well-known — recalibrate the predictions of a pre-trained classifier in a post-processing step. As a result, these methods are classifier-agnostic and also typically very simple.\nHere, we propose a new procedure for recalibrating any regression algorithm that is inspired by Platt scaling for classification. When applied to Bayesian and probabilistic deep learning models, it always produces calibrated credible intervals given a sufficient amount of i.i.d. data.\nWe evaluate our proposed algorithm on a range of Bayesian models, including Bayesian linear regression as well as feedforward and recurrent Bayesian neural networks. Our method consistently produces well-calibrated confidence estimates, which are in turn useful for several tasks in time series forecasting and model-based reinforcement learning.\nContributions. In summary, we introduce a simple technique for recalibrating the output of any regression algorithm, extending recalibration methods such as Platt scaling that were previously applicable only to classification. We then use this technique to solve an important problem in Bayesian deep learning: the miscalibration of credible intervals. We show that our results are useful in time series forecasting and in model-based reinforcement learning."
+  }, {
+    "heading": "2. Calibrated Classification",
+    "text": "This section is a concise overview of calibrated classification (Platt, 1999), and offers a reinterpretation of existing\ntechniques that will be useful for deriving an extension to the regression and Bayesian settings in the next section.\nNotation. We are given a labeled dataset xt, yt ∈ X ×Y for t = 1, 2, ..., T of i.i.d. realizations of random variables X,Y ∼ P, where P is the data distribution. Given xt, a forecaster H : X → (Y → [0, 1]) outputs a probability distribution Ft(y) targeting the label yt. When Y is continuous, Ft is a cumulative probability distribution (CDF). In this section, we assume for simplicity that Y = {0, 1}."
+  }, {
+    "heading": "2.1. Calibration",
+    "text": "Intuitively, calibration means that whenever a forecaster assigns a probability of 0.8 to an event, that event should occur about 80% of the time. In binary classification, we have Y = {0, 1}, and we say that H is calibrated if∑T\nt=1 ytI{H(xt) = p}∑T t=1 I{H(xt) = p} → p for all p ∈ [0, 1] (1)\nas T → ∞. Here, for simplicity, we use H(xt) to denote the probability of the event yt = 1. When the xt, yt are i.i.d. realizations of random variables X,Y ∼ P, a sufficient condition for calibration is:\nP(Y = 1 | H(X) = p) = p for all p ∈ [0, 1]. (2)\nCalibration vs. Sharpness. By itself, calibration is not enough to guarantee a useful forecast. For example, a forecaster that always predicts E[Y ] is calibrated , but not very useful. Good predictions also need to be sharp, which intuitively means that probabilities should be close to zero or one. Note that an ideal forecaster is both calibrated and predicts outcomes with 100% confidence."
+  }, {
+    "heading": "2.2. Training Calibrated Classifiers",
+    "text": "Most classification algorithms — including logistic regression, Naive Bayes, and support vector machines (SVMs) — are not calibrated out-of-the-box. Recalibration methods train an auxiliary model R : [0, 1] → [0, 1] on top of a pre-trained forecaster H such that R ◦H is calibrated.\nEstimating a Probability Distribution. When the xt, yt are sampled i.i.d. from P, choosing R(p) = P(Y = 1 | H(X) = p) yields a well-calibrated classifier R ◦ H , according to the definition in Equation 2. Thus, recalibration can be framed as estimating the above conditional density.\nPlatt scaling (Platt, 1999) — one of the most widely used recalibration techniques — can be seen as approximating P(Y = 1 | H(X) = p) with a sigmoid (a valid assumption, in practice, when dealing with SVMs). Other recalibration methods fit this density with isotonic regression or kernel density estimation.\nProjections and Features. A base classifier H : X → Φ may also output features φ ∈ Φ ⊆ Rd that do not correspond to probabilities. For example, an SVM outputs the margin between xt and the separating hyperplane. Such non-probabilistic H can be similarly recalibrated by fitting R : Φ→ [0, 1] to P(Y = 1 | H(X) = φ) (see Figure 2).\nTo gain further intuition, note thatH can be seen as projecting the xt into a low-dimensional space Φ (e.g., the SVM margin) such that the data is well separated in Φ. The recalibrator R : Φ → [0, 1] then performs density estimation to learn the Bayes-optimal classifier P(Y = 1 | H(X) = φ). When φ is low-dimensional, this is tractable; furthermore R ◦H is accurate because the classes Y are well-separated in φ. Because P(Y = 1 | H(X) = φ) is Bayes-optimal, R ◦H is also calibrated.\nDiagnostic Tools. The calibration of a classifier is typically assessed using calibration curves (Figure 2). Given a dataset {(xt, yt)}Tt=1, let pt = H(xt) ∈ [0, 1] be the forecasted probability. We group the pt into intervals Ij for j = 1, 2, ...,m that form a partition of [0, 1] (e.g., [0, 0.1], (0.1, 0.2], etc.). A calibration curve plots the predicted average pj = T−1j ∑ t:pt∈Ij pt in each interval Ij against the\nobserved empirical average pj = T−1j ∑\nt:pt∈Ij yt, where Tj = |{t : pt ∈ Ij}|. Perfect calibration corresponds to a straight line.\nWe can also assess sharpness by looking at the distribution of model predictions. When forecasts are sharp, most predictions are close to 0 or 1; unsharp forecasters make predictions closer to 0.5."
+  }, {
+    "heading": "3. Calibrated Regression",
+    "text": "In this section, we extend recalibration methods for classification to to regression (Y = R), and apply the resulting algorithm to Bayesian deep learning models. Recall that in regression, the forecaster H outputs at each step t a CDF Ft targeting yt. We will use F−1t : [0, 1] → Y to denote the quantile function F−1t (p) = inf{y : p ≤ Ft(y)}."
+  }, {
+    "heading": "3.1. Calibration",
+    "text": "Intuitively, in a regression setting, calibration means than yt should fall in a 90% confidence interval approximately 90% of the time. Formally, we say that the forecaster H is calibrated if∑T\nt=1 I{yt ≤ F −1 t (p)}\nT → p for all p ∈ [0, 1] (3)\nas T →∞. In other words, the empirical and the predicted CDFs should match as the dataset size goes to infinity.\nWhen the xt, yt are i.i.d. realizations of random variables X,Y ∼ P, a sufficient condition for this is\nP(Y ≤ F−1X (p)) = p for all p ∈ [0, 1], (4)\nwhere we use FX = H(X) to denote the forecast at X . This formulation is related to the notion of probabilistic calibration of Gneiting et al. (2007).\nNote that our definition also implies that∑T t=1 I{F −1 t (p1) ≤ yt ≤ F−1t (p2)}\nT → p2 − p1 (5)\nfor all p1, p2 ∈ [0, 1] as T → ∞. This extends our notion of calibration to general confidence intervals.\nCalibration and Sharpness. As in classification, calibration by itself is not sufficient to produce a useful forecast. For example, it is easy to see that the forecast F (y) = P(Y ≤ y) is calibrated; however it does even account for the features X and thus cannot be accurate.\nIn order to be useful, forecasts must also be sharp. In a regression context, this means that the confidence intervals should all be as tight as possible around a single value. More formally, we want the variance var(Ft) of the random variable whose CDF is Ft to be small."
+  }, {
+    "heading": "3.2. Training Calibrated Regression Models",
+    "text": "We propose a simple recalibration scheme for producing calibrated forecasts that is closely inspired by classification techniques such as Platt scaling. Given a pre-trained forecaster H , we train an auxiliary model R : [0, 1] → [0, 1] such that the forecasts R ◦ Ft are calibrated (Algorithm 1).\nThis approach is simple, produces calibrated forecasts given enough i.i.d. data, and can be applied to any regression model, including recent Bayesian deep learning algorithms. Existing methods (Gal et al., 2017; Lakshminarayanan et al., 2017) require modifying the forecaster and may not produce calibrated forecasts even given large amounts of data.\nAlgorithm 1 Recalibration of Regression Models. Input: Uncalibrated model H : X → (Y → [0, 1]) and calibration set S = {(xt, yt)}Tt=1. Output: Auxiliary recalibration model R : [0, 1]→ [0, 1].\n1. Construct a recalibration dataset: D = {( [H(xt)](yt), P̂ ([H(xt)](yt)) )}T\nt=1 ,\nwhere\nP̂ (p) = |{yt | [H(xt)](yt) ≤ p, t = 1, ..., T}|/T.\n2. Train a model R (e.g., isotonic regression) on D.\nEstimating a Probability Distribution. Note that setting every forecast Ft to R ◦ Ft where R(p) := P(Y ≤ F−1X (p)) yields a perfectly calibrated forecaster according to the definition in Equation 4. Thus, recalibration can be formulated as estimating the above cumulative probability distribution. This is similar to the classification setting, where we needed to estimate the conditional density P(Y = 1 | H(X) = p).\nThe intuition behind recalibration is that for any confidence level p, we may estimate from data the true probability P(Y ≤ F−1X (p)) of a random Y falling in the credible region (−∞, F−1X (p)] below the p-th quantile of FX . For example, we may count the fraction of points (xt, yt) in a dataset that have this property or fit a regressor R : [0, 1] → [0, 1] to P(Y ≤ F−1X (p)), such that R(p) estimates this probability for every p. Then, given a new forecast F , we may adjust the predicted probability F (y) for the credible interval (−∞, y] to the true calibrated probability estimated empirically from data and given by R ◦ F (y). For example, if p = 95%, but only 80/100 observed yt fall below the 95% quantile of Ft, then we adjust the 95% quantile to 80% (see Figure 3).\nSpecifically, given a dataset {(xt, yt)}Tt=1, we may learn P(Y ≤ F−1X (p)) by fitting any regression algorithm to the recalibration set defined by {Ft(yt), P̂ (Ft(yt))}Tt=1, where\nP̂ (p) = |{yt | Ft(yt) ≤ p, t = 1, ..., T}|\nT (6)\ndenotes the fraction of the data for which yt lies below the p-th quantile of Ft.\nWe recommend using isotonic regression (Niculescu-Mizil and Caruana, 2005) as the regression model on this dataset. This method accounts for the fact that the true function P(Y ≤ F−1X (p)) is monotonically increasing; it is also non-parametric, hence can learn the true distribution given enough i.i.d. data.\nAs in classifier recalibration, it is advisable to fit R on a separate calibration set in order to reduce overfitting. Alternatively, one may break the data into K folds, and train K models in a way that is reminiscent of cross-validation: the hold-out fold serves as the calibration set and the model is trained on the remaining folds; at prediction time, the output is the average of the K models."
+  }, {
+    "heading": "3.3. Recalibrating Bayesian Models",
+    "text": "Probabilistic forecasts Ft are often obtained using Bayesian methods such as Bayesian neural networks or Gaussian processes. In practice, one often uses the mean and the variance µ, σ2 of dropout samples from a Bayesian neural network evaluated at xt to obtain a principled estimate of the predictive distribution over yt (Gal and Ghahramani, 2016a). The result is a probabilistic forecast Ft(xt) taking the form of a Gaussian N (µ(xt), σ2(xt)).\nHowever, if the true data distribution P(Y | X) is not Gaussian, uncertainty estimates derived from the Bayesian model will not be calibrated (see Figures 1 and 3). Algorithm 1 recalibrates uncertainty estimates from any blackbox Bayesian model, making them accurate and useful."
+  }, {
+    "heading": "3.4. Features for Recalibration",
+    "text": "We may also use Algorithm 1 to recalibrate nonprobabilistic forecasters, just as Platt scaling recalibrates SVMs. We may generalize the forecast to any increasing function F (y) : Y → Φ where Φ ⊆ R defines a “feature” that correlates with the confidence of the classifier. We transform features into probability estimates by fitting a recalibrator R : Φ→ [0, 1] the following CDF:\nP(Y ≤ F−1X (φ)). (7)\nThe simplest feature φ ∈ Φ is the distance from the mean prediction, i.e. [H(x)](y) = Fx(y) = y−µ(x), where µ(x) is any point estimate of Y . Fitting R essentially means counting the fraction of points that lie at any given distance of µ(x). Interestingly, this produces calibrated probabilistic forecasts even for an arbitrary (non-probabilistic)\nregressor H . However, confidence intervals will have the same width everywhere independently of x (e.g. Figure 4, left); this makes them less useful at identifying points x where the model is uncertain.\nA better feature should account for uncertainty as a function of x. For example, we may use heteroscedastic regression to directly fit a mean and standard deviation µ(x), σ(x) and use Fx(y) = (y−µ(x))/σ(x). Combining features can further improve the sharpness of forecasts."
+  }, {
+    "heading": "3.5. Diagnostic Tools",
+    "text": "Next, we propose a set of diagnostic measures and visualizations in order to assess calibration and sharpness.\nCalibration. We propose a calibration plot for regression inspired by the one for calibration. This plot displays the true frequency of points in each confidence interval relative to the predicted fraction of points in that interval.\nMore formally, we choose m confidence levels 0 ≤ p1 < p2 < . . . < pm ≤ 1; for each threshold pj , we compute the empirical frequency\np̂j = |{yt | Ft(yt) ≤ pj , t = 1, ..., T}|\nT . (8)\nTo visualize calibration, we plot {(pj , p̂j)}Mj=1; calibrated forecasts correspond to a straight line. Note that for best results, the diagnostic dataset should be distinct from the calibration and training sets.\nFinally, we propose using the calibration error as a numerical score describing the quality of forecast calibration:\ncal(F1, y1, ..., FT , yT ) = m∑ j=1 wj · (pj − p̂j)2. (9)\nThe scalars wj are weights. We used wj ≡ 1 in our experiments; alternatively, choosing wj ∝ |{yt | Ft(yt) ≤ pj , t = 1, ..., T}| decreases the importance of intervals that contain fewer data and that are more difficult to calibrate.\nSharpness. We propose measuring sharpness using the variance var(Ft) of the random variable whose CDF is Ft. Low-variance predictions are tightly centered around one value. A sharpness score can be defined by\nsha(F1, ..., FT ) = 1\nT T∑ t=1 var(Ft). (10)\nNote that this definition also applies to categorical variables; for a binary Y with probability mass function f , we have var(f) = f(1)(1− f(1)). The latter value is not only maximized at 0 or 1, but corresponds to the “refinement” term in the classical decomposition of the Brier score (Murphy, 1973)."
+  }, {
+    "heading": "4. Experiments",
+    "text": ""
+  }, {
+    "heading": "4.1. Setup",
+    "text": "Datasets. We use eight UCI datasets varying in size from 194 to 8192 examples; examples carry between 6 and 159 continuous features. There is generally no standard train/test split, hence we randomly assign 25% of each dataset for testing, and use the rest for training. We report averages over 5 random splits. We also perform depth estimation on the larger Make3D dataset (Saxena et al., 2009), using the setup of Kendall and Gal (2017).\nWe also test our method on time series forecasting and reinforcement learning tasks. We use daily grocery sales from the Corporacion Favorita Kaggle dataset; we forecast the highest-selling item (#1503844) and use data from 2014- 01-01 to 2016-05-31 in stores #1-4 for training and data from 2016-06-01 to 2016-12-31 for testing. We use autoregressive features from the past four days as well as binary indicators for the day of the week and the week of the year.\nModels. The simplest model we study is Bayesian Ridge Regression (MacKay, 1992). The prior over the weights is a spherical Gaussian with a Gamma prior over the precision parameter. Posterior inference can be performed in closed form because the prior is conjugate.\nWe also consider feedforward and recurrent neural networks and we use the dropout approximation to variational inference of Gal and Ghahramani (2016a) to produce uncalibrated forecasts. In UCI experiments, the feedforward neural network has two layers of 128 hidden units with a dropout rate of 0.5 and parametric ReLU non-linearities. Recurrent networks are based on a standard GRU architecture with two stacked layers and a recurrent dropout of 0.5 (Gal and Ghahramani, 2016b). We use the DenseNet architecture of Jégou et al. (2017) for the depth regression task.\nTo perform recalibration, we first fit a base model on the training set, and then use isotonic regression as the recalibrator on the same training set. We didn’t observe significant overfitting and did not use a distinct calibration set.\nBaselines. We compare our approach against two recently proposed methods for improving the calibration of deep learning models: concrete dropout (Gal et al., 2017) and deep ensembles (Lakshminarayanan et al., 2017). Concrete dropout is a technique for learning the dropout probabilities based on the concrete distribution (Maddison et al., 2016); we use it to replace standard dropout in our neural network models. Discrete ensembles train multiple models with heteroscedastic regression and average their predictive distributions at runtime; in our experiments, we use an ensemble 5 instances of the same neural network that we use as the base predictor (except we add σ(x) as an output)."
+  }, {
+    "heading": "4.2. UCI Experiments",
+    "text": "Table 1 reports the accuracy (in terms of mean absolute percent error) and the test set calibration error (Equation 9) of Bayesian linear regression, a dense neural network, and two baselines on eight UCI datasets. We also report the re-\ncalibrated error, which is significantly lower than that of the the original model. Concrete dropout and deep ensembles are often better calibrated than the regular neural network, but not as much as the recalibrated models. Recalibrated forecasts achieve similar accuracies to the baselines, even though the latter have more parameters."
+  }, {
+    "heading": "4.3. Depth Estimation",
+    "text": "We follow the setup of Kendall and Gal (2017). We compute per-pixel uncertainty estimates using dropout and measure calibration over all the individual pixels. We recalibrate on all the pixels in the training set. This yields an improvement in calibration error from 5.50E-02 to 2.41E02, while preserving accuracy. The full calibration plot is given in Figure 5."
+  }, {
+    "heading": "4.4. Time Series Forecasting",
+    "text": "Next, we fit a recurrent network to forecast daily sales of item #1503844; we obtain mean absolute percent errors of 17.3-21.8% on the test set across the four stores. In Figure 3, we show that an uncalibrated 90% confidence interval misses most of the data points; however, the recalibrated confidence interval correctly contains about 90% of the true values.\nFurthermore, we report in Figure 6 true and forecasted sales in store #1, as well as the calibration curves for both methods. The two baselines improve on the calibration of the original model, but our recalibration technique is the only one to achieve almost perfectly calibrated forecasts."
+  }, {
+    "heading": "4.5. Model-Based Reinforcement Learning",
+    "text": "Uncertainty estimation is important in reinforcement learning to balance exploration and exploitation, as well as to improve model-based planning (Ghavamzadeh et al., 2015). Here, we focus on the latter task, and show how model-based reinforcement learning can be improved by calibrating the learned transition functions between states. Our task is inventory management, a classical application of reinforcement learning (Van Roy et al., 1997): on a set of days, an agent calculates order quantities for a perishable item in order to maximize store profits; transitions between states are defined by the probabilistic demand forecasts obtained in the previous section.\nWe formalize this task as a Markov decision process (S,A, P,R). States s ∈ S are sets of tuples {(q, `); ` = 1, 2, ..., L}; each (q, `) indicates that the store carries q units of the item that expire in ` days (L being the maximum shelf-life). Transition probabilities P are defined through the following process: on each day the store sells d units (a random quantity sampled from historical data not seen during training) which are removed from the inventory in s (items leave in a first-in first-out manner); the shelflife of the remaining items is decreased (spoiled items are thrown away). Actions a ∈ A correspond to orders: the store receives a items with a shelf life of L before entering the next state s′. Finally, rewards are store profits, defined as sales revenue minus ordering costs.\nWe perform a simulation experiment on the grocery dataset: we use the Bayesian neural network from the previous section as our learned model of the environment (i.e., the state transition function). We then use dynamic programming with a 14-day horizon to determine the best action at each step. We evaluate the agent on the test portion of the Kaggle dataset, using the historical sales to define the state transitions. Item prices and costs are set to 1.99 and 1.29 respectively; items can be ordered three days a week in packs of 12 and arrive on the next day; the shelflife of new items is always five days.\nTable 2 shows the results. A calibrated state transition model allows the agent to better plan its actions and obtain a higher reward. This suggests that our method is useful for planning in model-based reinforcement learning."
+  }, {
+    "heading": "5. Discussion",
+    "text": "Calibrated Bayesian Forecasts. Our work proposes techniques for adjusting Bayesian models in a way that matches true empirical frequencies. This approach mixes frequentist and Bayesian ideas; a pure Bayesian would have instead defined a single model family and tried integrating over all possible models. Instead, we take an approach reminiscent of model criticism techniques (Box and Hunter, 1962) such as posterior predictive checking and its variants (Gelman and Hill, 2007; Kucukelbir et al., 2017). We fit a model to a dataset, and compare its predictions to real-world data, making adjustments if necessary.\nInterestingly, our work suggests that a fully probabilistic model is not necessary to obtain confidence estimates: we may instead use simple features such as the distance from a point forecast. The advantage of more complex models is to provide a richer raw signal about their uncertainty, which may be recalibrated into sharper forecasts (Figure 4).\nProbabilistic Forecasting. Gneiting et al. (2007) proposed several notions of calibration for continuous variables; our definition is most closely related to his concept of probabilistic calibration. The main difference is that Gneiting et al. (2007) define it relative to latent generative distributions, whereas our most general definition only considers empirical frequencies. We found that their notion of marginal calibration was too weak for our purposes, since it only preserves guarantees relative to the average distribution of the yt (which may be too high-variance to be useful).\nGneiting et al. (2007) also proposed that a probabilistic forecast should maximize sharpness subject to calibration. Interestingly, we take somewhat of an opposite approach: given a pre-trained model, we maximize for its calibration.\nThis form of recalibration preserves the accuracy of point estimates from the model. A recalibrated estimate of the median (or any other quantile) only becomes worse if there is insufficient data for recalibration, or there is a shift in the data distribution. However, the forecasts may become less sharp if the original forecaster was underestimating its uncertainty and producing credible intervals that were too tight around the mean.\nApplications. Calibrated confidence estimates have been extensively studied by practitioners in medicine (Jiang et al., 2012), meteorology (Raftery et al., 2005), natural language processing (Nguyen and O’Connor, 2015), and other fields. Confidence estimates for continuous variables are important in computer vision applications, such as depth estimation (Kendall and Gal, 2017). Calibrated probabilities offer significant improvements over ordinary uncertainty estimates because they correspond to real-world empirical frequencies, and hence are interpretable."
+  }, {
+    "heading": "6. Previous Work",
+    "text": "Calibrated Classification. In the binary classification setting, Platt scaling (Platt, 1999) and isotonic regression (Niculescu-Mizil and Caruana, 2005) are effective and widely used to perform recalibration. They admit extensions to the multi-class setting (Zadrozny and Elkan, 2002) and to structured prediction (Kuleshov and Liang, 2015). They have also been studied in the context of modern neural networks (Guo et al., 2017; Gal et al., 2017; Lakshminarayanan et al., 2017). Recently Kuleshov and Ermon (2017) proposed methods that can quantify uncertainty via calibrated probabilities without any i.i.d. assumptions on the data, allowing inputs to potentially be chosen by a malicious adversary.\nProbabilistic Forecasting. The study of calibration originates in the statistics literature (Murphy, 1973; Dawid, 1984), mainly in the context of evaluating probabilistic forecasts using proper loss functions (Gneiting and Raftery, 2007). Proper losses decompose into a calibration and sharpness term (Murphy, 1973); this decomposition also extends to probabilistic forecasts (Hersbach, 2000). Dawid (1984) also studied calibration in a Bayesian framework.\nMore recently, calibration has been studied in the literature on probabilistic forecasting, especially in the context of meteorology (Gneiting and Raftery, 2005). This resulted in specialized calibration systems (Raftery et al., 2005). Although most work on calibration focuses on classification, Gneiting et al. (2007) proposed several definitions of calibration for continuous variables. Their paper does not explore techniques for generating calibrated forecasts; we focus on the study of such algorithms in our work."
+  }, {
+    "heading": "7. Conclusion",
+    "text": "In summary, our paper formalized a notion of calibration for continuous variables, drawing close connections to work in calibrated classification. Inspired by these methods, we proposed a simple recalibration technique that generates calibrated probabilistic forecasts given enough i.i.d. data. Furthermore, we introduced visualizations and metrics for evaluating calibration and sharpness. Finally, we demonstrated the practical importance of calibration by applying our method to Bayesian neural networks. Our method consistently produces well-calibrated uncertainty estimates; this result is useful in time series forecasting, reinforcement learning, as well as more generally to construct reliable, interpretable, and interactive machine learning systems."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Uncertainty in Deep Learning",
+    "authors": ["Yarin Gal"],
+    "venue": "PhD thesis, University of Cambridge,",
+    "year": 2016
+  }, {
+    "title": "Weight uncertainty in neural networks",
+    "authors": ["Charles Blundell", "Julien Cornebise", "Koray Kavukcuoglu", "Daan Wierstra"],
+    "venue": "arXiv preprint arXiv:1505.05424,",
+    "year": 2015
+  }, {
+    "title": "Simple and scalable predictive uncertainty estimation using deep ensembles",
+    "authors": ["Balaji Lakshminarayanan", "Alexander Pritzel", "Charles Blundell"],
+    "venue": "arXiv preprint arXiv:1612.01474,",
+    "year": 2017
+  }, {
+    "title": "Concrete dropout",
+    "authors": ["Yarin Gal", "Jiri Hron", "Alex Kendall"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2017
+  }, {
+    "title": "Weather forecasting with ensemble methods",
+    "authors": ["Tilmann Gneiting", "Adrian E Raftery"],
+    "venue": "Science, 310(5746):248–249,",
+    "year": 2005
+  }, {
+    "title": "Probabilistic outputs for support vector machines and comparisons to regularized likelihood methods",
+    "authors": ["J. Platt"],
+    "venue": "Advances in Large Margin Classifiers,",
+    "year": 1999
+  }, {
+    "title": "Probabilistic forecasts, calibration and sharpness",
+    "authors": ["T. Gneiting", "F. Balabdaoui", "A.E. Raftery"],
+    "venue": "Journal of the Royal Statistical Society: Series B (Statistical Methodology),",
+    "year": 2007
+  }, {
+    "title": "Predicting good probabilities with supervised learning",
+    "authors": ["A. Niculescu-Mizil", "R. Caruana"],
+    "venue": "In Proceedings of the 22nd international conference on Machine learning,",
+    "year": 2005
+  }, {
+    "title": "Dropout as a Bayesian approximation: Representing model uncertainty in deep learning",
+    "authors": ["Yarin Gal", "Zoubin Ghahramani"],
+    "venue": "In Proceedings of the 33rd International Conference on Machine Learning",
+    "year": 2016
+  }, {
+    "title": "A new vector partition of the probability score",
+    "authors": ["A.H. Murphy"],
+    "venue": "Journal of Applied Meteorology,",
+    "year": 1973
+  }, {
+    "title": "Make3d: Learning 3d scene structure from a single still image",
+    "authors": ["Ashutosh Saxena", "Min Sun", "Andrew Y Ng"],
+    "venue": "IEEE transactions on pattern analysis and machine intelligence,",
+    "year": 2009
+  }, {
+    "title": "What uncertainties do we need in bayesian deep learning for computer vision",
+    "authors": ["Alex Kendall", "Yarin Gal"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2017
+  }, {
+    "title": "Bayesian interpolation",
+    "authors": ["David JC MacKay"],
+    "venue": "Neural computation,",
+    "year": 1992
+  }, {
+    "title": "A theoretically grounded application of dropout in recurrent neural networks",
+    "authors": ["Yarin Gal", "Zoubin Ghahramani"],
+    "venue": "In Advances in Neural Information Processing Systems",
+    "year": 2016
+  }, {
+    "title": "The one hundred layers tiramisu: Fully convolutional densenets for semantic segmentation",
+    "authors": ["Simon Jégou", "Michal Drozdzal", "David Vazquez", "Adriana Romero", "Yoshua Bengio"],
+    "venue": "In Computer Vision and Pattern Recognition Workshops (CVPRW),",
+    "year": 2017
+  }, {
+    "title": "The concrete distribution: A continuous relaxation of discrete random variables",
+    "authors": ["Chris J Maddison", "Andriy Mnih", "Yee Whye Teh"],
+    "venue": "arXiv preprint arXiv:1611.00712,",
+    "year": 2016
+  }, {
+    "title": "A neuro-dynamic programming approach to retailer inventory management",
+    "authors": ["Benjamin Van Roy", "Dimitri P Bertsekas", "Yuchun Lee", "John N Tsitsiklis"],
+    "venue": "In Decision and Control,",
+    "year": 1997
+  }, {
+    "title": "A useful method for model-building",
+    "authors": ["George EP Box", "William G Hunter"],
+    "venue": "Technometrics, 4(3):301–318,",
+    "year": 1962
+  }, {
+    "title": "Data analysis using regression and multilevelhierarchical models, volume 1",
+    "authors": ["Andrew Gelman", "Jennifer Hill"],
+    "year": 2007
+  }, {
+    "title": "Evaluating Bayesian models with posterior dispersion indices",
+    "authors": ["Alp Kucukelbir", "Yixin Wang", "David M. Blei"],
+    "venue": "In Proceedings of the 34th International Conference on Machine Learning,",
+    "year": 1934
+  }, {
+    "title": "Calibrating predictive model estimates to support personalized medicine",
+    "authors": ["X. Jiang", "M. Osl", "J. Kim", "L. Ohno-Machado"],
+    "venue": "Journal of the American Medical Informatics Association,",
+    "year": 2012
+  }, {
+    "title": "Using bayesian model averaging to calibrate forecast ensembles",
+    "authors": ["Adrian E Raftery", "Tilmann Gneiting", "Fadoua Balabdaoui", "Michael Polakowski"],
+    "venue": "Monthly weather review,",
+    "year": 2005
+  }, {
+    "title": "Posterior calibration and exploratory analysis for natural language processing models",
+    "authors": ["K. Nguyen", "B. O’Connor"],
+    "venue": "In Empirical Methods in Natural Language Processing (EMNLP),",
+    "year": 2015
+  }, {
+    "title": "Transforming classifier scores into accurate multiclass probability estimates",
+    "authors": ["B. Zadrozny", "C. Elkan"],
+    "venue": "In International Conference on Knowledge Discovery and Data Mining (KDD),",
+    "year": 2002
+  }, {
+    "title": "Calibrated structured prediction",
+    "authors": ["V. Kuleshov", "P. Liang"],
+    "venue": "In Advances in Neural Information Processing Systems (NIPS),",
+    "year": 2015
+  }, {
+    "title": "On calibration of modern neural networks",
+    "authors": ["Chuan Guo", "Geoff Pleiss", "Yu Sun", "Kilian Q Weinberger"],
+    "venue": "arXiv preprint arXiv:1706.04599,",
+    "year": 2017
+  }, {
+    "title": "Estimating uncertainty online against an adversary",
+    "authors": ["Volodymyr Kuleshov", "Stefano Ermon"],
+    "venue": "In AAAI,",
+    "year": 2017
+  }, {
+    "title": "Present position and potential developments: Some personal views: Statistical theory: The prequential approach",
+    "authors": ["A.P. Dawid"],
+    "venue": "Journal of the Royal Statistical Society. Series A (General),",
+    "year": 1984
+  }, {
+    "title": "Strictly proper scoring rules, prediction, and estimation",
+    "authors": ["Tilmann Gneiting", "Adrian E Raftery"],
+    "venue": "Journal of the American Statistical Association,",
+    "year": 2007
+  }, {
+    "title": "Decomposition of the continuous ranked probability score for ensemble prediction systems",
+    "authors": ["Hans Hersbach"],
+    "venue": "Weather and Forecasting,",
+    "year": 2000
+  }],
+  "id": "SP:6f55f2234a002c69001df8ef9108cb86f1dfa506",
+  "authors": [{
+    "name": "Volodymyr Kuleshov",
+    "affiliations": []
+  }, {
+    "name": "Nathan Fenner",
+    "affiliations": []
+  }, {
+    "name": "Stefano Ermon",
+    "affiliations": []
+  }],
+  "abstractText": "Methods for reasoning under uncertainty are a key building block of accurate and reliable machine learning systems. Bayesian methods provide a general framework to quantify uncertainty. However, because of model misspecification and the use of approximate inference, Bayesian uncertainty estimates are often inaccurate — for example, a 90% credible interval may not contain the true outcome 90% of the time. Here, we propose a simple procedure for calibrating any regression algorithm; when applied to Bayesian and probabilistic models, it is guaranteed to produce calibrated uncertainty estimates given enough data. Our procedure is inspired by Platt scaling and extends previous work on classification. We evaluate this approach on Bayesian linear regression, feedforward, and recurrent neural networks, and find that it consistently outputs well-calibrated credible intervals while improving performance on time series forecasting and model-based reinforcement learning tasks.",
+  "title": "Accurate Uncertainties for Deep Learning Using Calibrated Regression"
+}

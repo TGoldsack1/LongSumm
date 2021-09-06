@@ -1,0 +1,240 @@
+{
+  "sections": [{
+    "text": "Proceedings of NAACL-HLT 2018, pages 82–91 New Orleans, Louisiana, June 1 - 6, 2018. c©2018 Association for Computational Linguistics"
+  }, {
+    "heading": "1 Introduction",
+    "text": "Recent efforts in endangered language documentation focus on collecting spoken language resources, accompanied by spoken translations in a high resource language to make the resource interpretable (Bird et al., 2014a). For example, the BULB project (Adda et al., 2016) used the LIGAikuma mobile app (Bird et al., 2014b; Blachon et al., 2016) to collect parallel speech corpora between three Bantu languages and French. Since it’s common for speakers of endangered languages to speak one or more additional languages, collection of such a resource is a realistic goal.\nSpeech can be interpreted either by transcription in the original language or translation to another language. Since the size of the data is extremely small, multitask models that jointly train a model for both tasks can take advantage of both signals. Our contribution lies in improving the sequence-to-sequence multitask learning paradigm, by drawing on two intuitive notions: that higher-level representations are more useful than lower-level representations, and that translation should be both transitive and invertible.\nHigher-level intermediate representations, such as transcriptions, should in principle carry information useful for an end task like speech translation. A typical multitask setup (Weiss et al., 2017) shares information at the level of encoded frames, but intuitively, a human translating speech must work from a higher level of representation, at least at the level of phonemes if not syntax or semantics. Thus, we present a novel architecture for tied multitask learning with sequence-to-sequence models, in which the decoder of the second task receives information not only from the encoder, but also from the decoder of the first task.\nIn addition, transitivity and invertibility are two properties that should hold when mapping between levels of representation or across languages. We demonstrate how these two notions can be implemented through regularization of the attention matrices, and how they lead to further improved performance.\nWe evaluate our models in three experiment settings: low-resource speech transcription and translation, word discovery on unsegmented input, and high-resource text translation. Our highresource experiments are performed on English, French, and German. Our low-resource speech experiments cover a wider range of linguistic diversity: Spanish-English, Mboshi-French, and AinuEnglish.\nIn the speech transcription and translation tasks, our proposed model leads to improved performance against all baselines as well as previous multitask architectures. We observe improvements of up to 5% character error rate in the transcription task, and up to 2.8% character-level BLEU in the translation task. However, we didn’t observe similar improvements in the text translation experiments. Finally, on the word discovery task, we improve upon previous work by about 3% F-score on both tokens and types.\n82"
+  }, {
+    "heading": "2 Model",
+    "text": "Our models are based on a sequence-to-sequence model with attention (Bahdanau et al., 2015). In general, this type of model is composed of three parts: a recurrent encoder, the attention, and a recurrent decoder (see Figure 1a).1\nThe encoder transforms an input sequence of words or feature frames x1, . . . , xN into a sequence of input states h1, . . . ,hN :\nhn = enc(hn−1, xn).\nThe attention transforms the input states into a sequence of context vectors via a matrix of attention weights:\ncm = ∑\nn\nαmnhn.\nFinally, the decoder computes a sequence of output states from which a probability distribution over output words can be computed.\nsm = dec(sm−1, cm, ym−1) P(ym) = softmax(sm).\nIn a standard encoder-decoder multitask model (Figure 1b) (Dong et al., 2015; Weiss et al., 2017), we jointly model two output sequences using a shared encoder, but separate attentions and decoders:\nc1m = ∑\nn\nα1mnhn\ns1m = dec 1(s1m−1, c 1 m, y 1 m−1)\nP(y1m) = softmax(s 1 m)\nand\nc2m = ∑\nn\nα2mnhn\ns2m = dec 2(s2m−1, c 2 m, y 2 m−1)\nP(y2m) = softmax(s 2 m).\nWe can also arrange the decoders in a cascade (Figure 1c), in which the second decoder attends only to the output states of the first decoder:\nc2m = ∑\nm′ α12mm′s 1 m′\ns2m = dec 2(s2m−1, c 2 m, y 2 m−1)\nP(y2m) = softmax(s 2 m).\n1For simplicity, we have assumed only a single layer for both the encoder and decoder. It is possible to use multiple stacked RNNs; typically, the output of the encoder and decoder (cm and P(ym), respectively) would be computed from the top layer only.\nTu et al. (2017) use exactly this architecture to train on bitext by setting the second output sequence to be equal to the input sequence (y2i = xi).\nIn our proposed triangle model (Figure 1d), the first decoder is as above, but the second decoder has two attentions, one for the input states of the encoder and one for the output states of the first decoder:\nc2m = [∑ m′ α 12 mm′s 1 m′ ∑ n α 2 mnhn ] s2m = dec 2(s2m−1, c 2 m, y 2 m−1)\nP(y2m) = softmax(s 2 m).\nNote that the context vectors resulting from the two attentions are concatenated, not added."
+  }, {
+    "heading": "3 Learning and Inference",
+    "text": "For compactness, we will write X for the matrix whose rows are the xn, and similarly H, C, and so on. We also write A for the matrix of attention weights: [A]i j = αi j.\nLet θ be the parameters of our model, which we train on sentence triples (X,Y1,Y2)."
+  }, {
+    "heading": "3.1 Maximum likelihood estimation",
+    "text": "Define the score of a sentence triple to be a loglinear interpolation of the two decoders’ probabilities:\nscore(Y1,Y2 | X; θ) = λ log P(Y1 | X; θ) + (1 − λ) log P(Y2 | X,S1; θ)\nwhere λ is a parameter that controls the importance of each sub-task. In all our experiments, we set λ to 0.5. We then train the model to maximize\nL(θ) = ∑ score(Y1,Y2 | X; θ),\nwhere the summation is over all sentence triples in the training data."
+  }, {
+    "heading": "3.2 Regularization",
+    "text": "We can optionally add a regularization term to the objective function, in order to encourage our attention mechanisms to conform to two intuitive principles of machine translation: transitivity and invertibility.\nTransitivity attention regularizer To a first approximation, the translation relation should be transitive (Wang et al., 2006; Levinboim and Chiang, 2015): If source word xi aligns to target word\ny1j and y 1 j aligns to target word y 2 k , then xi should also probably align to y2k . To encourage the model to preserve this relationship, we add the following transitivity regularizer to the loss function of the triangle models with a small weight λtrans = 0.2:\nLtrans = score(Y1,Y2) − λtrans ∥∥∥A12A1 − A2 ∥∥∥2 2.\nInvertibility attention regularizer The translation relation also ought to be roughly invertible (Levinboim et al., 2015): if, in the reconstruction version of the cascade model, source word xi aligns to target word y1j , then it stands to reason that y j is likely to align to xi. So, whereas Tu et al. (2017) let the attentions of the translator and the reconstructor be unrelated, we try adding the following invertibility regularizer to encourage the attentions to each be the inverse of the other, again with a weight λinv = 0.2:\nLinv = score(Y1,Y2) − λinv ∥∥∥A1A12 − I ∥∥∥2 2."
+  }, {
+    "heading": "3.3 Decoding",
+    "text": "Since we have two decoders, we now need to employ a two-phase beam search, following Tu et al. (2017):\n1. The first decoder produces, through standard beam search, a set of triples each consisting of a candidate transcription Ŷ1, a score P(Ŷ1), and a hidden state sequence Ŝ.\n2. For each transcription candidate from the first decoder, the second decoder now produces\nthrough beam search a set of candidate translations Ŷ2, each with a score P(Ŷ2).\n3. We then output the combination that yields the highest total score(Y1,Y2)."
+  }, {
+    "heading": "3.4 Implementation",
+    "text": "All our models are implemented in DyNet (Neubig et al., 2017).2 We use a dropout of 0.2, and train using Adam with initial learning rate of 0.0002 for a maximum of 500 epochs. For testing, we select the model with the best performance on dev. At inference time, we use a beam size of 4 for each decoder (due to GPU memory constraints), and the beam scores include length normalization (Wu et al., 2016) with a weight of 0.8, which Nguyen and Chiang (2017) found to work well for lowresource NMT."
+  }, {
+    "heading": "4 Speech Transcription and Translation",
+    "text": "We focus on speech transcription and translation of endangered languages, using three different cor-\n2Our code is available at: https://bitbucket.org/ antonis/dynet-multitask-models.\npora on three different language directions: Spanish (es) to English (en), Ainu (ai) to English, and Mboshi (mb) to French (fr)."
+  }, {
+    "heading": "4.1 Data",
+    "text": "Spanish is, of course, not an endangered language, but the availability of the CALLHOME Spanish Speech dataset (LDC2014T23) with English translations (Post et al., 2013) makes it a convenient language to work with, as has been done in almost all previous work in this area. It consists of telephone conversations between relatives (about 20 total hours of audio) with more than 240 speakers. We use the original train-dev-test split, with the training set comprised of 80 conversations and dev and test of 20 conversations each.\nHokkaido Ainu is the sole surviving member of the Ainu language family and is generally considered a language isolate. As of 2007, only ten native speakers were alive. The Glossed Audio Corpus of Ainu Folklore provides 10 narratives with audio (about 2.5 hours of audio) and translations in Japanese and English.3 Since there does not exist a standard train-dev-test split, we employ a cross validation scheme for evaluation purposes. In each fold, one of the 10 narratives becomes the test set, with the previous one (mod 10) becoming the dev set, and the remaining 8 narratives becoming the training set. The models for each of the 10 folds are trained and tested separately. On average, for each fold, we train on about 2000 utterances; the dev and test sets consist of about 270 utterances.\n3http://ainucorpus.ninjal.ac.jp/corpus/en/\nWe report results on the concatenation of all folds. The Ainu text is split into characters, except for the equals (=) and underscore ( ) characters, which are used as phonological or structural markers and are thus merged with the following character.4\nMboshi (Bantu C25 in the Guthrie classification) is a language spoken in Congo-Brazzaville, without standard orthography. We use a corpus (Godard et al., 2017) of 5517 parallel utterances (about 4.4 hours of audio) collected from three native speakers. The corpus provides non-standard grapheme transcriptions (close to the language phonology) produced by linguists, as well as French translations. We sampled 100 segments from the training set to be our dev set, and used the original dev set (514 sentences) as our test set."
+  }, {
+    "heading": "4.2 Implementation",
+    "text": "We employ a 3-layer speech encoding scheme similar to that of Duong et al. (2016). The first bidirectional layer receives the audio sequence in the form of 39-dimensional Perceptual Linear Predictive (PLP) features (Hermansky, 1990) computed over overlapping 25ms-wide windows every 10ms. The second and third layers consist of LSTMs with hidden state sizes of 128 and 512 respectively. Each layer encodes every second output of the previous layer. Thus, the sequence is downsampled by a factor of 4, decreasing the computation load for the attention mechanism and the decoders. In the speech experiments, the decoders\n4The data preprocessing scripts are released with the rest of our code.\noutput the sequences at the grapheme level, so the output embedding size is set to 64.\nWe found that this simpler speech encoder works well for our extremely small datasets. Applying our models to larger datasets with many more speakers would most likely require a more sophisticated speech encoder, such as the one used by Weiss et al. (2017)."
+  }, {
+    "heading": "4.3 Results",
+    "text": "In Table 2, we present results on three small datasets that demonstrate the efficacy of our models. We compare our proposed models against three baselines and one “skyline.” The first baseline is a traditional pivot approach (line 1), where the ASR output, a sequence of characters, is the input to a character-based NMT system (trained on gold transcriptions). The “skyline” model (line 2) is the same NMT system, but tested on gold transcriptions instead of ASR output. The second baseline is translation directly from source speech to target text (line 3). The last baseline is the standard multitask model (line 4), which is similar to the model of Weiss et al. (2017).\nThe cascade model (line 5) outperforms the baselines on the translation task, while only falling behind the multitask model in the transcription task. On all three datasets, the triangle model (lines 6, 7) outperforms all baselines, including the standard multitask model. On Ainu-English, we even obtain translations that are comparable to the “skyline” model, which is tested on gold Ainu transcriptions.\nComparing the performance of all models across the three datasets, there are two notable trends that verify common intuitions regarding the speech transcription and translation tasks. First, an increase in the number of speakers hurts the performance of the speech transcription tasks. The character error rates for Ainu are smaller than the CER in Mboshi, which in turn are smaller than the CER in CALLHOME. Second, the character-level BLEU scores increase as the amount of training data increases, with our smallest dataset (Ainu) having the lowest BLEU scores, and the largest dataset (CALLHOME) having the highest BLEU scores. This is expected, as more training data means that the translation decoder learns a more informed character-level language model for the target language.\nNote that Weiss et al. (2017) report much higher\nBLEU scores on CALLHOME: our model underperforms theirs by almost 9 word-level BLEU points. However, their model has significantly more parameters and is trained on 10 times more data than ours. Such an amount of data would never be available in our endangered languages scenario. When calculated on the wordlevel, all our models’ BLEU scores are between 3 and 7 points for the extremely low resource datasets (Mboshi-French and Ainu-English), and between 7 and 10 for CALLHOME. Clearly, the size of the training data in our experiments is not enough for producing high quality speech translations, but we plan to investigate the performance of our proposed models on larger datasets as part of our future work.\nTo evaluate the effect of using the combined score from both decoders at decoding time, we evaluated the triangle models using only the 1-best output from the speech model (lines 8, 9). One would expect that this would favor speech at the expense of translation. In transcription accuracy, we indeed observed improvements across the board. In translation accuracy, we observed a surprisingly large drop on Mboshi-French, but surprisingly little effect on the other language pairs – in fact, BLEU scores tended to go up slightly, but not significantly.\nFinally, Figure 2 visualizes the attention matrices for one utterance from the baseline multitask model and our proposed triangle model. It is clear that our intuition was correct: the translation decoder receives most of its context from the transcription decoder, as indicated by the higher attention weights of A12. Ideally, the area under the red squares (gold alignments) would account for 100% of the attention mass of A12. In our triangle model, the total mass under the red squares is 34%, whereas the multitask model’s correct attentions amount to only 21% of the attention mass."
+  }, {
+    "heading": "5 Word Discovery",
+    "text": "Although the above results show that our model gives large performance improvements, in absolute terms, its performance on such low-resource tasks leaves a lot of room for future improvement. A possible more realistic application of our methods is word discovery, that is, finding word boundaries in unsegmented phonetic transcriptions.\nAfter training an attentional encoder-decoder model between Mboshi unsegmented phonetic se-\nquences and French word sequences, the attention weights can be thought of as soft alignments, which allow us to project the French word boundaries onto Mboshi. Although we could in principle perform word discovery directly on speech, we leave this for future work, and only explore singletask and reconstruction models."
+  }, {
+    "heading": "5.1 Data",
+    "text": "We use the same Mboshi-French corpus as in Section 4, but with the original training set of 4617 utterances and the dev set of 514 utterances. Our parallel data consist of the unsegmented phonetic Mboshi transcriptions, along with the word-level French translations."
+  }, {
+    "heading": "5.2 Implementation",
+    "text": "We first replicate the model of Boito et al. (2017), with a single-layer bidirectional encoder and single layer decoder, using an embedding and hidden size of 12 for the base model, and an embedding and hidden state size of 64 for the reverse model. In our own models, we set the embedding size to 32 for Mboshi characters, 64 for French words, and the hidden state size to 64. We smooth the at-\ntention weights A using the method of Duong et al. (2016) with a temperature T = 10 for the softmax computation of the attention mechanism.\nFollowing Boito et al. (2017), we train models both on the base Mboshi-to-French direction, as well as the reverse (French-to-Mboshi) direction, with and without this smoothing operation. We further smooth the computed soft alignments of all models so that amn = (amn−1 +amn +amn+1)/3 as a post-processing step. From the single-task models we extract the A1 attention matrices. We also train reconstruction models on both directions, with and without the invertibility regularizer, extracting both A1 and A12 matrices. The two matrices are then combined so that A = A1 + (A12)T ."
+  }, {
+    "heading": "5.3 Results",
+    "text": "Evaluation is done both at the token and the type level, by computing precision, recall, and Fscore over the discovered segmentation, with the best results shown in Table 3. We reimplemented the base (Mboshi-French) and reverse (FrenchMboshi) models from Boito et al. (2017), and the performance of the base model was comparable to the one reported. However, we were unable to\nreproduce the significant gains that were reported when using the reverse model (italicized in Table 3). Also, our version of both the base and reverse singletask models performed better than our reimplementation of the baseline.\nFurthermore, we found that we were able to obtain even better performance at the type level by combining the attention matrices of a reconstruction model trained with the invertibility regularizer. Boito et al. (2017) reported that combining the attention matrices of a base and a reverse model significantly reduced performance, but they trained the two models separately. In contrast, we obtain the base (A1) and the reverse attention matrices (A12) from a model that trains them jointly, while also tying them together through the invertibility regularizer. Using the regularizer is key to the improvements; in fact, we did not observe any improvements when we trained the reconstruction models without the regularizer."
+  }, {
+    "heading": "6 Negative Results: High-Resource Text Translation",
+    "text": ""
+  }, {
+    "heading": "6.1 Data",
+    "text": "For evaluating our models on text translation, we use the Europarl corpus which provides parallel sentences across several European languages. We extracted 1,450,890 three-way parallel sentences on English, French, and German. The concatenation of the newstest 2011–2013 sets (8,017 sentences) is our dev set, and our test set is the concatenation of the newstest 2014 and 2015 sets (6,003 sentences). We test all architectures on the six possible translation directions between English\n(en), French (fr) and German (de). All the sequences are represented by subword units with byte-pair encoding (BPE) (Sennrich et al., 2016) trained on each language with 32000 operations."
+  }, {
+    "heading": "6.2 Experimental Setup",
+    "text": "On all experiments, the encoder and the decoder(s) have 2 layers of LSTM units with hidden state size and attention size of 1024, and embedding size of 1024. For this high resource scenario, we only train for a maximum of 40 epochs."
+  }, {
+    "heading": "6.3 Results",
+    "text": "The accuracy of all the models on all six language pair directions is shown in Table 4. In all cases, the best models are the baseline single-task or simple multitask models. There are some instances, such as English-German, where the reconstruction or the triangle models are not statistically significantly different from the best model. The reason for this, we believe, is that in the case of text translation between so linguistically close languages, the lower level representations (the output of the encoder) provide as much information as the higher level ones, without the search errors that are introduced during inference.\nA notable outcome of this experiment is that we do not observe the significant improvements with the reconstruction models that Tu et al. (2017) observed. A few possible differences between our experiment and theirs are: our models are BPEbased, theirs are word-based; we use Adam for optimization, they use Adadelta; our model has slightly fewer parameters than theirs; we test on less typologically different language pairs than\nEnglish-Chinese. However, we also observe that in most cases our proposed regularizers lead to increased performance. The invertibility regularizer aids the reconstruction models in achiev slightly higher BLEU scores in 3 out of the 6 cases. The transitivity regularizer is even more effective: in 9 out the 12 source-target language combinations, the triangle models achieve higher performance when trained using the regularizer. Some of them are statistical significant improvements, as in the case of French to English where English is the intermediate target language and German is the final target."
+  }, {
+    "heading": "7 Related Work",
+    "text": "The speech translation problem has been traditionally approached by using the output of an ASR system as input to a MT system. For example, Ney (1999) and Matusov et al. (2005) use ASR output lattices as input to translation models, integrating speech recognition uncertainty into the translation model. Recent work has focused more on modelling speech translation without explicit access to transcriptions. Duong et al. (2016) introduced a sequence-to-sequence model for speech translation without transcriptions but only evaluated on alignment, while Anastasopoulos et al. (2016) presented an unsupervised alignment method for speech-to-translation alignment. Bansal et al. (2017) used an unsupervised term discovery system (Jansen et al., 2010) to cluster recurring audio segments into pseudowords\nand translate speech using a bag-of-words model. Bérard et al. (2016) translated synthesized speech data using a model similar to the Listen Attend and Spell model (Chan et al., 2016). A larger-scale study (Bérard et al., 2018) used an end-to-end neural system system for translating audio books between French and English. On a different line of work, Boito et al. (2017) used the attentions of a sequence-to-sequence model for word discovery.\nMultitask learning (Caruana, 1998) has found extensive use across several machine learning and NLP fields. For example, Luong et al. (2016) and Eriguchi et al. (2017) jointly learn to parse and translate; Kim et al. (2017) combine CTC- and attention-based models using multitask models for speech transcription; Dong et al. (2015) use multitask learning for multiple language translation. Toshniwal et al. (2017) apply multitask learning to neural speech recognition in a less traditional fashion: the lower-level outputs of the speech encoder are used for fine-grained auxiliary tasks such as predicting HMM states or phonemes, while the final output of the encoder is passed to a characterlevel decoder.\nOur work is most similar to the work of Weiss et al. (2017). They used sequence-to-sequence models to transcribe Spanish speech and translate it in English, by jointly training the two tasks in a multitask scenario where the decoders share the encoder. In contrast to our work, they use a large corpus for training the model on roughly 163 hours of data, using the Spanish Fisher and CALL-\nHOME conversational speech corpora. The parameter number of their model is significantly larger than ours, as they use 8 encoder layers, and 4 layers for each decoder. This allows their model to adequately learn from such a large amount of data and deal well with speaker variation. However, training such a large model on endangered language datasets would be infeasible.\nOur model also bears similarities to the architecture of the model proposed by Tu et al. (2017). They report significant gains in Chinese-English translation by adding an additional reconstruction decoder that attends on the last states of the translation decoder, mainly inspired by auto-encoders."
+  }, {
+    "heading": "8 Conclusion",
+    "text": "We presented a novel architecture for multitask learning that provides the second task with higherlevel representations produced from the first task decoder. Our model outperforms both the singletask models as well as traditional multitask architectures. Evaluating on extremely low-resource settings, our model improves on both speech transcription and translation. By augmenting our models with regularizers that implement transitivity and invertibility, we obtain further improvements on all low-resource tasks.\nThese results will hopefully lead to new tools for endangered language documentation. Projects like BULB aim to collect about 100 hours of audio with translations, but it may be impractical to transcribe this much audio for many languages. For future work, we aim to extend these methods to settings where we don’t necessarily have sentence triples, but where some audio is only transcribed and some audio is only translated.\nAcknowledgements This work was generously supported by NSF Award 1464553. We are grateful to the anonymous reviewers for their useful comments."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Breaking the unwritten language barrier: The BULB",
+    "authors": ["Gilles Adda", "Sebastian Stüker", "Martine Adda-Decker", "Odette Ambouroue", "Laurent Besacier", "David Blachon", "Hélène Bonneau-Maynard", "Pierre Godard", "Fatima Hamlaoui", "Dmitry Idiatov"],
+    "year": 2016
+  }, {
+    "title": "An unsupervised probability model",
+    "authors": ["Antonios Anastasopoulos", "David Chiang", "Long Duong"],
+    "year": 2016
+  }, {
+    "title": "Neural machine translation by jointly learning to align and translate",
+    "authors": ["Dzmitry Bahdanau", "Kyunghyun Cho", "Yoshua Bengio."],
+    "venue": "Proc. ICLR.",
+    "year": 2015
+  }, {
+    "title": "Towards speech-to-text translation without speech recognition",
+    "authors": ["Sameer Bansal", "Herman Kamper", "Adam Lopez", "Sharon Goldwater."],
+    "venue": "Proc. EACL.",
+    "year": 2017
+  }, {
+    "title": "End-toend automatic speech translation of audiobooks",
+    "authors": ["Alexandre Bérard", "Laurent Besacier", "Ali Can Kocabiyikoglu", "Olivier Pietquin."],
+    "venue": "arXiv:1802.04200.",
+    "year": 2018
+  }, {
+    "title": "Listen and translate: A proof of concept for end-to-end speech-to-text translation",
+    "authors": ["Alexandre Bérard", "Olivier Pietquin", "Christophe Servan", "Laurent Besacier."],
+    "venue": "Proc. NIPS Workshop on End-to-end Learning for Speech and Audio Processing.",
+    "year": 2016
+  }, {
+    "title": "Collecting bilingual audio in remote indigenous communities",
+    "authors": ["Steven Bird", "Lauren Gawne", "Katie Gelbart", "Isaac McAlister."],
+    "venue": "Proc. COLING.",
+    "year": 2014
+  }, {
+    "title": "Aikuma: A mobile app for collaborative language documentation",
+    "authors": ["Steven Bird", "Florian R. Hanke", "Oliver Adams", "Haejoong Lee."],
+    "venue": "Proc. of the 2014 Workshop on the Use of Computational Methods in the Study of Endangered Languages.",
+    "year": 2014
+  }, {
+    "title": "Parallel speech collection for under-resourced language studies using the LIGAikuma mobile device app",
+    "authors": ["David Blachon", "Elodie Gauthier", "Laurent Besacier", "Guy-Noël Kouarata", "Martine Adda-Decker", "Annie Rialland."],
+    "venue": "Proc. SLTU (Spoken",
+    "year": 2016
+  }, {
+    "title": "Unwritten languages demand attention too! word discovery with encoder-decoder models",
+    "authors": ["Marcely Zanon Boito", "Alexandre Bérard", "Aline Villavicencio", "Laurent Besacier."],
+    "venue": "arXiv:1709.05631.",
+    "year": 2017
+  }, {
+    "title": "Multitask learning",
+    "authors": ["Rich Caruana."],
+    "venue": "Learning to learn, pages 95–133. Springer.",
+    "year": 1998
+  }, {
+    "title": "Listen, attend and spell: A neural network for large vocabulary conversational speech recognition",
+    "authors": ["William Chan", "Navdeep Jaitly", "Quoc Le", "Oriol Vinyals."],
+    "venue": "Proc. ICASSP, pages 4960–4964. IEEE.",
+    "year": 2016
+  }, {
+    "title": "Multi-task learning for multiple language translation",
+    "authors": ["Daxiang Dong", "Hua Wu", "Wei He", "Dianhai Yu", "Haifeng Wang."],
+    "venue": "Proc. ACL-IJCNLP.",
+    "year": 2015
+  }, {
+    "title": "An attentional model for speech translation without transcription",
+    "authors": ["Long Duong", "Antonios Anastasopoulos", "David Chiang", "Steven Bird", "Trevor Cohn."],
+    "venue": "Proc. NAACL HLT.",
+    "year": 2016
+  }, {
+    "title": "Learning to parse and translate improves neural machine translation",
+    "authors": ["Akiko Eriguchi", "Yoshimasa Tsuruoka", "Kyunghyun Cho."],
+    "venue": "Proc. ACL.",
+    "year": 2017
+  }, {
+    "title": "A very low resource language speech corpus for computational language documentation experiments",
+    "authors": ["P. Godard", "G. Adda", "M. Adda-Decker", "J. Benjumea", "L. Besacier", "J. Cooper-Leavitt", "G-N. Kouarata", "L. Lamel", "H. Maynard", "M. Mueller"],
+    "year": 2017
+  }, {
+    "title": "Perceptual linear predictive (PLP) analysis of speech",
+    "authors": ["Hynek Hermansky."],
+    "venue": "J. Acoustical Society of America, 87(4):1738–1752.",
+    "year": 1990
+  }, {
+    "title": "Towards spoken term discovery at scale with zero resources",
+    "authors": ["Aren Jansen", "Kenneth Church", "Hynek Hermansky."],
+    "venue": "Proc. INTERSPEECH.",
+    "year": 2010
+  }, {
+    "title": "Joint CTC-attention based end-to-end speech recognition using multi-task learning",
+    "authors": ["Suyoun Kim", "Takaaki Hori", "Shinji Watanabe."],
+    "venue": "Proc. ICASSP.",
+    "year": 2017
+  }, {
+    "title": "Multi-task word alignment triangulation for low-resource languages",
+    "authors": ["Tomer Levinboim", "David Chiang."],
+    "venue": "Proc. NAACL HLT.",
+    "year": 2015
+  }, {
+    "title": "Model invertibility regularization: Sequence alignment with or without parallel data",
+    "authors": ["Tomer Levinboim", "Ashish Vaswani", "David Chiang."],
+    "venue": "Proc. NAACL HLT.",
+    "year": 2015
+  }, {
+    "title": "Multi-task sequence to sequence learning",
+    "authors": ["Minh-Thang Luong", "Quoc V Le", "Ilya Sutskever", "Oriol Vinyals", "Lukasz Kaiser."],
+    "venue": "Proc. ICLR.",
+    "year": 2016
+  }, {
+    "title": "On the integration of speech recognition and statistical machine translation",
+    "authors": ["Evgeny Matusov", "Stephan Kanthak", "Hermann Ney."],
+    "venue": "Ninth European Conference on Speech Communication and Technology.",
+    "year": 2005
+  }, {
+    "title": "DyNet: The dynamic neural network toolkit",
+    "authors": ["Graham Neubig", "Chris Dyer", "Yoav Goldberg", "Austin Matthews", "Waleed Ammar", "Antonios Anastasopoulos", "Miguel Ballesteros", "David Chiang", "Daniel Clothiaux", "Trevor Cohn"],
+    "year": 2017
+  }, {
+    "title": "Speech translation: Coupling of recognition and translation",
+    "authors": ["Hermann Ney."],
+    "venue": "Proc. ICASSP, volume 1.",
+    "year": 1999
+  }, {
+    "title": "Transfer learning across low-resource related languages for neural machine translation",
+    "authors": ["Toan Q. Nguyen", "David Chiang."],
+    "venue": "Proc. IJCNLP.",
+    "year": 2017
+  }, {
+    "title": "Improved speech-to-text translation with the Fisher and Callhome Spanish-English speech translation corpus",
+    "authors": ["Matt Post", "Gaurav Kumar", "Adam Lopez", "Damianos Karakos", "Chris Callison-Burch", "Sanjeev Khudanpur."],
+    "venue": "Proc. IWSLT.",
+    "year": 2013
+  }, {
+    "title": "Neural machine translation of rare words with subword units",
+    "authors": ["Rico Sennrich", "Barry Haddow", "Alexandra Birch."],
+    "venue": "Proc. ACL.",
+    "year": 2016
+  }, {
+    "title": "Multitask learning with low-level auxiliary tasks for encoder-decoder based speech recognition",
+    "authors": ["Shubham Toshniwal", "Hao Tang", "Liang Lu", "Karen Livescu."],
+    "venue": "Proc. Interspeech.",
+    "year": 2017
+  }, {
+    "title": "Neural machine translation with reconstruction",
+    "authors": ["Zhaopeng Tu", "Yang Liu", "Lifeng Shang", "Xiaohua Liu", "Hang Li."],
+    "venue": "Proc. AAAI.",
+    "year": 2017
+  }, {
+    "title": "Word alignment for languages with scarce resources using bilingual corpora of other language pairs",
+    "authors": ["Haifeng Wang", "Hua Wu", "Zhanyi Liu."],
+    "venue": "Proc. COLING/ACL, pages 874–881.",
+    "year": 2006
+  }, {
+    "title": "Sequence-tosequence models can directly transcribe foreign speech",
+    "authors": ["Ron J. Weiss", "Jan Chorowski", "Navdeep Jaitly", "Yonghui Wu", "Zhifeng Chen."],
+    "venue": "Proc. INTERSPEECH.",
+    "year": 2017
+  }, {
+    "title": "Google’s neural machine translation system: Bridging the gap between human",
+    "authors": ["Yonghui Wu", "Mike Schuster", "Zhifeng Chen", "Quoc V. Le", "Mohammad Norouzi", "Wolfgang Macherey", "Maxim Krikun", "Yuan Cao", "Qin Gao", "Klaus Macherey"],
+    "year": 2016
+  }],
+  "id": "SP:fb8784932008db8314eb1d3ef8a1f2edba3c999c",
+  "authors": [{
+    "name": "Antonios Anastasopoulos",
+    "affiliations": []
+  }, {
+    "name": "David Chiang",
+    "affiliations": []
+  }],
+  "abstractText": "We explore multitask models for neural translation of speech, augmenting them in order to reflect two intuitive notions. First, we introduce a model where the second task decoder receives information from the decoder of the first task, since higher-level intermediate representations should provide useful information. Second, we apply regularization that encourages transitivity and invertibility. We show that the application of these notions on jointly trained models improves performance on the tasks of low-resource speech transcription and translation. It also leads to better performance when using attention information for word discovery over unsegmented input.",
+  "title": "Tied Multitask Learning for Neural Speech Translation"
+}

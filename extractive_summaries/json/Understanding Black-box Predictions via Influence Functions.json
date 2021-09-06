@@ -1,0 +1,295 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "A key question often asked of machine learning systems is “Why did the system make this prediction?” We want models that are not just high-performing but also explainable. By understanding why a model does what it does, we can hope to improve the model (Amershi et al., 2015), discover new science (Shrikumar et al., 2016), and provide end-users with explanations of actions that impact them (Goodman & Flaxman, 2016).\nHowever, the best-performing models in many domains — e.g., deep neural networks for image and speech recognition (Krizhevsky et al., 2012) — are complicated, blackbox models whose predictions seem hard to explain. Work on interpreting these black-box models has focused on understanding how a fixed model leads to particular predictions, e.g., by locally fitting a simpler model around the test\n1Stanford University, Stanford, CA. Correspondence to: Pang Wei Koh <pangwei@cs.stanford.edu>, Percy Liang <pliang@cs.stanford.edu>.\nProceedings of the 34 th International Conference on Machine Learning, Sydney, Australia, PMLR 70, 2017. Copyright 2017 by the author(s).\npoint (Ribeiro et al., 2016) or by perturbing the test point to see how the prediction changes (Simonyan et al., 2013; Li et al., 2016b; Datta et al., 2016; Adler et al., 2016). These works explain the predictions in terms of the model, but how can we explain where the model came from?\nIn this paper, we tackle this question by tracing a model’s predictions through its learning algorithm and back to the training data, where the model parameters ultimately derive from. To formalize the impact of a training point on a prediction, we ask the counterfactual: what would happen if we did not have this training point, or if the values of this training point were changed slightly?\nAnswering this question by perturbing the data and retraining the model can be prohibitively expensive. To overcome this problem, we use influence functions, a classic technique from robust statistics (Cook & Weisberg, 1980) that tells us how the model parameters change as we upweight a training point by an infinitesimal amount. This allows us to “differentiate through the training” to estimate in closedform the effect of a variety of training perturbations.\nDespite their rich history in statistics, influence functions have not seen widespread use in machine learning; to the best of our knowledge, the work closest to ours is Wojnowicz et al. (2016), which introduced a method for approximating a quantity related to influence in generalized linear models. One obstacle to adoption is that influence functions require expensive second derivative calculations and assume model differentiability and convexity, which limits their applicability in modern contexts where models are often non-differentiable, non-convex, and highdimensional. We address these challenges by showing that we can efficiently approximate influence functions using second-order optimization techniques (Pearlmutter, 1994; Martens, 2010; Agarwal et al., 2016), and that they remain accurate even as the underlying assumptions of differentiability and convexity degrade.\nInfluence functions capture the core idea of studying models through the lens of their training data. We show that they are a versatile tool that can be applied to a wide variety of seemingly disparate tasks: understanding model behavior, debugging models, detecting dataset errors, and creating visually-indistinguishable adversarial training examples that can flip neural network test predictions, the training set analogue of Goodfellow et al. (2015)."
+  }, {
+    "heading": "2. Approach",
+    "text": "Consider a prediction problem from some input space X (e.g., images) to an output space Y (e.g., labels). We are given training points z1, . . . , zn, where zi = (xi, yi) ∈ X × Y . For a point z and parameters θ ∈ Θ, let L(z, θ) be the loss, and let 1n ∑n i=1 L(zi, θ) be the empirical risk. The empirical risk minimizer is given by θ̂ def = arg minθ∈Θ 1 n ∑n i=1 L(zi, θ).\n1 Assume that the empirical risk is twice-differentiable and strictly convex in θ; in Section 4 we explore relaxing these assumptions."
+  }, {
+    "heading": "2.1. Upweighting a training point",
+    "text": "Our goal is to understand the effect of training points on a model’s predictions. We formalize this goal by asking the counterfactual: how would the model’s predictions change if we did not have this training point?\nLet us begin by studying the change in model parameters due to removing a point z from the training set. Formally, this change is θ̂−z − θ̂, where θ̂−z def = arg minθ∈Θ ∑ zi 6=z L(zi, θ). However, retraining the model for each removed z is prohibitively slow.\nFortunately, influence functions give us an efficient approximation. The idea is to compute the parameter change if z were upweighted by some small , giving us new parameters θ̂ ,z def = arg minθ∈Θ 1 n ∑n i=1 L(zi, θ) + L(z, θ). A classic result (Cook & Weisberg, 1982) tells us that the influence of upweighting z on the parameters θ̂ is given by\nIup,params(z) def = dθ̂ ,z d ∣∣∣ =0 = −H−1 θ̂ ∇θL(z, θ̂), (1)\nwhere Hθ̂ def = 1n ∑n i=1∇2θL(zi, θ̂) is the Hessian and is positive definite (PD) by assumption. In essence, we form a quadratic approximation to the empirical risk around θ̂ and take a single Newton step; see appendix A for a derivation. Since removing a point z is the same as upweighting it by = − 1n , we can linearly approximate the parameter change due to removing z by computing θ̂−z − θ̂ ≈ − 1nIup,params(z), without retraining the model.\nNext, we apply the chain rule to measure how upweighting z changes functions of θ̂. In particular, the influence of upweighting z on the loss at a test point ztest again has a closed-form expression:\nIup,loss(z, ztest) def =\ndL(ztest, θ̂ ,z)\nd\n∣∣∣ =0\n(2)\n= ∇θL(ztest, θ̂)> dθ̂ ,z d ∣∣∣ =0\n= −∇θL(ztest, θ̂)>H−1θ̂ ∇θL(z, θ̂). 1We fold in any regularization terms into L."
+  }, {
+    "heading": "2.2. Perturbing a training input",
+    "text": "Let us develop a finer-grained notion of influence by studying a different counterfactual: how would the model’s predictions change if a training input were modified?\nFor a training point z = (x, y), define zδ def = (x + δ, y). Consider the perturbation z 7→ zδ , and let θ̂zδ,−z be the empirical risk minimizer on the training points with zδ in place of z. To approximate its effects, define the parameters resulting from moving mass from z onto zδ: θ̂ ,zδ,−z def = arg minθ∈Θ 1 n ∑n i=1 L(zi, θ) + L(zδ, θ) − L(z, θ). An analogous calculation to (1) yields:\ndθ̂ ,zδ,−z d ∣∣∣ =0 = Iup,params(zδ)− Iup,params(z)\n= −H−1 θ̂\n( ∇θL(zδ, θ̂)−∇θL(z, θ̂) ) . (3)\nAs before, we can make the linear approximation θ̂zδ,−z − θ̂ ≈ − 1n (Iup,params(zδ) − Iup,params(z)), giving us a closedform estimate of the effect of z 7→ zδ on the model. Analogous equations also apply for changes in y. While influence functions might appear to only work for infinitesimal (therefore continuous) perturbations, it is important to note that this approximation holds for arbitrary δ: the - upweighting scheme allows us to smoothly interpolate between z and zδ . This is particularly useful for working with discrete data (e.g., in NLP) or with discrete label changes.\nIf x is continuous and δ is small, we can further approximate (3). Assume that the input domain X ⊆ Rd, the parameter space Θ ⊆ Rp, and L is differentiable in θ and x. As ‖δ‖ → 0,∇θL(zδ, θ̂)−∇θL(z, θ̂) ≈ [∇x∇θL(z, θ̂)]δ, where∇x∇θL(z, θ̂) ∈ Rp×d. Substituting into (3),\ndθ̂ ,zδ,−z d ∣∣∣ =0 ≈ −H−1 θ̂ [∇x∇θL(z, θ̂)]δ. (4)\nWe thus have θ̂zδ,−z − θ̂ ≈ − 1nH −1 θ̂ [∇x∇θL(z, θ̂)]δ. Differentiating w.r.t. δ and applying the chain rule gives us\nIpert,loss(z, ztest)> def = ∇δL(ztest, θ̂zδ,−z)> ∣∣∣ δ=0\n(5)\n= −∇θL(ztest, θ̂)>H−1θ̂ ∇x∇θL(z, θ̂).\nIpert,loss(z, ztest)>δ tells us the approximate effect that z 7→ z+ δ has on the loss at ztest. By setting δ in the direction of Ipert,loss(z, ztest), we can construct local perturbations of z that maximally increase the loss at ztest. In Section 5.2, we will use this to construct training-set attacks. Finally, we note that Ipert,loss(z, ztest) can help us identify the features of z that are most responsible for the prediction on ztest."
+  }, {
+    "heading": "2.3. Relation to Euclidean distance",
+    "text": "To find the training points most relevant to a test point, it is common to look at its nearest neighbors in Euclidean\nspace (e.g., Ribeiro et al. (2016)); if all points have the same norm, this is equivalent to choosing x with the largest x ·xtest. For intuition, we compare this to Iup,loss(z, ztest) on a logistic regression model and show that influence is much more accurate at accounting for the effect of training.\nLet p(y | x) = σ(yθ>x), with y ∈ {−1, 1} and σ(t) = 1 1+exp(−t) . We seek to maximize the probability of the training set. For a training point z = (x, y), L(z, θ) = log(1 + exp(−yθ>x)), ∇θL(z, θ) = −σ(−yθ>x)yx, and Hθ = 1n ∑n i=1 σ(θ\n>xi)σ(−θ>xi)xix>i . From (2), Iup,loss(z, ztest) is:\n−ytesty · σ(−ytestθ>xtest) · σ(−yθ>x) · x>testH−1θ̂ x.\nWe highlight two key differences from x · xtest. First, σ(−yθ>x) gives points with high training loss more influence, revealing that outliers can dominate the model parameters. Second, the weighted covariance matrix H−1 θ̂ measures the “resistance” of the other training points to the removal of z; if ∇θL(z, θ̂) points in a direction of little variation, its influence will be higher since moving in that direction will not significantly increase the loss on other training points. As we show in Fig 1, these differences mean that influence functions capture the effect of model training much more accurately than nearest neighbors."
+  }, {
+    "heading": "3. Efficiently Calculating Influence",
+    "text": "There are two computational challenges to using Iup,loss(z, ztest) = −∇θL(ztest, θ̂)>H−1θ̂ ∇θL(z, θ̂). First, it requires forming and inverting Hθ̂ = 1 n ∑n i=1∇2θL(zi, θ̂), the Hessian of the empirical risk. With n training points and θ ∈ Rp, this requires O(np2 + p3) operations, which\nis too expensive for models like deep neural networks with millions of parameters. Second, we often want to calculate Iup,loss(zi, ztest) across all training points zi.\nThe first problem is well-studied in second-order optimization. The idea is to avoid explicitly computing H−1\nθ̂ ; in-\nstead, we use implicit Hessian-vector products (HVPs) to efficiently approximate stest def = H−1\nθ̂ ∇θL(ztest, θ̂) and then\ncompute Iup,loss(z, ztest) = −stest · ∇θL(z, θ̂). This also solves the second problem: for each test point of interest, we can precompute stest and then efficiently compute −stest · ∇θL(zi, θ̂) for each training point zi.\nWe discuss two techniques for approximating stest, both relying on the fact that the HVP of a single term in Hθ̂, [∇2θL(zi, θ̂)]v, can be computed for arbitrary v in the same time that ∇θL(zi, θ̂) would take, which is typically O(p) (Pearlmutter, 1994).\nConjugate gradients (CG). The first technique is a standard transformation of matrix inversion into an optimization problem. Since Hθ̂ 0 by assumption, H −1 θ̂ v ≡ arg mint{ 12 t >Hθ̂t − v\n>t}. We can solve this with CG approaches that only require the evaluation of Hθ̂t, which takesO(np) time, without explicitly formingHθ̂. While an exact solution takes p CG iterations, in practice we can get a good approximation with fewer iterations; see Martens (2010) for more details.\nStochastic estimation. With large datasets, standard CG can be slow; each iteration still goes through all n training points. We use a method developed by Agarwal et al. (2016) to get an estimator that only samples a single point per iteration, which results in significant speedups.\nDropping the θ̂ subscript for clarity, letH−1j def = ∑j i=0(I− H)i, the first j terms in the Taylor expansion of H−1. Rewrite this recursively as H−1j = I + (I − H)H −1 j−1. From the validity of the Taylor expansion, H−1j → H−1 as j → ∞.2 The key is that at each iteration, we can substitute the full H with a draw from any unbiased (and fasterto-compute) estimator of H to form H̃j . Since E[H̃−1j ] = H−1j , we still have E[H̃ −1 j ]→ H−1.\nIn particular, we can uniformly sample zi and use ∇2θL(zi, θ̂) as an unbiased estimator of H . This gives us the following procedure: uniformly sample t points zs1 , . . . , zst from the training data; define H̃ −1 0 v =\nv; and recursively compute H̃−1j v = v + ( I −\n∇2θL(zsj , θ̂) ) H̃−1j−1v, taking H̃ −1 t v as our final unbiased estimate of H−1v. We pick t to be large enough such that H̃t stabilizes, and to reduce variance we repeat this procedure r times and average results. Empirically, we found this significantly faster than CG.\nWe note that the original method of Agarwal et al. (2016) dealt only with generalized linear models, for which [∇2θL(zi, θ̂)]v can be efficiently computed in O(p) time. In our case, we rely on Pearlmutter (1994)’s more general algorithm for fast HVPs, described above, to achieve the same time complexity.3\nWith these techniques, we can compute Iup,loss(zi, ztest) on all training points zi in O(np + rtp) time; we show in Section 4.1 that empirically, choosing rt = O(n) gives accurate results. Similarly, we compute Ipert,loss(zi, ztest)> = − 1n∇θL(ztest, θ̂) >H−1 θ̂ ∇x∇θL(zi, θ̂) with two matrix-vector products: we first compute stest, then s>test∇x∇θL(zi, θ̂), with the same HVP trick. These computations are easy to implement in auto-grad systems like TensorFlow (Abadi et al., 2015) and Theano (Theano D. Team, 2016), as users need only specify L; the rest is automatically handled."
+  }, {
+    "heading": "4. Validation and Extensions",
+    "text": "Recall that influence functions are asymptotic approximations of leave-one-out retraining under the assumptions that (i) the model parameters θ̂ minimize the empirical risk, and that (ii) the empirical risk is twice-differentiable and\n2We assume w.l.o.g. that ∀i,∇2θL(zi, θ̂) 4 I; if this is not true, we can scale the loss down without affecting the parameters. In some cases, we can get an upper bound on∇2θL(zi, θ̂) (e.g., for linear models and bounded input), which makes this easy. Otherwise, we treat the scaling as a separate hyperparameter and tune it such that the Taylor expansion converges.\n3To increase stability, especially with non-convex models (see Section 4.2), we can also sample a mini-batch of training points at each iteration, instead of relying on a single training point.\nstrictly convex. Here, we empirically show that influence functions are accurate approximations (Section 4.1) that provide useful information even when these assumptions are violated (Sections 4.2, 4.3)."
+  }, {
+    "heading": "4.1. Influence functions vs. leave-one-out retraining",
+    "text": "Influence functions assume that the weight on a training point is changed by an infinitesimally small . To investigate the accuracy of using influence functions to approximate the effect of removing a training point and retraining, we compared − 1nIup,loss(z, ztest) with L(ztest, θ̂−z) − L(ztest, θ̂) (i.e., actually doing leave-one-out retraining). With a logistic regression model on 10-class MNIST,4 the predicted and actual changes matched closely (Fig 2-Left).\nThe stochastic approximation from Agarwal et al. (2016) was also accurate with r = 10 repeats and t = 5, 000 iterations (Fig 2-Mid). Since each iteration only requires one HVP [∇2θL(zi, θ̂)]v, this runs quickly: in fact, we accurately estimated H−1v without even looking at every data point, since n = 55, 000 > rt. Surprisingly, even r = 1 worked; while results were noisier, it was still able to identify the most influential points."
+  }, {
+    "heading": "4.2. Non-convexity and non-convergence",
+    "text": "In Section 2, we took θ̂ as the global minimum. In practice, if we obtain our parameters θ̃ by running SGD with early stopping or on non-convex objectives, θ̃ 6= θ̂. As a result, Hθ̃ could have negative eigenvalues. We show that influence functions on θ̃ still give meaningful results in practice.\nOur approach is to form a convex quadratic approximation of the loss around θ̃, i.e., L̃(z, θ) = L(z, θ̃) +\n4We trained with L-BFGS (Liu & Nocedal, 1989), with L2 regularization of 0.01, n = 55, 000, and p = 7, 840 parameters.\n∇L(z, θ̃)>(θ− θ̃)+ 12 (θ− θ̃) >(Hθ̃+λI)(θ− θ̃). Here, λ is a damping term that we add ifHθ̃ has negative eigenvalues; this corresponds to adding L2 regularization on θ. We then calculate Iup,loss using L̃. If θ̃ is close to a local minimum, this is correlated with the result of taking a Newton step from θ̃ after removing weight from z (see appendix B).\nWe checked the behavior of Iup,loss in a non-convergent, non-convex setting by training a convolutional neural network for 500k iterations.5 The model had not converged and Hθ̃ was not PD, so we added a damping term with λ = 0.01. Even in this difficult setting, the predicted and actual changes in loss were highly correlated (Pearson’s R = 0.86, Fig 2-Right)."
+  }, {
+    "heading": "4.3. Non-differentiable losses",
+    "text": "What happens when the derivatives of the loss, ∇θL and ∇2θL, do not exist? In this section, we show that influence functions computed on smooth approximations to non-differentiable losses can predict the behavior of the original, non-differentiable loss under leave-one-out retraining. The robustness of this approximation suggests that we can train non-differentiable models and swap out non-differentiable components for smoothed versions for the purposes of calculating influence.\nTo see this, we trained a linear SVM on the same 1s vs. 7s MNIST task in Section 2.3. This involves min-\n5The network had 7 sets of convolutional layers with tanh(·) non-linearities, modeled after the all-convolutional network from (Springenberg et al., 2014). For speed, we used 10% of the MNIST training set and only 2,616 parameters, since repeatedly retraining the network was expensive. Training was done with mini-batches of 500 examples and the Adam optimizer (Kingma & Ba, 2014). The model had not converged after 500k iterations; training it for another 500k iterations, using a full training pass for each iteration, reduced train loss from 0.14 to 0.12.\nimizing Hinge(s) = max(0, 1 − s); this simple piecewise linear function is similar to ReLUs, which cause nondifferentiability in neural networks. We set the derivatives at the hinge to 0 and calculated Iup,loss. As one might expect, this was inaccurate (Fig 3b-Left): the second derivative carries no information about how close a support vector z is to the hinge, so the quadratic approximation of L(z, θ̂) is linear (up to regularization), which leads to Iup,loss(z, ztest) overestimating the influence of z.\nFor the purposes of calculating influence, we approximated Hinge(s) with SmoothHinge(s, t) = t log(1+exp( 1−st )), which approaches the hinge loss as t → 0 (Fig 3a). Using the same SVM weights as before, we found that calculating Iup,loss using SmoothHinge(s, 0.001) closely matched the actual change due to retraining in the original Hinge(s) (Pearson’s R = 0.95; Fig 3b-Mid) and remained accurate over a wide range of t (Fig 3b-Right)."
+  }, {
+    "heading": "5. Use Cases of Influence Functions",
+    "text": ""
+  }, {
+    "heading": "5.1. Understanding model behavior",
+    "text": "By telling us the training points “responsible” for a given prediction, influence functions reveal insights about how models rely on and extrapolate from the training data. In this section, we show that two models can make the same correct predictions but get there in very different ways.\nWe compared (a) the state-of-the-art Inception v3 network (Szegedy et al., 2016) with all but the top layer frozen6 to (b) an SVM with an RBF kernel on a dog vs. fish image classification dataset we extracted from ImageNet (Russakovsky et al., 2015), with 900 training examples for each class. Freezing neural networks in this way is not uncom-\n6We used pre-trained weights from Keras (Chollet, 2015).\nmon in computer vision and is equivalent to training a logistic regression model on the bottleneck features (Donahue et al., 2014). We picked a test image both models got correct (Fig 4-Top) and used SmoothHinge(·, 0.001) to compute the influence for the SVM.\nAs expected, Iup,loss in the RBF SVM varied inversely with raw pixel distance, with training images far from the test image in pixel space having almost no influence. The Inception influences were much less correlated with distance in pixel space (Fig 4-Left). Looking at the two most helpful images (most positive −Iup,loss) for each model in Fig 4-Right, we see that the Inception network picked up on the distinctive characteristics of clownfish, whereas the RBF SVM pattern-matched training images superficially.\nMoreover, in the RBF SVM, fish (green points) close to the test image were mostly helpful, while dogs (red) were mostly harmful, with the RBF acting as a soft nearest neighbor function (Fig 4-Left). In contrast, in the Inception network, fish and dogs could be helpful or harmful for correctly classifying the test image as a fish; in fact, some of the most helpful training images were dogs that, to the model, looked very different from the test fish (Fig 4-Top)."
+  }, {
+    "heading": "5.2. Adversarial training examples",
+    "text": "In this section, we show that models that place a lot of influence on a small number of points can be vulnerable to training input perturbations, posing a serious security risk in real-world ML systems where attackers can influence the training data (Huang et al., 2011). Recent work has generated adversarial test images that are visually indistinguish-\nable from real test images but completely fool a classifier (Goodfellow et al., 2015; Moosavi-Dezfooli et al., 2016). We demonstrate that influence functions can be used to craft adversarial training images that are similarly visuallyindistinguishable and can flip a model’s prediction on a separate test image. To the best of our knowledge, this is the first proof-of-concept that visually-indistinguishable training attacks can be executed on otherwise highly-accurate neural networks.\nThe key idea is that Ipert,loss(z, ztest) tells us how to modify training point z to most increase the loss on ztest. Concretely, for a target test image ztest, we can construct z̃i, an adversarial version of a training image zi, by initializing z̃i := zi and then iterating z̃i := Π(z̃i + α sign(Ipert,loss(z̃i, ztest))), where α is the step size and Π projects onto the set of valid images that share the same 8- bit representation with zi. After each iteration, we retrain the model. This is an iterated, training-set analogue of the methods used by, e.g., Goodfellow et al. (2015); MoosaviDezfooli et al. (2016) for test-set attacks.\nWe tested these training attacks on the same Inception network on dogs vs. fish from Section 5.1, choosing this pair of animals to provide a stark contrast between the classes. We set α = 0.02 and ran the attack for 100 iterations on each test image. As before, we froze all but the top layer for training; note that computing Ipert,loss still involves differentiating through the entire network. Originally, the model correctly classified 591 / 600 test images. For each of these 591 test images, considered separately, we tried to find a visually-indistinguishable perturbation (i.e., same 8- bit representation) to a single training image, out of 1,800 total training images, that would flip the model’s prediction. We were able to do this on 335 (57%) of the 591 test images. By perturbing 2 training images for each test image, we could flip predictions on 77% of the 591 test images; and if we perturbed 10 training images, we could flip all but 1 of the 591. The above results are from attacking each test image separately, i.e., using a different training set to attack each test image. We also tried to attack multiple test images simultaneously by increasing their average loss, and found that single training image perturbations could simultaneously flip multiple test predictions as well (Fig 5).\nWe make three observations about these attacks. First, though the change in pixel values is small, the change in the final Inception feature layer is significantly larger: using L2 distance in pixel space, the training values change by less than 1% of the mean distance of a training point to its class centroid, whereas in Inception feature space, the change is on the same order as the mean distance. This leaves open the possibility that our attacks, while visuallyimperceptible, can be detected by examining the feature space. Second, the attack tries to perturb the training ex-\nample in a direction of low variance, causing the model to overfit in that direction and consequently incorrectly classify the test images; we expect attacking to be harder as the number of training examples grows. Third, ambiguous or mislabeled training images are effective points to attack: the model has low confidence and thus high loss on them, making them highly influential (recall Section 2.3). For example, the image in Fig 5 contains both a dog and a fish and is highly ambiguous; as a result, it is the training example that the model is least confident on (with a confidence of 77%, compared to the next lowest confidence of 90%).\nThis attack is mathematically equivalent to the gradientbased training set attacks explored by Biggio et al. (2012); Mei & Zhu (2015b) and others in the context of different models. Biggio et al. (2012) constructed a dataset poisoning attack against a linear SVM on a two-class MNIST task, but had to modify the training points in an obviously distinguishable way to be effective. Measuring the magnitude of Ipert,loss gives model developers a way of quantifying how vulnerable their models are to training-set attacks."
+  }, {
+    "heading": "5.3. Debugging domain mismatch",
+    "text": "Domain mismatch — where the training distribution does not match the test distribution — can cause models with high training accuracy to do poorly on test data (Ben-David et al., 2010). We show that influence functions can identify the training examples most responsible for the errors, helping model developers identify domain mismatch.\nAs a case study, we predicted whether a patient would be readmitted to hospital. Domain mismatches are common in biomedical data, e.g., different hospitals serve different populations, and models trained on one population can do poorly on another (Kansagara et al., 2011). We used logistic regression to predict readmission with a balanced training dataset of 20K diabetic patients from 100+ US hospitals, each represented by 127 features (Strack et al., 2014).7\n7Hospital readmission was defined as whether a patient would be readmitted within the next 30 days. Features were demo-\n3 out of the 24 children under age 10 in this dataset were re-admitted. To induce a domain mismatch, we filtered out 20 children who were not re-admitted, leaving 3 out of 4 readmitted. This caused the model to wrongly classify many children in the test set. Our aim is to identify the 4 children in the training set as being “responsible” for these errors.\nAs a baseline, we tried the common practice of looking at the learned parameters θ̂ to see if the indicator variable for being a child was obviously different. However, this did not work: 14/127 features had a larger coefficient.\nPicking a random child ztest that the model got wrong, we calculated−Iup,loss(zi, ztest) for each training point zi. This clearly highlighted the 4 training children, each of whom were 30-40 times as influential as the next most influential examples. The 1 child in the training set who was not readmitted had a very positive influence, while the other 3 had very negative influences. Moreover, calculating Ipert,loss on these 4 children showed that the ‘child’ indicator variable contributed significantly to the magnitude of Iup,loss."
+  }, {
+    "heading": "5.4. Fixing mislabeled examples",
+    "text": "Labels in the real world are often noisy, especially if crowdsourced (Frénay & Verleysen, 2014), and can even be adversarially corrupted. Even if a human expert could recognize wrongly labeled examples, it is impossible in many applications to manually review all of the training data. We show that influence functions can help human experts prioritize their attention, allowing them to inspect only the examples that actually matter.\nThe key idea is to flag the training points that exert the most influence on the model. Because we do not have access to the test set, we measure the influence of zi with Iup,loss(zi, zi), which approximates the error incurred on zi if we remove zi from the training set.\nOur case study is email spam classification, which relies\ngraphic (e.g., age, race, gender), administrative (e.g., length of hospital stay), or medical (e.g., test results).\non user-provided labels and is also vulnerable to adversarial attack (Biggio et al., 2011). We flipped the labels of a random 10% of the training data and then simulated manually inspecting a fraction of the training points, correcting them if they had been flipped. Using influence functions to prioritize the training points to inspect allowed us to repair the dataset (Fig 6, blue) without checking too many points, outperforming the baselines of checking points with the highest train loss (Fig 6, green) or at random (Fig 6, red). No method had access to the test data."
+  }, {
+    "heading": "6. Related Work",
+    "text": "The use of influence-based diagnostics originated in statistics in the 70s and 80s, driven by seminal papers by Cook and others (Cook, 1977; Cook & Weisberg, 1980; 1982), though similar ideas appeared even earlier in other forms, e.g., the infinitesimal jackknife (Jaeckel, 1972). Earlier work focused on removing training points from linear models, with later work extending this to more general models and a wider variety of perturbations (Cook, 1986; Thomas & Cook, 1990; Chatterjee & Hadi, 1986; Wei et al., 1998). Most of this prior work focused on experiments with small datasets, e.g., n = 24 and p = 10 in Cook & Weisberg (1980), with special attention therefore paid to exact solutions, or if not possible, characterizations of the error terms.\nInfluence functions have not been used much in the ML literature, with some exceptions. Christmann & Steinwart (2004); Debruyne et al. (2008); Liu et al. (2014) use influence functions to study model robustness and to do fast cross-validation in kernel methods. Wojnowicz et al. (2016) uses matrix sketching to estimate Cook’s distance, which is closely related to influence; they focus on prioritizing training points for human attention and derive meth-\nods specific to generalized linear models.\nAs noted in Section 5.2, our training-set attack is mathematically equivalent to an approach first explored by Biggio et al. (2012) in the context of SVMs, with follow-up work extending the framework and applying it to linear and logistic regression (Mei & Zhu, 2015b), topic modeling (Mei & Zhu, 2015a), and collaborative filtering (Li et al., 2016a). These papers derived the attack directly from the KKT conditions without considering influence, though for continuous data, the end result is equivalent. Influence functions additionally let us consider attacks on discrete data (Section 2.2), but we have not tested this empirically. Our work connects the literature on trainingset attacks with work on “adversarial examples” (Goodfellow et al., 2015; Moosavi-Dezfooli et al., 2016), visuallyimperceptible perturbations on test inputs.\nIn contrast to training-set attacks, Cadamuro et al. (2016) consider the task of taking an incorrect test prediction and finding a small subset of training data such that changing the labels on this subset makes the prediction correct. They provide a solution for OLS and Gaussian process models when the labels are continuous. Our work with influence functions allow us to solve this problem in a much larger range of models and in datasets with discrete labels."
+  }, {
+    "heading": "7. Discussion",
+    "text": "We have discussed a variety of applications, from creating training-set attacks to debugging models and fixing datasets. Underlying each of these applications is a common tool, the influence function, which is based on a simple idea — we can better understand model behavior by looking at how it was derived from its training data.\nAt their core, influence functions measure the effect of local changes: what happens when we upweight a point by an infinitesimally-small ? This locality allows us to derive efficient closed-form estimates, and as we show, they can be surprisingly effective. However, we might want to ask about more global changes, e.g., how does a subpopulation of patients from this hospital affect the model? Since influence functions depend on the model not changing too much, how to tackle this is an open question.\nIt seems inevitable that high-performing, complex, blackbox models will become increasingly prevalent and important. We hope that the approach presented here — of looking at the model through the lens of the training data — will become a standard part of the toolkit of developing, understanding, and diagnosing machine learning.\nThe code and data for replicating our experiments is available on GitHub http://bit.ly/gt-influence and Codalab http://bit.ly/cl-influence."
+  }, {
+    "heading": "Acknowledgements",
+    "text": "We thank Jacob Steinhardt, Zhenghao Chen, and Hongseok Namkoong for helpful discussions and comments. This work was supported by a Future of Life Research Award and a Microsoft Research Faculty Fellowship."
+  }],
+  "year": 2017,
+  "references": [{
+    "title": "Auditing black-box models for indirect influence",
+    "authors": ["P. Adler", "C. Falk", "S.A. Friedler", "G. Rybeck", "C. Scheidegger", "B. Smith", "S. Venkatasubramanian"],
+    "venue": "arXiv preprint arXiv:1602.07043,",
+    "year": 2016
+  }, {
+    "title": "Second order stochastic optimization in linear time",
+    "authors": ["N. Agarwal", "B. Bullins", "E. Hazan"],
+    "venue": "arXiv preprint arXiv:1602.03943,",
+    "year": 2016
+  }, {
+    "title": "Modeltracker: Redesigning performance analysis tools for machine learning",
+    "authors": ["S. Amershi", "M. Chickering", "S.M. Drucker", "B. Lee", "P. Simard", "J. Suh"],
+    "venue": "In Conference on Human Factors in Computing Systems (CHI),",
+    "year": 2015
+  }, {
+    "title": "A theory of learning from different domains",
+    "authors": ["S. Ben-David", "J. Blitzer", "K. Crammer", "A. Kulesza", "F. Pereira", "J.W. Vaughan"],
+    "venue": "Machine Learning,",
+    "year": 2010
+  }, {
+    "title": "Support vector machines under adversarial label noise",
+    "authors": ["B. Biggio", "B. Nelson", "P. Laskov"],
+    "venue": "ACML, 20:97–112,",
+    "year": 2011
+  }, {
+    "title": "Poisoning attacks against support vector machines",
+    "authors": ["B. Biggio", "B. Nelson", "P. Laskov"],
+    "venue": "In International Conference on Machine Learning (ICML),",
+    "year": 2012
+  }, {
+    "title": "Debugging machine learning models",
+    "authors": ["G. Cadamuro", "R. Gilad-Bachrach", "X. Zhu"],
+    "venue": "In ICML Workshop on Reliable Machine Learning in the Wild,",
+    "year": 2016
+  }, {
+    "title": "Influential observations, high leverage points, and outliers in linear regression",
+    "authors": ["S. Chatterjee", "A.S. Hadi"],
+    "venue": "Statistical Science,",
+    "year": 1986
+  }, {
+    "title": "On robustness properties of convex risk minimization methods for pattern recognition",
+    "authors": ["A. Christmann", "I. Steinwart"],
+    "venue": "Journal of Machine Learning Research (JMLR),",
+    "year": 2004
+  }, {
+    "title": "Detection of influential observation in linear regression",
+    "authors": ["R.D. Cook"],
+    "venue": "Technometrics, 19:15–18,",
+    "year": 1977
+  }, {
+    "title": "Assessment of local influence",
+    "authors": ["R.D. Cook"],
+    "venue": "Journal of the Royal Statistical Society. Series B (Methodological), pp",
+    "year": 1986
+  }, {
+    "title": "Characterizations of an empirical influence function for detecting influential cases in regression",
+    "authors": ["R.D. Cook", "S. Weisberg"],
+    "year": 1980
+  }, {
+    "title": "Residuals and influence in regression",
+    "authors": ["R.D. Cook", "S. Weisberg"],
+    "year": 1982
+  }, {
+    "title": "Algorithmic transparency via quantitative input influence: Theory and experiments with learning systems",
+    "authors": ["A. Datta", "S. Sen", "Y. Zick"],
+    "venue": "In Security and Privacy (SP),",
+    "year": 2016
+  }, {
+    "title": "Model selection in kernel based regression using the influence function",
+    "authors": ["M. Debruyne", "M. Hubert", "J.A. Suykens"],
+    "venue": "Journal of Machine Learning Research (JMLR),",
+    "year": 2008
+  }, {
+    "title": "Decaf: A deep convolutional activation feature for generic visual recognition",
+    "authors": ["J. Donahue", "Y. Jia", "O. Vinyals", "J. Hoffman", "N. Zhang", "E. Tzeng", "T. Darrell"],
+    "venue": "In International Conference on Machine Learning (ICML),",
+    "year": 2014
+  }, {
+    "title": "Classification in the presence of label noise: a survey",
+    "authors": ["B. Frénay", "M. Verleysen"],
+    "venue": "IEEE Transactions on Neural Networks and Learning Systems,",
+    "year": 2014
+  }, {
+    "title": "Explaining and harnessing adversarial examples",
+    "authors": ["I.J. Goodfellow", "J. Shlens", "C. Szegedy"],
+    "venue": "In International Conference on Learning Representations (ICLR),",
+    "year": 2015
+  }, {
+    "title": "European union regulations on algorithmic decision-making and a “right to explanation",
+    "authors": ["B. Goodman", "S. Flaxman"],
+    "venue": "arXiv preprint arXiv:1606.08813,",
+    "year": 2016
+  }, {
+    "title": "Adversarial machine learning",
+    "authors": ["L. Huang", "A.D. Joseph", "B. Nelson", "B.I. Rubinstein", "J. Tygar"],
+    "venue": "In Proceedings of the 4th ACM workshop on Security and artificial intelligence,",
+    "year": 2011
+  }, {
+    "title": "The infinitesimal jackknife",
+    "authors": ["L.A. Jaeckel"],
+    "venue": "Unpublished memorandum,",
+    "year": 1972
+  }, {
+    "title": "Risk prediction models for hospital readmission: a systematic review",
+    "authors": ["D. Kansagara", "H. Englander", "A. Salanitro", "D. Kagen", "C. Theobald", "M. Freeman", "S. Kripalani"],
+    "year": 2011
+  }, {
+    "title": "Adam: A method for stochastic optimization",
+    "authors": ["D. Kingma", "J. Ba"],
+    "venue": "arXiv preprint arXiv:1412.6980,",
+    "year": 2014
+  }, {
+    "title": "Imagenet classification with deep convolutional neural networks",
+    "authors": ["A. Krizhevsky", "I. Sutskever", "G.E. Hinton"],
+    "venue": "In Advances in Neural Information Processing Systems (NIPS),",
+    "year": 2012
+  }, {
+    "title": "Gradientbased learning applied to document recognition",
+    "authors": ["Y. LeCun", "L. Bottou", "Y. Bengio", "P. Haffner"],
+    "venue": "Proceedings of the IEEE,",
+    "year": 1998
+  }, {
+    "title": "Data poisoning attacks on factorization-based collaborative filtering",
+    "authors": ["B. Li", "Y. Wang", "A. Singh", "Y. Vorobeychik"],
+    "venue": "In Advances in Neural Information Processing Systems (NIPS),",
+    "year": 2016
+  }, {
+    "title": "Understanding neural networks through representation erasure",
+    "authors": ["J. Li", "W. Monroe", "D. Jurafsky"],
+    "venue": "arXiv preprint arXiv:1612.08220,",
+    "year": 2016
+  }, {
+    "title": "On the limited memory BFGS method for large scale optimization",
+    "authors": ["D.C. Liu", "J. Nocedal"],
+    "venue": "Mathematical Programming,",
+    "year": 1989
+  }, {
+    "title": "Efficient approximation of cross-validation for kernel methods using Bouligand influence function",
+    "authors": ["Y. Liu", "S. Jiang", "S. Liao"],
+    "venue": "In International Conference on Machine Learning (ICML),",
+    "year": 2014
+  }, {
+    "title": "Deep learning via hessian-free optimization",
+    "authors": ["J. Martens"],
+    "venue": "In International Conference on Machine Learning (ICML),",
+    "year": 2010
+  }, {
+    "title": "The security of latent Dirichlet allocation",
+    "authors": ["S. Mei", "X. Zhu"],
+    "venue": "In Artificial Intelligence and Statistics (AISTATS),",
+    "year": 2015
+  }, {
+    "title": "Using machine teaching to identify optimal training-set attacks on machine learners",
+    "authors": ["S. Mei", "X. Zhu"],
+    "venue": "In Association for the Advancement of Artificial Intelligence (AAAI),",
+    "year": 2015
+  }, {
+    "title": "Spam filtering with naive Bayes – which naive Bayes",
+    "authors": ["V. Metsis", "I. Androutsopoulos", "G. Paliouras"],
+    "venue": "In CEAS,",
+    "year": 2006
+  }, {
+    "title": "Deepfool: a simple and accurate method to fool deep neural networks",
+    "authors": ["S. Moosavi-Dezfooli", "A. Fawzi", "P. Frossard"],
+    "venue": "In Computer Vision and Pattern Recognition (CVPR),",
+    "year": 2016
+  }, {
+    "title": "Fast exact multiplication by the hessian",
+    "authors": ["B.A. Pearlmutter"],
+    "venue": "Neural Computation,",
+    "year": 1994
+  }, {
+    "title": "why should I trust you?”: Explaining the predictions of any classifier",
+    "authors": ["M.T. Ribeiro", "S. Singh", "C. Guestrin"],
+    "venue": "In International Conference on Knowledge Discovery and Data Mining (KDD),",
+    "year": 2016
+  }, {
+    "title": "ImageNet large scale visual recognition challenge",
+    "authors": ["O. Russakovsky", "J. Deng", "H. Su", "J. Krause", "S. Satheesh", "S. Ma", "Z. Huang", "A. Karpathy", "A. Khosla", "M Bernstein"],
+    "venue": "International Journal of Computer Vision,",
+    "year": 2015
+  }, {
+    "title": "Not just a black box: Learning important features through propagating activation differences",
+    "authors": ["A. Shrikumar", "P. Greenside", "A. Shcherbina", "A. Kundaje"],
+    "venue": "arXiv preprint arXiv:1605.01713,",
+    "year": 2016
+  }, {
+    "title": "Deep inside convolutional networks: Visualising image classification models and saliency maps",
+    "authors": ["K. Simonyan", "A. Vedaldi", "A. Zisserman"],
+    "venue": "arXiv preprint arXiv:1312.6034,",
+    "year": 2013
+  }, {
+    "title": "Striving for simplicity: The all convolutional net",
+    "authors": ["J.T. Springenberg", "A. Dosovitskiy", "T. Brox", "M. Riedmiller"],
+    "venue": "arXiv preprint arXiv:1412.6806,",
+    "year": 2014
+  }, {
+    "title": "Impact of HbA1c measurement on hospital readmission rates: analysis of 70,000 clinical database patient",
+    "authors": ["B. Strack", "J.P. DeShazo", "C. Gennings", "J.L. Olmo", "S. Ventura", "K.J. Cios", "J.N. Clore"],
+    "venue": "records. BioMed Research International,",
+    "year": 2014
+  }, {
+    "title": "Rethinking the Inception architecture for computer vision",
+    "authors": ["C. Szegedy", "V. Vanhoucke", "S. Ioffe", "J. Shlens", "Z. Wojna"],
+    "venue": "In Computer Vision and Pattern Recognition (CVPR),",
+    "year": 2016
+  }, {
+    "title": "Theano: A Python framework for fast computation of mathematical expressions",
+    "authors": ["Theano D. Team"],
+    "venue": "arXiv preprint arXiv:1605.02688,",
+    "year": 2016
+  }, {
+    "title": "Assessing influence on predictions from generalized linear models",
+    "authors": ["W. Thomas", "R.D. Cook"],
+    "year": 1990
+  }, {
+    "title": "Generalized leverage and its applications",
+    "authors": ["B. Wei", "Y. Hu", "W. Fung"],
+    "venue": "Scandinavian Journal of Statistics,",
+    "year": 1998
+  }, {
+    "title": "Influence sketching”: Finding influential samples in large-scale regressions",
+    "authors": ["M. Wojnowicz", "B. Cruz", "X. Zhao", "B. Wallace", "M. Wolff", "J. Luan", "C. Crable"],
+    "venue": "arXiv preprint arXiv:1611.05923,",
+    "year": 2016
+  }],
+  "id": "SP:2a4b60a3d58e15f7f075b6c142dd5496b00e9736",
+  "authors": [{
+    "name": "Pang Wei Koh",
+    "affiliations": []
+  }, {
+    "name": "Percy Liang",
+    "affiliations": []
+  }],
+  "abstractText": "How can we explain the predictions of a blackbox model? In this paper, we use influence functions — a classic technique from robust statistics — to trace a model’s prediction through the learning algorithm and back to its training data, thereby identifying training points most responsible for a given prediction. To scale up influence functions to modern machine learning settings, we develop a simple, efficient implementation that requires only oracle access to gradients and Hessian-vector products. We show that even on non-convex and non-differentiable models where the theory breaks down, approximations to influence functions can still provide valuable information. On linear models and convolutional neural networks, we demonstrate that influence functions are useful for multiple purposes: understanding model behavior, debugging models, detecting dataset errors, and even creating visuallyindistinguishable training-set attacks.",
+  "title": "Understanding Black-box Predictions via Influence Functions"
+}

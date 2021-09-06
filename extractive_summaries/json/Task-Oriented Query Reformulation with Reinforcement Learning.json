@@ -1,0 +1,178 @@
+{
+  "sections": [{
+    "text": "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing, pages 574–583 Copenhagen, Denmark, September 7–11, 2017. c©2017 Association for Computational Linguistics"
+  }, {
+    "heading": "1 Introduction",
+    "text": "Search engines help us find what we need among the vast array of available data. When we request some information using a long or inexact description of it, these systems, however, often fail to deliver relevant items. In this case, what typically follows is an iterative process in which we try to express our need differently in the hope that the system will return what we want. This is a major issue in information retrieval. For instance, Huang and Efthimiadis (2009) estimate that 28-52% of all the web queries are modifications of previous ones.\nTo a certain extent, this problem occurs because search engines rely on matching words in the query with words in relevant documents, to\nperform retrieval. If there is a mismatch between them, a relevant document may be missed.\nOne way to address this problem is to automatically rewrite a query so that it becomes more likely to retrieve relevant documents. This technique is known as automatic query reformulation. It typically expands the original query by adding terms from, for instance, dictionaries of synonyms such as WordNet (Miller, 1995), or from the initial set of retrieved documents (Xu and Croft, 1996). This latter type of reformulation is known as pseudo (or blind) relevance feedback (PRF), in which the relevance of each term of the retrieved documents is automatically inferred.\nThe proposed method is built on top of PRF but differs from previous works as we frame the query\n574\nreformulation problem as a reinforcement learning (RL) problem. An initial query is the natural language expression of the desired goal, and an agent (i.e. reformulator) learns to reformulate an initial query to maximize the expected return (i.e. retrieval performance) through actions (i.e. selecting terms for a new query). The environment is a search engine which produces a new state (i.e. retrieved documents). Our framework is illustrated in Fig. 1.\nThe most important implication of this framework is that a search engine is treated as a black box that an agent learns to use in order to retrieve more relevant items. This opens the possibility of training an agent to use a search engine for a task other than the one it was originally intended for. To support this claim, we evaluate our agent on the task of question answering (Q&A), citation recommendation, and passage/snippet retrieval.\nAs for training data, we use two publicly available datasets (TREC-CAR and Jeopardy) and introduce a new one (MS Academic) with hundreds of thousands of query/relevant document pairs from the academic domain.\nFurthermore, we present a method to estimate the upper bound performance of our RL-based model. Based on the estimated upper bound, we claim that this framework has a strong potential for future improvements.\nHere we summarize our main contributions:\n• A reinforcement learning framework for automatic query reformulation.\n• A simple method to estimate the upper-bound performance of an RL-based model in a given environment.\n• A new large dataset with hundreds of thousands of query/relevant document pairs.1"
+  }, {
+    "heading": "2 A Reinforcement Learning Approach",
+    "text": ""
+  }, {
+    "heading": "2.1 Model Description",
+    "text": "In this section we describe the proposed method, illustrated in Fig. 2.\nThe inputs are a query q0 consisting of a sequence of words (w1, ..., wn) and a candidate term ti with some context words (ti−k, ..., ti+k), where k ≥ 0 is the context window size. Candidate terms\n1The dataset and code to run the experiments are available at https://github.com/nyu-dl/ QueryReformulator.\nare from q0 ∪ D0, the union of the terms in the original query and those from the documents D0 retrieved using q0.\nWe use a dictionary of pretrained word embeddings (Mikolov et al., 2013) to convert the symbolic terms wj and ti to their vector representations vj and ei ∈ Rd, respectively. We map outof-vocabulary terms to an additional vector that is learned during training.\nWe convert the sequence {vj} to a fixed-size vector φa(v) by using either a Convolutional Neural Network (CNN) followed by a max pooling operation over the entire sequence (Kim, 2014) or by using the last hidden state of a Recurrent Neural Network (RNN).2\nSimilarly, we fed the candidate term vectors ei to a CNN or RNN to obtain a vector representation φb(ei) for each term ti. The convolutional/recurrent layers serve an important role of capturing context information, especially for outof-vocabulary and rare terms. CNNs can process candidate terms in parallel, and, therefore, are faster for our application than RNNs. RNNs, on the other hand, can encode longer contexts.\nFinally, we compute the probability of selecting\n2To deal with variable-length inputs in a mini-batch, we pad smaller ones with zeros on both ends so they end up as long as the largest sample in the mini-batch.\nti as:\nP (ti|q0) = σ(UT tanh(W (φa(v)‖φb(ei)) + b)), (1)\nwhere σ is the sigmoid function, ‖ is the vector concatenation operation, W ∈ Rd×2d and U ∈ Rd are weights, and b ∈ R is a bias.\nAt test time, we define the set of terms used in the reformulated query as T = {ti | P (ti|q0) > }, where is a hyper-parameter. At training time, we sample the terms according to their probability distribution, T = {ti | α = 1∧α ∼ P (ti|q0)}. We concatenate the terms in T to form a reformulated query q′, which will then be used to retrieve a new set of documents D′."
+  }, {
+    "heading": "2.2 Sequence Generation",
+    "text": "One problem with the method previously described is that terms are selected independently. This may result in a reformulated query that contains duplicated terms since the same term can appear multiple times in the feedback documents. Another problem is that the reformulated query can be very long, resulting in a slow retrieval.\nTo solve these problems, we extend the model to sequentially generate a reformulated query, as proposed by Buck et al. (2017). We use a Recurrent Neural Network (RNN) that selects one term at a time from the pool of candidate terms and stops when a special token is selected. The advantage of this approach is that the model can remember the terms previously selected through its hidden state. It can, therefore, produce more concise queries.\nWe define the probability of selecting ti as the k-th term of a reformulated query as:\nP (tki |q0) ∝ exp(φb(ei)Thk), (2) where hk is the hidden state vector at the k-th step, computed as:\nhk = tanh(Waφa(v) +Wbφb(tk−1) +Whhk−1), (3) where tk−1 is the term selected in the previous step and Wa ∈ Rd×d, Wb ∈ Rd×d, and Wh ∈ Rd×d are weight matrices. In practice, we use an LSTM (Hochreiter and Schmidhuber, 1997) to encode the hidden state as this variant is known to perform better than a vanilla RNN.\nWe avoid normalizing over a large vocabulary by using only terms from the retrieved documents. This makes inference faster and training practical since learning to select words from the whole\nvocabulary might be too slow with reinforcement learning, although we leave this experiment for a future work."
+  }, {
+    "heading": "2.3 Training",
+    "text": "We train the proposed model using REINFORCE (Williams, 1992) algorithm. The perexample stochastic objective is defined as\nCa = (R− R̄) ∑ t∈T − logP (t|q0), (4)\nwhere R is the reward and R̄ is the baseline, computed by the value network as:\nR̄ = σ(ST tanh(V (φa(v)‖ē) + b)), (5) where ē = 1N ∑N i=1 φb(ei), N = |q0 ∪ D0|, V ∈ Rd×2d and S ∈ Rd are weights and b ∈ R is a bias. We train the value network to minimize\nCb = α||R− R̄||2, (6) where α is a small constant (e.g. 0.1) multiplied to the loss in order to stabilize learning. We conjecture that the stability is due to the slowly evolving value network which directly affects the learning of the policy. This effectively prevents the value network to fit extreme cases (unexpectedly high or low reward.)\nWe minimize Ca and Cb using stochastic gradient descent (SGD) with the gradient computed by backpropagation (Rumelhart et al., 1988). This allows the entire model to be trained end-to-end directly to optimize the retrieval performance.\nEntropy Regularization We observed that the probability distribution in Eq.(1) became highly peaked in preliminary experiments. This phenomenon led to the trained model not being able to explore new terms that could lead to a betterreformulated query. We address this issue by regularizing the negative entropy of the probability distribution. We add the following regularization term to the original cost function in Eq. (4):\nCH = −λ ∑\nt∈q0∪D0 P (t|q0) logP (t|q0), (7)\nwhere λ is a regularization coefficient."
+  }, {
+    "heading": "3 Related Work",
+    "text": "Query reformulation techniques are either based on a global method, which ignores a set of documents returned by the original query, or a local\nmethod, which adjusts a query relative to the documents that initially appear to match the query. In this work, we focus on local methods.\nA popular instantiation of a local method is the relevance model, which incorporates pseudo-relevance feedback into a language model form (Lavrenko and Croft, 2001). The probability of adding a term to an expanded query is proportional to its probability of being generated by the language models obtained from the original query and the document the term occurs in. This framework has the advantage of not requiring query/relevant documents pairs as training data since inference is based on word co-occurrence statistics.\nUnlike the relevance model, algorithms can be trained with supervised learning, as proposed by Cao et al. (2008). A training dataset is automatically created by labeling each candidate term as relevant or not based on their individual contribution to the retrieval performance. Then a binary classifier is trained to select expansion terms. In Section 4, we present a neural network-based implementation of this supervised approach.\nA generalization of this supervised framework is to iteratively reformulate the query by selecting one candidate term at each retrieval step. This can be viewed as navigating a graph where the nodes represent queries and associated retrieved results and edges exist between nodes whose queries are simple reformulations of each other (Diaz, 2016). However, it can be slow to reformulate a query this way as the search engine must be queried for each newly added term. In our method, on the contrary, the search engine is queried with multiple new terms at once.\nAn alternative technique based on supervised learning is to learn a common latent representation of queries and relevant documents terms by using a click-through dataset (Sordoni et al., 2014). Neighboring document terms of a query in the latent space are selected to form an expanded query. Instead of using a click-through dataset, which is often proprietary, it is possible to use an alternative dataset consisting of anchor text/title pairs. In contrast, our approach does not require a dataset of paired queries as it learns term selection strategies via reinforcement learning.\nPerhaps the closest work to ours is that by Narasimhan et al. (2016), in which a reinforcement learning based approach is used to reformu-\nlate queries iteratively. A key difference is that in their work the reformulation component uses domain-specific template queries. Our method, on the other hand, assumes open-domain queries."
+  }, {
+    "heading": "4 Experiments",
+    "text": "In this section we describe our experimental setup, including baselines against which we compare the proposed method, metrics, reward for RL-based models, datasets and implementation details."
+  }, {
+    "heading": "4.1 Baseline Methods",
+    "text": "Raw: The original query is given to a search engine without any modification. We evaluate two search engines in their default configuration: Lucene3 (Raw-Lucene) and Google Search4 (Raw-Google).\nPseudo Relevance Feedback (PRF-TFIDF): A query is expanded with terms from the documents retrieved by a search engine using the original query. In this work, the top-N TF-IDF terms from each of the top-K retrieved documents are added to the original query, where N and K are selected by a grid search on the validation data.\nPRF-Relevance Model (PRF-RM): This is a popular relevance model for query expansion by Lavrenko and Croft (2001). The probability of using a term t in an expanded query is given by:\nP (t|q0) = (1− λ)P ′(t|q0) + λ ∑ d∈D0 P (d)P (t|d)P (q0|d), (8)\nwhere P (d) is the probability of retrieving the document d, assumed uniform over the set, P (t|d) and P (q0|d) are the probabilities assigned by the language model obtained from d to t and q0, respectively. P ′(t|q0) = tf(t∈q)|q| , where tf(t, d) is the term frequency of t in d. We set the interpolation parameter λ to 0.5, following Zhai and Lafferty (2001).\nWe use a Dirichlet smoothed language model (Zhai and Lafferty, 2001) to compute a language model from a document d ∈ D0:\nP (t|d) = tf(t, d) + uP (t|C)|d|+ u , (9)\n3https://lucene.apache.org/ 4https://cse.google.com/cse/\nwhere u is a scalar constant (u = 1500 in our experiments), and P (t|C) is the probability of t occurring in the entire corpus C.\nWe use the N terms with the highest P (t|q0) in an expanded query, whereN is a hyper-parameter.\nEmbeddings Similarity: Inspired by the methods proposed by Roy et al. (2016) and Kuzi et al. (2016), the top-N terms are selected based on the cosine similarity of their embeddings against the original query embedding. Candidate terms come from documents retrieved using the original query (PRF-Emb), or from a fixed vocabulary (Vocab-Emb). We use pretrained embeddings from Mikolov et al. (2013), and it contains 374,000 words."
+  }, {
+    "heading": "4.2 Proposed Methods",
+    "text": "Supervised Learning (SL): Here we detail a deep learning-based variant of the method proposed by Cao et al. (2008). It assumes that query terms contribute independently to the retrieval performance. We thus train a binary classifier to select a term if the retrieval performance increases beyond a preset threshold when that term is added to the original query. More specifically, we mark a term as relevant if (R′ −R)/R > 0.005, where R and R′ are the retrieval performances of the original query and the query expanded with the term, respectively.\nWe experiment with two variants of this method: one in which we use a convolutional network for both original query and candidate terms (SL-CNN), and the other in which we replace the convolutional network with a single hidden layer feed-forward neural network (SL-FF). In this variant, we average the output vectors of the neural network to obtain a fixed size representation of q0.\nReinforcement Learning (RL): We use multiple variants of the proposed RL method. RL-CNN and RL-RNN are the models described in Section 2.1, in which the former uses CNNs to encode query and term features and the latter uses RNNs (more specifically, bidirectional LSTMs). RL-FF is the model in which term and query vectors are encoded by single hidden layer feed-forward neural networks. In the RL-RNN-SEQ model, we add the sequential generator described in Section 2.2 to the RL-RNN variant."
+  }, {
+    "heading": "4.3 Datasets",
+    "text": "We summarize in Table 1 the datasets.\nTREC - Complex Answer Retrieval (TRECCAR) This is a publicly available dataset automatically created from Wikipedia whose goal is to encourage the development of methods that respond to more complex queries with longer answers (Dietz and Ben, 2017). A query is the concatenation of an article title and one of its section titles. The ground-truth documents are the paragraphs within that section. For example, a query is “Sea Turtle, Diet” and the ground truth documents are the paragraphs in the section “Diet” of the “Sea Turtle” article. The corpus consists of all the English Wikipedia paragraphs, except the abstracts. The released dataset has five predefined folds, and we use the first three as the training set and the remaining two as validation and test sets, respectively.\nJeopardy This is a publicly available Q&A dataset introduced by Nogueira and Cho (2016). A query is a question from the Jeopardy! TV Show and the corresponding document is a Wikipedia article whose title is the answer. For example, a query is “For the last eight years of his life, Galileo was under house arrest for espousing this mans theory” and the answer is the Wikipedia article titled “Nicolaus Copernicus”. The corpus consists of all the articles in the English Wikipedia.\nMicrosoft Academic (MSA) This dataset consists of academic papers crawled from Microsoft Academic API.5 The crawler started at the paper Silver et al. (2016) and traversed the graph of references until 500,000 papers were crawled. We then removed papers that had no reference within or whose abstract had less than 100 characters. We ended up with 480,000 papers.\nA query is the title of a paper, and the groundtruth answer consists of the papers cited within. Each document in the corpus consists of its title and abstract.6"
+  }, {
+    "heading": "4.4 Metrics and Reward",
+    "text": "Three metrics are used to evaluate performance:\nRecall@K: Recall of the top-K retrieved documents:\nR@K = |DK ∩D∗| |D∗| , (10)\n5https://www.microsoft.com/cognitive-services/enus/academic-knowledge-api\n6This was done to avoid a large computational overhead for indexing full papers.\nwhere DK are the top-K retrieved documents and D∗ are the relevant documents. Since one of the goals of query reformulation is to increase the proportion of relevant documents returned, recall is our main metric.\nPrecision@K: Precision of the top-K retrieved documents:\nP@K = |DK ∩D∗| |DK | (11)\nPrecision captures the proportion of relevant documents among the returned ones. Despite not being the main goal of a reformulation method, improvements in precision are also expected with a good query reformulation method. Therefore, we include this metric.\nMean Average Precision: The average precision of the top-K retrieved documents is defined as:\nAP@K = ∑K\nk=1 P@k × rel(k) |D∗| , (12)\nwhere\nrel(k) = { 1, if the k-th document is relevant; 0, otherwise.\n(13)\nThe mean average precision of a set of queries Q is then:\nMAP@K = 1 |Q| ∑ q∈Q AP@Kq, (14)\nwhere AP@Kq is the average precision at K for a query q. This metric values the position of a relevant document in a returned list and is, therefore, complementary to precision and recall.\nReward We use R@K as a reward when training the proposed RL-based models as this metric has shown to be effective in improving the other metrics as well.\nSL-Oracle In addition to the baseline methods and proposed reinforcement learning approach, we report two oracle performance bounds. The first oracle is a supervised learning oracle (SLOracle). It is a classifier that perfectly selects terms that will increase performance according to the procedure described in Section 4.2. This measure serves as an upper-bound for the supervised methods. Notice that this heuristic assumes that each term contributes independently from all the other terms to the retrieval performance. There may be, however, other ways to explore the dependency of terms that would lead to a higher performance.\nRL-Oracle Second, we introduce a reinforcement learning oracle (RL-Oracle) which estimates a conservative upper-bound performance for the RL models. Unlike the SL-Oracle, it does not assume that each term contributes independently to the retrieval performance. It works as follows: first, the validation or test set is divided into N small subsets {Ai}Ni=1 (each with 100 examples, for instance). An RL model is trained on each subset Ai until it overfits, that is, until the reward R∗i stops increasing or an early stop mechanism ends training.7 Finally, we compute the oracle performance R∗ as the average reward over all the subsets: R∗ = 1N ∑N i=1R ∗ i .\nThis upper bound by the RL-Oracle is, however, conservative since there might exist better reformulation strategies that the RL model was not able to discover."
+  }, {
+    "heading": "4.5 Implementation Details",
+    "text": "Search engine We use Lucene and BM25 as the search engine and the ranking function, respectively, for all PRF, SL and RL methods. For RawGoogle, we restrict the search to the wikipedia.org domain when evaluating its performance on the Jeopardy dataset. We could not apply the same restriction to the two other datasets as Google does not index Wikipedia paragraphs, and as it is not trivial to match papers from MS Academic to the ones returned by Google Search.\nCandidate terms We use Wikipedia articles as a source for candidate terms since it is a well curated, clean corpus, with diverse topics.\nAt training and test times of SL methods, and at test time of RL methods, the candidate terms are from the first M words of the top-K Wikipedia articles retrieved. We select M and K using grid search on the validation set over {50, 100, 200, 300} and {1, 3, 5, 7}, respectively. The best values are M = 300 and K = 7. These correspond to the maximum number of terms we could fit in a single GPU.\n7The subset should be small enough, or the model should be large enough so it can overfit.\nAt training time of an RL model, we use only one document uniformly sampled from the top-K retrieved ones as a source for candidate terms, as this leads to a faster learning.\nFor the PRF methods, the top-M terms according to a relevance metric (i.e., TF-IDF for PRF-TFIDF, cosine similarity for PRF-Emb, and conditional probability for PRF-RM) from each of the top-K retrieved documents are added to the original query. We select M and K using grid search over {10, 50, 100, 200, 300, 500} and {1, 3, 5, 9, 11}, respectively. The best values are M = 300 and K = 9.\nMultiple Reformulation Rounds Although our framework supports multiple rounds of search and reformulation, we did not find any significant improvement in reformulating a query more than once. Therefore, the numbers reported in the results section were all obtained from models running two rounds of search and reformulation.\nNeural Network Setup For SL-CNN and RLCNN variants, we use a 2-layer convolutional network for the original query. Each layer has a window size of 3 and 256 filters. We use a 2-layer convolutional network for candidate terms with window sizes of 9 and 3, respectively, and 256 filters in each layer. We set the dimension d of the weight matrices W,S,U , and V to 256. For the optimizer, we use ADAM (Kingma and Ba, 2014) with α = 10−4, β1 = 0.9, β2 = 0.999, and = 10−8. We set the entropy regularization coefficient λ to 10−3.\nFor RL-RNN and RL-RNN-SEQ, we use a 2- layer bidirectional LSTM with 256 hidden units in each layer. We clip the gradients to unit norm. For RL-RNN-SEQ, we set the maximum possible\nnumber of generated terms to 50 and we use beam search of size four at test time.\nWe fix the dictionary of pre-trained word embeddings during training, except the vector for outof-vocabulary words. We found that this led to faster convergence and observed no difference in the overall performance when compared to learning embeddings during training."
+  }, {
+    "heading": "5 Results and Discussion",
+    "text": "Table 2 shows the main result. As expected, reformulation based methods work better than using the original query alone. Supervised methods (SL-FF and SL-CNN) have in general a better performance than unsupervised ones (PRF-TFIDF, PRF-RM, PRF-Emb, and Emb-Vocab), but perform worse than RL-based models (RL-FF, RLCNN, RL-RNN, and RL-RNN-SEQ).\nRL-RNN-SEQ performs slightly worse than RL-RNN but produces queries that are three times shorter, on average (15 vs 47 words). Thus, RLRNN-SEQ is faster in retrieving documents and therefore might be a better candidate for a production implementation.\nThe performance gap between the oracle and best performing method (Table 2, RL-Oracle vs. RL-RNN) suggests that there is a large room for improvement. The cause for this gap is unknown but we suspect, for instance, an inherent difficulty in learning a good selection strategy and the partial observability from using a black box search engine."
+  }, {
+    "heading": "5.1 Relevant Terms per Document",
+    "text": "The proportion of relevant terms selected by the SL- and RL-Oracles over the total number of candidate terms (Table 3) indicates that only a small subset of terms are useful for the reformulation. Thus, we may conclude that the proposed method was able to learn an efficient term selection strategy in an environment where relevant terms are infrequent."
+  }, {
+    "heading": "5.2 Scalability: Number of Terms vs Recall",
+    "text": "Fig. 3 shows the improvement in recall as more candidate terms are provided to a reformulation method. The RL-based model benefits from more candidate terms, whereas the classical PRF method quickly saturates. In our experiments, the best performing RL-based model uses the maximum number of candidate terms that we could fit\non a single GPU. We, therefore, expect further improvements with more computational resources."
+  }, {
+    "heading": "5.3 Qualitative Analysis",
+    "text": "We show two examples of queries and the probabilities of each candidate term of being selected by the RL-CNN model in Fig. 4.\nNotice that terms that are more related to the query have higher probabilities, although common words such as ”the” are also selected. This is a consequence of our choice of a reward that does\nnot penalize the selection of neutral terms. In Table 4 we show an original and reformulated query examples extracted from the MS Academic and TREC-CAR datasets, and their top-3 retrieved documents. Notice that the reformulated query retrieves more relevant documents than the original one. As we conjectured earlier, we see that a search engine tends to return a document simply with the largest overlap in the text, necessitating the reformulation of a query to retrieve semantically relevant documents.\nSame query, different tasks We compare in Table 5 the reformulation of a sample query made by models trained on different datasets. The model trained on TREC-CAR selects terms that are similar to the ones in the original query, such as “serves” and “accreditation”. These selections are expected for this task since similar terms can be effective in retrieving similar paragraphs. On the other hand, the model trained on Jeopardy prefers to select proper nouns, such as “Tunxis”, as these have a higher chance of being an answer to the question. The model trained on MSA selects terms that cover different aspects of the entity being queried, such as “arts center” and “library”, since retrieving a diverse set of documents is necessary for the task the of citation recommendation."
+  }, {
+    "heading": "5.4 Training and Inference Times",
+    "text": "Our best model, RL-RNN, takes 8-10 days to train on a single K80 GPU. At inference time, it takes\napproximately one second to reformulate a batch of 64 queries. Approximately 40% of this time is to retrieve documents from the search engine."
+  }, {
+    "heading": "6 Conclusion",
+    "text": "We introduced a reinforcement learning framework for task-oriented automatic query reformulation. An appealing aspect of this framework is that an agent can be trained to use a search engine for a specific task. The empirical evaluation has confirmed that the proposed approach outperforms strong baselines in the three separate tasks. The analysis based on two oracle approaches has revealed that there is a meaningful room for further development. In the future, more research is necessary in the directions of (1) iterative reformulation under the proposed framework, (2) using information from modalities other than text, and (3) better reinforcement learning algorithms for a partially-observable environment."
+  }, {
+    "heading": "Acknowledgements",
+    "text": "RN is funded by Coordenao de Aperfeioamento de Pessoal de Nvel Superior (CAPES). KC thanks support by Facebook, Google and NVIDIA. This work was partly funded by the Defense Advanced Research Projects Agency (DARPA) D3M program. Any opinions, findings, and conclusions or recommendations expressed in this material are those of the authors and do not necessarily reflect the views of DARPA."
+  }],
+  "year": 2017,
+  "references": [{
+    "title": "Ask the right questions: Active question reformulation with reinforcement learning",
+    "authors": ["Christian Buck", "Jannis Bulian", "Massimiliano Ciaramita", "Andrea Gesmundo", "Neil Houlsby", "Wojciech Gajewski", "Wei Wang."],
+    "venue": "arXiv preprint arXiv:1705.07830.",
+    "year": 2017
+  }, {
+    "title": "Selecting good expansion terms for pseudo-relevance feedback",
+    "authors": ["Guihong Cao", "Jian-Yun Nie", "Jianfeng Gao", "Stephen Robertson."],
+    "venue": "Proceedings of the 31st annual international ACM SIGIR conference on Research and development in infor-",
+    "year": 2008
+  }, {
+    "title": "Pseudo-query reformulation",
+    "authors": ["Fernando Diaz."],
+    "venue": "European Conference on Information Retrieval, pages 521–532. Springer.",
+    "year": 2016
+  }, {
+    "title": "Trec car: A data set for complex answer retrieval",
+    "authors": ["Laura Dietz", "Gamari Ben."],
+    "venue": "http://treccar.cs.unh.edu.",
+    "year": 2017
+  }, {
+    "title": "Long short-term memory",
+    "authors": ["Sepp Hochreiter", "Jürgen Schmidhuber."],
+    "venue": "Neural computation, 9(8):1735–1780.",
+    "year": 1997
+  }, {
+    "title": "Analyzing and evaluating query reformulation strategies in web search logs",
+    "authors": ["Jeff Huang", "Efthimis N Efthimiadis."],
+    "venue": "Proceedings of the 18th ACM conference on Information and knowledge management, pages 77–86. ACM.",
+    "year": 2009
+  }, {
+    "title": "Convolutional neural networks for sentence classification",
+    "authors": ["Yoon Kim."],
+    "venue": "arXiv preprint arXiv:1408.5882.",
+    "year": 2014
+  }, {
+    "title": "Adam: A method for stochastic optimization",
+    "authors": ["Diederik Kingma", "Jimmy Ba."],
+    "venue": "arXiv preprint arXiv:1412.6980.",
+    "year": 2014
+  }, {
+    "title": "Query expansion using word embeddings",
+    "authors": ["Saar Kuzi", "Anna Shtok", "Oren Kurland."],
+    "venue": "Proceedings of the 25th ACM International on Conference on Information and Knowledge Management, pages 1929–1932. ACM.",
+    "year": 2016
+  }, {
+    "title": "Relevance based language models",
+    "authors": ["Victor Lavrenko", "W Bruce Croft."],
+    "venue": "Proceedings of the 24th annual international ACM SIGIR conference on Research and development in information retrieval, pages 120–127. ACM.",
+    "year": 2001
+  }, {
+    "title": "Efficient estimation of word representations in vector space",
+    "authors": ["Tomas Mikolov", "Kai Chen", "Greg Corrado", "Jeffrey Dean."],
+    "venue": "arXiv preprint arXiv:1301.3781.",
+    "year": 2013
+  }, {
+    "title": "Wordnet: a lexical database for english",
+    "authors": ["George A Miller."],
+    "venue": "Communications of the ACM, 38(11):39–",
+    "year": 1995
+  }, {
+    "title": "Improving information extraction by acquiring external evidence with reinforcement learning",
+    "authors": ["Karthik Narasimhan", "Adam Yala", "Regina Barzilay."],
+    "venue": "arXiv preprint arXiv:1603.07954.",
+    "year": 2016
+  }, {
+    "title": "Endto-end goal-driven web navigation",
+    "authors": ["Rodrigo Nogueira", "Kyunghyun Cho."],
+    "venue": "Advances in Neural Information Processing Systems, pages 1903–1911.",
+    "year": 2016
+  }, {
+    "title": "Using word embeddings for automatic query expansion",
+    "authors": ["Dwaipayan Roy", "Debjyoti Paul", "Mandar Mitra", "Utpal Garain."],
+    "venue": "arXiv preprint arXiv:1606.07608.",
+    "year": 2016
+  }, {
+    "title": "Learning representations by backpropagating errors",
+    "authors": ["David E Rumelhart", "Geoffrey E Hinton", "Ronald J Williams."],
+    "venue": "Cognitive modeling, 5(3):1.",
+    "year": 1988
+  }, {
+    "title": "Mastering the game of go with deep neural networks and tree",
+    "authors": ["David Silver", "Aja Huang", "Chris J Maddison", "Arthur Guez", "Laurent Sifre", "George Van Den Driessche", "Julian Schrittwieser", "Ioannis Antonoglou", "Veda Panneershelvam", "Marc Lanctot"],
+    "year": 2016
+  }, {
+    "title": "Learning concept embeddings for query expansion by quantum entropy minimization",
+    "authors": ["Alessandro Sordoni", "Yoshua Bengio", "Jian-Yun Nie."],
+    "venue": "AAAI, pages 1586–1592.",
+    "year": 2014
+  }, {
+    "title": "Simple statistical gradientfollowing algorithms for connectionist reinforcement learning",
+    "authors": ["Ronald J Williams."],
+    "venue": "Machine learning, 8(3-4):229–256.",
+    "year": 1992
+  }, {
+    "title": "Query expansion using local and global document analysis",
+    "authors": ["Jinxi Xu", "W Bruce Croft."],
+    "venue": "Proceedings of the 19th annual international ACM SIGIR conference on Research and development in information retrieval, pages 4–11. ACM.",
+    "year": 1996
+  }, {
+    "title": "A study of smoothing methods for language models applied to ad hoc information retrieval",
+    "authors": ["Chengxiang Zhai", "John Lafferty."],
+    "venue": "Proceedings of the 24th annual international ACM SIGIR conference on Research and development in information",
+    "year": 2001
+  }],
+  "id": "SP:ea7e8af9985f4bae4054c2b57642b94600e2e2e9",
+  "authors": [{
+    "name": "Rodrigo Nogueira",
+    "affiliations": []
+  }, {
+    "name": "Kyunghyun Cho",
+    "affiliations": []
+  }],
+  "abstractText": "Search engines play an important role in our everyday lives by assisting us in finding the information we need. When we input a complex query, however, results are often far from satisfactory. In this work, we introduce a query reformulation system based on a neural network that rewrites a query to maximize the number of relevant documents returned. We train this neural network with reinforcement learning. The actions correspond to selecting terms to build a reformulated query, and the reward is the document recall. We evaluate our approach on three datasets against strong baselines and show a relative improvement of 5-20% in terms of recall. Furthermore, we present a simple method to estimate a conservative upperbound performance of a model in a particular environment and verify that there is still large room for improvements.",
+  "title": "Task-Oriented Query Reformulation with Reinforcement Learning"
+}

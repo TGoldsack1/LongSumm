@@ -1,0 +1,273 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Concerns are rising that machine learning systems which make or support important decisions affecting individuals— such as car insurance pricing, résumé filtering or recidivism prediction—might illegally or unfairly discriminate against certain subgroups of the population (Schreurs et al., 2008; Calders & Žliobaitė, 2012; Barocas & Selbst, 2016). The growing field of fair learning seeks to formalize relevant requirements, and through altering parts of the algorithmic decision-making pipeline, to detect and mitigate potential discrimination (Friedler et al., 2016).\nMost legally-problematic discrimination centers on differences based on sensitive attributes, such as gender or race (Barocas & Selbst, 2016). The first type, disparate treatment (or direct discrimination), occurs if individuals are treated differently according to their sensitive attributes (with all others equal). To avoid disparate treatment, one should not inquire about individuals’ sensitive attributes. While\n1Max Planck Institute for Intelligent Systems 2University of Cambridge 3The Alan Turing Institute 4University of Warwick 5University College London 6Max Planck Institute for Software Systems. Correspondence to: Niki Kilbertus <niki.kilbertus@tuebingen.mpg.de>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\nthis has some intuitive appeal and justification (Grgić-Hlača et al., 2018), a significant concern is that sensitive attributes may often be accurately predicted (“reconstructed”) from non-sensitive features (Dwork et al., 2012). This motivates measures to deal with the second type of discrimination.\nDisparate impact (or indirect discrimination) occurs when the outcomes of decisions disproportionately benefit or hurt individuals from subgroups with particular sensitive attribute settings without appropriate justification. For example, firms deploying car insurance telematics devices (Handel et al., 2014) build up high dimensional pictures of driving behavior which might easily proxy for sensitive attributes even when they are omitted. Much recent work in fair learning has focused on approaches to avoiding various notions of disparate impact (Feldman et al., 2015; Hardt et al., 2016; Zafar et al., 2017c).\nIn order to check and enforce such requirements, the modeler must have access to the sensitive attributes for individuals in the training data—however, this may be undesirable for several reasons (Žliobaitė & Custers, 2016). First, individuals are unlikely to want to entrust sensitive attributes to modelers in all application domains. Where applications have clear discriminatory potential, it is understandable that individuals may be wary of providing sensitive attributes to modelers who might exploit them to negative effect, especially with no guarantee that a fair model will indeed be learned and deployed. Even if certain modelers themselves were trusted, the wide provision of sensitive data creates heightened privacy risks in the event of a data breach.\nFurther, legal barriers may limit collection and processing of sensitive personal data. A timely example is the EU’s General Data Protection Regulation (GDPR), which contains heightened prerequisites for the collection and processing of some sensitive attributes. Unlike other data, modelers cannot justify using sensitive characteristics in fair learning with their “legitimate interests”—and instead will often need explicit, freely given consent (Veale & Edwards, 2018).\nOne way to address these concerns was recently proposed by Veale & Binns (2017). The idea is to involve a highly trusted third party, and may work well in some cases. However, there are significant potential difficulties: individuals must disclose their sensitive attributes to the third party (even if an individual trusts the party, she may have concerns that\nthe data may somehow be obtained or hacked by others, e.g., Graham, 2017); and the modeler must disclose their model to the third party, which may be incompatible with their intellectual property or other business concerns.\nContribution. We propose an approach to detect and mitigate disparate impact without disclosing readable access to sensitive attributes. This reflects the notion that decisions should be blind to an individual’s status—depicted in courtrooms by a blindfolded Lady Justice holding balanced scales (Bennett Capers, 2012). We assume the existence of a regulator with fairness aims (such as a data protection authority or anti-discrimination agency). With recent methods from secure multi-party computation (MPC), we enable auditable fair learning while ensuring that both individuals’ sensitive attributes and the modeler’s model remain private to all other parties—including the regulator. Desirable fairness and accountability applications we enable include:\n1. Fairness certification. Given a model and a dataset of individuals, check that the model satisfies a given fairness constraint (we consider several notions from the literature, see Section 2.2); if yes, generate a certificate.\n2. Fair model training. Given a dataset of individuals, learn a model guaranteed and certified to be fair.\n3. Decision verification. A malicious modeler might go through fair model training, but then use a different model in practice. To address such accountability concerns (Kroll et al., 2016), we efficiently provide for an individual to challenge a received outcome, verifying that it matches the outcome from the previously certified model.\nWe rely on recent theoretical developments in MPC (see Section 3) which we extend to admit linear constraints in order to enforce fairness requirements. These extensions may be of independent interest. We demonstrate the realworld efficacy of our methods, and shall make our code publicly available."
+  }, {
+    "heading": "2. Fairness and Privacy Requirements",
+    "text": "Here we formalize our setup and requirements."
+  }, {
+    "heading": "2.1. Assumptions and Incentives",
+    "text": "We assume three categories of participants: a modeler M, a regulator REG, and users U1, . . . ,Un. For each user, we consider a vector of sensitive features (or attributes, we use the terms interchangeably) zi ∈ Z (e.g., ethnicity or gender) which might be a source of discrimination, and a vector of non-sensitive features xi ∈ X (discrete or real). Additionally, each user has a non-sensitive feature yi ∈ Y which the modeler M would like to predict—the label (e.g., loan default). In line with current work in fair learning, we\nassume that all zi and yi attributes are binary, though our MPC approach could be extended to multi-label settings. The source of societal concern is that sensitive attributes zi are potentially correlated with xi or yi.\nModeler M wishes to train a model fθ : X → Y , which accurately maps features xi to labels yi, in a supervised fashion. We assume M needs to keep the model private for intellectual property or other business reasons. The model fθ does not use sensitive information zi as input to prevent disparate treatment (direct discrimination).\nFor each user Ui, M observes or is provided xi, yi. The sensitive information in zi is required to ensure fθ meets a given disparate impact fairness condition F (see Section 2.2). While each user Ui wants fθ to meet F, they also wish to keep zi private from all other parties. The regulator REG aims to ensure that M deploys only models that meet fairness condition F. It has no incentive to collude with M (if collusion were a concern, more sophisticated cryptographic protocols would be required). Further, the modeler M might be legally obliged to demonstrate to the regulator REG that their model meets fairness condition F before it can be publicly deployed. As part of this, REG also has a positive duty to enable the training of fair models.\nIn Section 2.3, we define and address three fundamental problems in our setup: certification, training, and verification. For each problem, we present its functional goal and its privacy requirements. We refer to D = {(xi, yi)}ni=1 and Z = {zi}ni=1 as the non-sensitive and sensitive data, respectively. In Section 2.2, we first provide necessary background on various notions of fairness that have been explored in the fair learning literature."
+  }, {
+    "heading": "2.2. Fairness Criteria",
+    "text": "In large part, works that formalize fairness in machine learning do so by balancing a certain condition between groups of people with different sensitive attributes, z versus z′. Several possible conditions have been proposed. Popular choices include (where y ∈ {0, 1} and ŷ is the prediction of a machine learning model):\nP (ŷ = y | z) = P (ŷ = y | z′) (acc) (1) P (ŷ = y | z, y = 1) = P (ŷ = y | z′, y = 1) (TPR) (2) P (ŷ = y | z, y = 0) = P (ŷ = y | z′, y = 0) (TNR) (3) P (ŷ = y | z, ŷ = 1) = P (ŷ = y | z′, ŷ = 1) (PPV) (4) P (ŷ = y | z, ŷ = 0) = P (ŷ = y | z′, ŷ = 0) (NPV) (5)\nP (ŷ = 1 | z) = P (ŷ = 1 | z′) (AR) (6) Respectively, these consider equality of: (1) accuracy, (2) true positive rate, (3) true negative rate, (4) positive predicted value, (5) negative predicted value, or (6) acceptance rate. Works which use these or related notions include (Hardt et al., 2016; Zafar et al., 2017c;a;b).\nIn this work we focus on a variant of eq. (6), formulated as a constrained optimization problem by Zafar et al. (2017c) mimicking the p%-rule (Biddle, 2006): for any binary protected attribute z ∈ {0, 1}, it aims to achieve\nmin { P (ŷ = 1 | z = 1) P (ŷ = 1 | z = 0) , P (ŷ = 1 | z = 0) P (ŷ = 1 | z = 1) } ≥ p 100 . (7)\nWe believe that in future work, a similar MPC approach could also be used for conditions (1), (2) or (3)—i.e., all the other measures which, to our knowledge, have been addressed with efficient standard (non-private) methods."
+  }, {
+    "heading": "2.3. Certification, Training, and Verification",
+    "text": "Fairness certification. Given a notion of fairness F, the modeler M would like to work with the regulator REG to obtain a certificate that model fθ is fair. To do so, we propose that users send their non-sensitive data D to REG; and send encrypted versions of their sensitive data Z to both M and REG. Neither M nor REG can read the sensitive data. However, we can design a secure protocol between M and REG (described in Section 3) to certify if the model is fair. This setup is shown in Figure 1 (Left).\nWhile both REG and M learn the outcome of the certification, we require the following privacy constraints: (C1) privacy of sensitive user data: no one other than Ui ever learns zi in the clear, (C2) model secrecy: only M learns fθ in the clear, and (C3) minimal disclosure of D to REG: only REG learns D in the clear.\nFair model training. How can a modeler M learn a fair model without access to users’ sensitive data Z? We propose to solve this by having users send their non-sensitive data D to M and to distribute encryptions of their sensitive data to M and REG as in certification. We shall describe a secure MPC protocol between M and REG to train a fair model fθ privately. This setup is shown in Figure 1 (Center).\nPrivacy constraints: (C1) privacy of sensitive user data, (C2) model secrecy, and (C3) minimal disclosure of D to M.\nDecision verification. Assume that a malicious M has had model fθ successfully certified by REG as above. It then swaps fθ for another potentially unfair model fθ′ in the real world. When a user receives a decision ŷ, e.g., her mortgage is denied, she can then challenge that decision by asking REG for a verification V . The verification involves M and REG, and consists of verifying that fθ′(x) = fθ(x), where x is the user’s non-sensitive data. This ensures that the user would have been subject to the same result with the certified model fθ, even if fθ′ 6= fθ and fθ′ is not fair. Hence, while there is no simple technical way to prevent a malicious M from deploying an unfair model, it will get\ncaught if a user challenges a decision that would differ under fθ. This setup is shown in Figure 1 (Right).\nPrivacy constraint: While REG and the user learn the outcome of the verification, we require (C1) privacy of sensitive user data, and (C2) model secrecy."
+  }, {
+    "heading": "2.4. Design Choices",
+    "text": "We use a regulator for several reasons. Given fair learning is of most benefit to vulnerable individuals, we do not wish to deter adoption with high individual burdens. While MPC could be carried out without the involvement of a regulator, using all users as parties, this comes at a significantly greater computational cost. With current methods, taking that approach would be unrealistic given the size of the user-base in many domains of concern, and would furthermore require all users to be online simultaneously. Introducing a regulator removes these barriers and leaves users’ computational burden at a minimum level, with envisaged applications practical with only their web browsers.\nIn cases where users are uncomfortable sharing D with either REG or M, it is trivial to extend all three tasks such that all of xi, yi, zi remain private throughout, with the computation cost increasing only by a factor of 2. This extension would sometimes be desirable as it restricts the view of M to the final model, prohibiting inferences about Z when D is known. However, this setup hinders exploratory data analysis by the modeler which might promote robust model-building, and, in the case of verification, validation by the regulator that user-provided data is correct."
+  }, {
+    "heading": "3. Our Solution",
+    "text": "Our proposed solution to these three problems is to use Multi-Party Computation (MPC). Before we describe how it can be applied to fair learning, we first present the basic principles of MPC, as well as its limitations particularly in the context of machine learning applications."
+  }, {
+    "heading": "3.1. MPC for Machine Learning",
+    "text": "Multi-Party Computation protocols allow two parties P1 andP2 holding secret values x1 and x2 to evaluate an agreedupon function f , via y = f(x1, x2) in a way in which the parties (either both or one of them) learn only y. For example, if f(x1, x2) = I(x1 < x2), then the parties would learn which of their values is bigger, but nothing else.1 This corresponds to the well-known Yao’s millionaires problem: two millionaires want to conclude who is richer without disclosing their wealth to each other. The problem was introduced by Andrew Yao in 1982, and kicked off the area of multi-party computation in cryptography.\n1The function I is 1 if its argument is true and 0 otherwise.\nIn our setting—instead of a simple comparison as in the millionaires problem—f will be either (i) a procedure to check the fairness of a model and certify it, (ii) a machine learning training procedure with fairness constraints, or (iii) a model evaluation to verify a decision. The two parties involved in our computation are the modeler M and the regulator REG. The inputs depend on the case (see Figure 1).\nAs generic solutions do not yet scale to real-world data analysis tasks, one typically has to tailor custom protocols to the desired functionality. This approach has been followed successfully for a variety of machine learning tasks such as logistic and linear regression (Nikolaenko et al., 2013b; Gascón et al., 2017; Mohassel & Zhang, 2017), neural network training (Mohassel & Zhang, 2017) and evaluation (Juvekar et al., 2018; Liu et al., 2017), matrix factorization (Nikolaenko et al., 2013a), and principal component analysis (Al-Rubaie et al., 2017). In the next section we review challenges beyond scalability issues that arise when implementing machine learning algorithms in MPC."
+  }, {
+    "heading": "3.2. Challenges in Multi-Party Machine Learning",
+    "text": "MPC protocols can be classified into two groups depending on whether the target function is represented as either a Boolean or arithmetic circuit. All protocols proceed by having the parties jointly evaluate the circuit, processing it gate by gate while keeping intermediate values hidden from both parties by means of a secret sharing scheme. While representing functions as circuits can be done without losing expressiveness, it means certain operations are impractical. In particular, algorithms that execute different branches depending on the input data will explode in size when implemented as circuits, and in some cases lose their run time guarantees (e.g., consider binary search).\nCrucially, this applies to floating-point arithmetic. While\nthis is work in progress, state-of-the-art MPC floating-point arithmetic implementations take more than 15 milliseconds to multiply two 64 bit numbers (Demmler et al., 2015a,\nTable 4), which is prohibitive for our applications. Hence, machine learning MPC protocols are limited to fixed-point arithmetic. Overcoming this limitation is a key challenge for the field. Another necessity for the feasibility of MPC is to approximate non-linear functions such as the sigmoid, ideally by (piecewise) linear functions."
+  }, {
+    "heading": "3.3. Our MPC Protocols",
+    "text": "Input sharing. To implement the functionality from Figure 1, we first need a secure procedure for the users to secret share a sensitive value, for example her race, with the modeler M and the regulator REG. We use additive secret sharing. A value z is represented in a finite domain Zq—we use q = 264. To share z, the user samples a value r from Zq uniformly at random, and sends z − r to M and r to REG. While z can be reconstructed (and subsequently operated on) inside the MPC computation by means of a simple addition, each share on its own does not reveal anything z (other than that it is in Zq). One can think of arithmetic sharing as a “distributed one-time pad”.\nIn Figure 1, we now reinterpret the key held by REG and the encrypted z by M, as their corresponding shares of the sensitive attributes and denote them by 〈z〉1 and 〈z〉2 respectively. The idea of privately outsourcing computation to two non-colluding parties in this way is recurrent in MPC, and often referred to as the two-server model (Mohassel & Zhang, 2017; Gascón et al., 2017; Nikolaenko et al., 2013b; Al-Rubaie et al., 2017).\nSigning and checking a model. Note that certification and verification partly correspond to sub-procedures of the fair training task: during training we check the fairness\nconstraint F, and repeatedly evaluate partial models on the training dataset (using gradient descent). Hence, certification and verification do not add technical difficulties over training, which is described in detail in Section 4. However, for verification, we still need to “sign” the model, i.e., REG should obtain a signature s(θ) as a result of model certification, see Figure 1 (Left). This signature is used to check in the verification phase, whether a given model θ′ from M satisfies s(θ′) = s(θ) for a certified fair model θ (in which case θ = θ′ with high probability). Moreover, we need to preserve the secrecy of the model, i.e., REG should not be able to recover θ from s(θ). These properties, given that the space of models is large, calls for a cryptographic hash function, such as SHA-256.\nAdditionally, in our functionality, the hash of θ should be computed inside MPC, to hide θ from REG. Fortunately, cryptographic hashes such as SHA-256 are a common benchmark functionality in MPC, and their execution is highly optimized. More concretely, the overhead of computing s(θ), which needs to be done both for certification and verification is of the order of fractions of a second (Keller et al., 2013, Figure 14). While cryptographic hash functions have various applications in MPC, we believe the application to machine learning model certification is novel.\nHence, certification is implemented in MPC as a check that θ satisfies the criterion F, followed by the computation of s(θ). On the other hand, for verification, the MPC protocol first computes the signature of the model provided by M, and then proceeds with a prediction as long as the computed signature matches the one obtained by REG in the verification phase. An alternative solution is possible based on symmetric encryption under a shared key, as highly efficient MPC implementations of block ciphers such as AES are available (Keller et al., 2017).\nFair training. To realize the fair training functionality from the previous section, we follow closely the techniques recently introduced by Mohassel & Zhang (2017). Specifically, we extend their custom MPC protocol for logistic regression to additionally handle linear constraints. This extension may be of independent interest, and has applications for privacy-preserving machine learning beyond fairness. The concrete technical difficulties in achieving this goal, and how to overcome them, are presented in the next section. The formal privacy guarantees of our fair training protocol are stated in the following proposition.\nProposition 1. For non-colluding M and REG, our protocol implements the fair model training functionality satisfying constraints (C1)-(C3) in Section 2.3 in the presence of a semi-honest adversary.\nThe proof holds in the random oracle model, as a standard simulation argument combining several MPC primitives\n(Mohassel & Zhang, 2017; Gascón et al., 2017). It leverages security of arithmetic sharing, garbled circuits, and oblivious transfer protocols in the semi-honest model (Goldreich et al., 1987). A general introduction to MPC, as well as a description of the relevant techniques from (Mohassel & Zhang, 2017) used in our protocol, can be found in Section A in the appendix."
+  }, {
+    "heading": "4. Technical Challenges of Fair Training",
+    "text": "We now present our tailored approaches for learning and evaluating fair models with encrypted sensitive attributes. We do this via the following contributions:\n• We argue that current optimization techniques for fair learning algorithms are unstable for fixed-point data, which is required by our MPC techniques. • We describe optimization schemes that are well-suited\nfor learning over fixed-point number representations. • We combine tricks to approximate non-linear functions\nwith specialized operations to make fixed-point arithmetic feasible and avoid over- and under-flows.\nThe optimization problem at hand is to learn a classifier θ subject to a (often convex) fairness constraint F(θ):\nmin θ\nn∑\ni=1\n`θ(xi, yi) subject to F(θ) ≤ 0 , (8)\nwhere `θ is a loss term (the logistic loss in this work). We collect user data from U1, . . . ,Un into matrices X ∈ Rn×d,Z ∈ {0, 1}n×p and a label vector y ∈ {0, 1}n. Zafar et al. (2017c) use a convex approximation of the p%rule, see eq. (7), for linear classifiers to derive the constraint:\nF(θ) = 1\nn |Ẑ>Xθ| − c , (9)\nwhere Ẑ is the matrix of all ẑi := zi − z̄ and c ∈ Rd is a constant vector corresponding to the tightness of the fairness constraint. Here, z̄ is the mean of all inputs zi. With A := 1/nẐ>X, the p% constraint reads F(θ) = |Aθ| − c, where the absolute value is taken element-wise."
+  }, {
+    "heading": "4.1. Current Techniques",
+    "text": "To solve the optimization problem in eq. (8), with the fairness function F in eq. (9), Zafar et al. (2017c) use Sequential Least Squares Programming (SLSQP). This technique works by reformulating eq. (8) as a sequence of Quadratic Programs (QPs). After solving each QP, their algorithm uses the Han-Powell method, a quasi-Newton method that iteratively approximates the Hessian H of the objective function via the update\nHt+1 = Ht + l∆l > ∆\nθ>∆l∆ − Htθ∆θ\n> ∆Ht\nθ>∆Htθ∆ ,\nwhere l∆ = l(θt+1,λt+1) − l(θt,λt) and l(θt,λt) =∑n i=1 `θt(xi, yi) + λ\n>F(θt) is the Lagrangian of eq. (8). Finally, θ∆ = θt+1 − θt. There are two issues with this approach from an MPC perspective. First, solving a sequence of QPs is prohibitively time-consuming in MPC. Second, while the above HanPowell update performs well on floating-point data, the two divisions by non-constant, non-integer numbers easily underflow or overflow with fixed-point numbers."
+  }, {
+    "heading": "4.2. Fixed-Point-Friendly Optimization Techniques",
+    "text": "Instead, to solve the optimization problem in eq. (8), we perform stochastic gradient descent and experiment with the following techniques to incorporate the constraints.\nLagrangian multipliers. Here we minimize\nL := 1 n\nn∑\ni=1\n`BCEθ (xi, yi) + λ >max{F(θ),0} ,\nusing stochastic gradient descent, i.e., alternating updates θ ← θ − ηθ∇θL and λ ← max{λ + ηλ∇λL,0}, where ηθ, ηλ are the learning rates.\nProjected gradient descent. For this method, consider specifically the p%-rule based notion F(θ) = |Aθ| − c. We first define Â as the matrix consisting of the rows of A for which F(θ) > 0, i.e., where the constraint is active. In each step, we project the computed gradient of the binary-crossentropy loss LBCE—either of a single example or averaged over a minibatch—back into the constraint set, i.e.,\nθ ← θ − ηθ(Idd − Â>(ÂÂ>)−1Â)∇θ`BCEθ . (10)\nInterior point log barrier (Boyd & Vandenberghe, 2004). We can approximate eq. (8) for the p%-rule constraint F(θ) = |Aθ|−c by: minimize∑ni=1 `BCEθ (xi, yi)− 1 t ∑p j=1 ( log(a>j θ + cj) + log(−a>j θ + cj) ) , where aj is the jth row of A. The parameter t trades off the approximation of the true objective (I−(u) = 0 for u ≤ 0 and I−(u) =∞ for u > 0) and the smoothness of the objective function. Throughout training t is increased, allowing the solution to move closer to the boundary. As the gradient of the objective has a simple closed form representation, we can perform regular (stochastic) gradient descent.\nAfter extensive experiments (see Section 5) we found the Lagrangian multipliers technique to work best, both in yielding high accuracies, reliably staying within the constraints and being robust to hyperparameter changes such as learning rates or the batch size. For a proof of concept, in Section 5 we focus on the p%-rule, i.e., eq. (9). Note that the gradients for eq. (2) and eq. (3) take a similarly simple form, i.e., balancing the true positive or true negative rates (corresponding to equal opportunity or equal odds) is simple to implement\nfor the Lagrangian multiplier technique, but harder for projected gradient descent. However, these fairness notions are more expensive as we have to compute Z>X for each update step, instead of pre-computing it once at the beginning of training, see Algorithm 1 in the appendix. We could speed up the computation again by evaluating the constraint only on the current minibatch for each update, in which case we risk violating the fairness constraint.\nMPC-friendliness. For eq. (9), we can compute the gradient updates in all three methods with elementary linear algebra operations (matrix multiplications) and a single evaluation of the logistic function. While MPC is well suited for linear operations, most nonlinear functions are prohibitively expensive to evaluate in an MPC framework. Hence we tried two piecewise linear approximations for σ(x). The first was recently suggested for machine learning in an MPC context (Mohassel & Zhang, 2017) and is simply constant 0 and 1 for x < −0.5 and x > 0.5 respectively, and linear in between. The second uses the optimal first order Chebychev polynomial on each interval [x, x + 1] for x ∈ {−5,−4, . . . , 4}, and is constant 0 or 1 outside of [−5, 5] (Faiedh et al., 2001). While it is more accurate, we only report results for the simpler first approximation, as it yielded equal or better results in all our experiments.\nAs the largest number that can be represented in fixed-point format with m integer and m fractional bits is roughly 2m + 1, overflow becomes a common problem. Since we whiten the features X column-wise, we need to be careful whenever we add roughly 2m numbers or more, because we cannot even represent numbers greater than 2m. In particular, the minibatch size has to be smaller than this limit. For large n, the multiplication Z>X in the fairness function F for the p%-rule is particularly problematic.\nHence, we split both factors into blocks of size b × b with b < 2m and normalize the result of each blocked matrix multiplication by b before adding up the blocks. We then multiply the sum by b/n > 2−m. As long as b, b/n (and thus also n/b) can be represented with sufficient precision, which is the case in all our experiments, this procedure avoids under- and overflow. Note that we require the sample size n to be a multiple of b. In practice, we have to either discard or duplicate part of the data. Since the latter may introduce bias, we recommend subsampling. Once we have (an approximation of) A ∈ Rp×d, we resort to normal matrix multiplication, as typically p, d . 100, see Table 1.\nDivision is prohibitively expensive in MPC. Hence, we set the minibatch size to a power of two, which allows us to use fast bit shifts for divisions when averaging over minibatches. To exploit the same trick when averaging over/across blocks in the blocked matrix multiplication, we choose n as the largest possible power of two, see Table 1.\nAlgorithm 1 in Section B in the appendix describes the computations M and REG have to run for fair model training using the Lagrangian multiplier technique and the p%-rule from eq. (9). We implicitly assume all computations are performed jointly on additively shared secrets."
+  }, {
+    "heading": "5. Experiments",
+    "text": "The root cause for most technical difficulties pointed out in the previous section is the necessity to work with fixed-point numbers and the high computational cost of MPC. Hence, major concerns are loss of precision and infeasible running times. In this section, we show how to overcome both doubts and that fair training, certification and verification are feasible for realistic datasets."
+  }, {
+    "heading": "5.1. Experimental Setup and Datasets",
+    "text": "We work with two separate code bases. Our Python code does not implement MPC, to be able to flexibly switch between floating and fixed-point numbers as well as exact non-linear functions and their approximations. We use it mostly for validation and empirical guidance in our design choices. The full MPC protocol is implemented in C++ on top of the Obliv-C garbled circuits framework (Zahur & Evans, 2015a) and the Absentminded Crypto Kit (lib). This is done as described in Section 3 for the Lagrangian multiplier technique (see Section A in the appendix for more details). It accurately mirrors the computations performed by the first implementation on encrypted data.2 Except for the timing results in Table 1, all comparisons with floatingpoint numbers or non-linearities were done with the versatile Python implementation. Details about parameters and the algorithm can be found in Section B in the appendix.\nWe consider 5 real world datasets, namely the adult (Adult), German credit (German), and bank market (Bank) datasets from the UCI machine learning repository (Lichman, 2013), the stop, question and frisk 2012 dataset (SQF),3 and the COMPAS dataset (Angwin et al., 2016) (COMPAS). For practical purposes (see Section 4), we subsample 2i examples from each dataset with the largest possible i, see Table 1. Moreover, we also run on synthetic data, generated\n2Code is available at https://github.com/ nikikilbertus/blind-justice\n3https://perma.cc/6CSM-N7AQ\nas described by Zafar et al. (2017c, Section 4.1), as it allows us to control the correlation between the sensitive attributes and the class labels. It is thus well suited to observe how different optimization techniques handle the fairness-accuracy trade off. For comparison we use the SLSQP approach described in Section 4.1 as a baseline. We run all methods for a range of constraint values in [10−4, 100] and a corresponding range for SLSQP.\nIn the plots in this section, discontinuations of lines indicate failed experiments. The most common reasons are overflow and underflow for fixed-point numbers, and instability due to exploding gradients. Plots and analyses for the remaining datasets can be found in Section C in the appendix."
+  }, {
+    "heading": "5.2. Comparing Optimization Techniques",
+    "text": "First we evaluate which of the three optimization techniques works best in practice. Figure 2 shows the test set accuracy over the constraint value. By design, the synthetic dataset exhibits a clear trade-off between accuracy and fairness. The Lagrange technique closely follows the (dotted) baseline from (Zafar et al., 2017c), whereas iplb performs slightly worse (and fails for small c). Even though the projected gradient method formally satisfies the proxy constraint for the p% rule, it does so by merely shrinking the parameter vector θ, which is why it also fails for small c. We analyze this behavior in more detail in Section C in the appendix.\nThe COMPAS dataset is the most challenging as it contains 7 sensitive attributes, one of which has only 10 positive instances in the training set. Since we enforce the fairness constraint individually for each sensitive attribute (we randomly picked one for visualization), the classifier tends to collapse to negative predictions. All three methods maintain close to optimal accuracy in the unconstrained region, but collapse more quickly than SLSQP. This example shows that the p%-rule proxy itself needs careful interpretation when applied to multiple sensitive attributes simultaneously and that our SGD based approach seems particularly prone to collapse in such a scenario. On the Bank dataset accuracy increases for iplb and Lagrange when the constraint becomes active as c decreases until they match the baseline. Determining the cause of this—perhaps unintuitive—behavior requires further investigation. We currently suspect the constraint to act as a regularizer. The projected gradient method is unreliable on the Bank dataset.\nEmpirically, the Lagrangian multiplier technique is most robust with maximal deviations of accuracy from SLSQP of < 4% across the 6 datasets and all constraint values. We substantiate this claim in Section C of the appendix. For the rest of this section we only report results for Lagrangian multipliers. Figure 2 also shows that using a piecewise linear approximation as described in Section 4 for the logistic function does not spoil performance."
+  }, {
+    "heading": "5.3. Fair Training, Certification and Verification",
+    "text": "Figure 3 shows how the fractions of users with positive outcomes in the two groups (z = 0 is continuous and z = 1 is dashed) are gradually balanced as we decrease the fairness constraint c. These plots can be interpreted as the degree to which disparate impact is mitigated as the constraint is tightened. The effect is most pronounced for the synthetic dataset by construction. As discussed above, the collapse for the COMPAS dataset occurs faster than for SLSQP due to the constraints from multiple sensitive attributes. In the Bank dataset, for large c—before the constraint becomes active—the fractions of positive outcomes for z = 1 differ, which is related to the slightly suboptimal accuracy at large c that needs further investigation. However, as the constraint becomes active, the fractions are balanced at a similar rate as the baseline. Overall, our Lagrangian multiplier technique with fixed point numbers and piecewise linear approximations of non-linearities robustly manages to satisfy the p%-rule proxy at similar rates as the baseline with only minor losses in accuracy on all but the challenging COMPAS dataset.\nIn Table 1 we show the online running times of 10 training epochs on a laptop computer. While training takes several orders of magnitudes longer than a non-MPC implementation, our approach still remains feasible and realistic. We use the one time offline precomputation of multiplication triples described and timed in Mohassel & Zhang (2017,\nTable 2). As pointed out in Section 3, certification of a trained model requires checking whether F(θ) > 0. We already perform this check at least once for each gradient\nupdate during training. It only takes a negligible fraction of the computation time, see Table 1. Similarly, the operations required for certification stay well below one second.\nDiscussion. In this section, we have demonstrated the practicability of private and fair model training, certification and verification using MPC as described in Figure 1. Using the methods and tricks introduced in Section 4, we can overcome accuracy as well as over- and underflow concerns due to fixed-point numbers. Offline precomputation combined with a fast C++ implementation yield viable running times for reasonably large datasets on a laptop computer."
+  }, {
+    "heading": "6. Conclusion",
+    "text": "Real world fair learning has suffered from a dilemma: in order to enforce fairness, sensitive attributes must be examined; yet in many situations, users may feel uncomfortable in revealing these attributes, or modelers may be legally restricted in collecting and utilizing them. By introducing recent methods from MPC, and extending them to handle linear constraints as required for various notions of fairness, we have demonstrated that it is practical on real-world datasets to: (i) certify and sign a model as fair; (ii) learn a fair model; and (iii) verify that a fair-certified model has indeed been used; all while maintaining cryptographic privacy of all users’ sensitive attributes. Connecting concerns in privacy, algorithmic fairness and accountability, our proposal empowers regulators to provide better oversight, modelers to develop fair and private models, and users to retain control over data they consider highly sensitive."
+  }, {
+    "heading": "Acknowledgments",
+    "text": "The authors would like to thank Chris Russell and Phillipp Schoppmann for useful discussions and help with the implementation, as well as the anonymous reviewers for helpful comments. AG and MK were supported by The Alan Turing Institute under the EPSRC grant EP/N510129/1. MV was supported by EPSRC grant EP/M507970/1. AW acknowledges support from the David MacKay Newton research fellowship at Darwin College, The Alan Turing Institute under EPSRC grant EP/N510129/1 & TU/B/000074, and the Leverhulme Trust via the CFI."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Privacy-preserving PCA on horizontally-partitioned data",
+    "authors": ["M. Al-Rubaie", "P.Y. Wu", "J.M. Chang", "S. Kung"],
+    "venue": "In DSC,",
+    "year": 2017
+  }, {
+    "title": "Machine bias: There is software used across the country to predict future criminals. and it is biased against blacks",
+    "authors": ["J. Angwin", "J. Larson", "S. Mattu", "L. Kirchner"],
+    "venue": "ProPublica, May,",
+    "year": 2016
+  }, {
+    "title": "Adverse impact and test validation: A practitioner’s guide to valid and defensible employment testing",
+    "authors": ["D. Biddle"],
+    "venue": "Gower Publishing,",
+    "year": 2006
+  }, {
+    "title": "Why unbiased computational processes can lead to discriminative decision procedures",
+    "authors": ["T. Calders", "I. Žliobaitė"],
+    "venue": "In Discrimination and Privacy in the Information Society,",
+    "year": 2012
+  }, {
+    "title": "Multiparty computation from somewhat homomorphic encryption",
+    "authors": ["I. Damgård", "V. Pastro", "N.P. Smart", "S. Zakarias"],
+    "venue": "In CRYPTO,",
+    "year": 2012
+  }, {
+    "title": "Automated synthesis of optimized circuits for secure computation",
+    "authors": ["D. Demmler", "G. Dessouky", "F. Koushanfar", "A. Sadeghi", "T. Schneider", "S. Zeitouni"],
+    "venue": "In ACM Conference on Computer and Communications Security,",
+    "year": 2015
+  }, {
+    "title": "ABY – a framework for efficient mixed-protocol secure two-party computation",
+    "authors": ["D. Demmler", "T. Schneider", "M. Zohner"],
+    "venue": "In NDSS. The Internet Society,",
+    "year": 2015
+  }, {
+    "title": "Fairness through awareness",
+    "authors": ["C. Dwork", "M. Hardt", "T. Pitassi", "O. Reingold", "R. Zemel"],
+    "venue": "In Proceedings of the 3rd Innovations in Theoretical Computer Science Conference,",
+    "year": 2012
+  }, {
+    "title": "Digital hardware implementation of sigmoid function and its derivative for artificial neural networks",
+    "authors": ["H. Faiedh", "Z. Gafsi", "K. Besbes"],
+    "venue": "Proceeding of the 13th International Conference on Microelectronics,",
+    "year": 2001
+  }, {
+    "title": "Certifying and removing disparate impact",
+    "authors": ["M. Feldman", "S. Friedler", "J. Moeller", "C. Scheidegger", "S. Venkatasubramanian"],
+    "venue": "In Proceedings of the 21th ACM SIGKDD International Conference on Knowledge Discovery and Data Mining,",
+    "year": 2015
+  }, {
+    "title": "Model inversion attacks that exploit confidence information and basic countermeasures",
+    "authors": ["M. Fredrikson", "S. Jha", "T. Ristenpart"],
+    "venue": "In Proceedings of the 22nd ACM SIGSAC Conference on Computer and Communications Security,",
+    "year": 2015
+  }, {
+    "title": "Privacy-Preserving Distributed Linear Regression on High-Dimensional Data",
+    "authors": ["A. Gascón", "P. Schoppmann", "B. Balle", "M. Raykova", "J. Doerner", "S. Zahur", "D. Evans"],
+    "venue": "Proceedings on Privacy Enhancing Technologies,",
+    "year": 2017
+  }, {
+    "title": "The Foundations of Cryptography – Volume 2, Basic Applications",
+    "authors": ["O. Goldreich"],
+    "year": 2004
+  }, {
+    "title": "How to play any mental game or A completeness theorem for protocols with honest majority",
+    "authors": ["O. Goldreich", "S. Micali", "A. Wigderson"],
+    "venue": "In STOC,",
+    "year": 1987
+  }, {
+    "title": "NHS cyber attack: Everything you need to know about ’biggest ransomware",
+    "authors": ["C. Graham"],
+    "venue": "offensive in history. Telegraph,",
+    "year": 2017
+  }, {
+    "title": "Beyond distributive fairness in algorithmic decision making: Feature selection for procedurally fair learning",
+    "authors": ["N. Grgić-Hlača", "M.B. Zafar", "K.P. Gummadi", "A. Weller"],
+    "venue": "In AAAI,",
+    "year": 2018
+  }, {
+    "title": "Insurance telematics: Opportunities and challenges with the smartphone solution",
+    "authors": ["P. Handel", "I. Skog", "J. Wahlstrom", "F. Bonawiede", "R. Welch", "J. Ohlsson", "M. Ohlsson"],
+    "venue": "IEEE Intelligent Transportation Systems Magazine,",
+    "year": 2014
+  }, {
+    "title": "Equality of opportunity in supervised learning",
+    "authors": ["M. Hardt", "E. Price", "N. Srebro"],
+    "venue": "In NIPS,",
+    "year": 2016
+  }, {
+    "title": "Gazelle: A Low Latency Framework for Secure Neural Network Inference",
+    "authors": ["C. Juvekar", "V. Vaikuntanathan", "A. Chandrakasan"],
+    "venue": "IACR Cryptology ePrint Archive,",
+    "year": 2018
+  }, {
+    "title": "An architecture for practical actively secure MPC with dishonest majority",
+    "authors": ["M. Keller", "P. Scholl", "N.P. Smart"],
+    "venue": "In ACM Conference on Computer and Communications Security,",
+    "year": 2013
+  }, {
+    "title": "Faster secure multi-party computation of AES and DES using lookup tables",
+    "authors": ["M. Keller", "E. Orsini", "D. Rotaru", "P. Scholl", "E. Soria-Vazquez", "S. Vivek"],
+    "venue": "In ACNS,",
+    "year": 2017
+  }, {
+    "title": "Overdrive: Making SPDZ great again",
+    "authors": ["M. Keller", "V. Pastro", "D. Rotaru"],
+    "venue": "Lecture Notes in Computer Science,",
+    "year": 2018
+  }, {
+    "title": "How To Simulate It – A Tutorial on the Simulation Proof Technique",
+    "authors": ["Y. Lindell"],
+    "venue": "IACR Cryptology ePrint Archive,",
+    "year": 2016
+  }, {
+    "title": "Oblivious neural network predictions via minionn transformations",
+    "authors": ["J. Liu", "M. Juuti", "Y. Lu", "N. Asokan"],
+    "venue": "In CCS,",
+    "year": 2017
+  }, {
+    "title": "SecureML: A system for scalable privacy-preserving machine learning",
+    "authors": ["P. Mohassel", "Y. Zhang"],
+    "venue": "In IEEE Symposium on Security and Privacy (SP),",
+    "year": 2017
+  }, {
+    "title": "Privacy-preserving matrix factorization",
+    "authors": ["V. Nikolaenko", "S. Ioannidis", "U. Weinsberg", "M. Joye", "N. Taft", "D. Boneh"],
+    "venue": "In ACM Conference on Computer and Communications Security,",
+    "year": 2013
+  }, {
+    "title": "Privacy-preserving ridge regression on hundreds of millions of records",
+    "authors": ["V. Nikolaenko", "U. Weinsberg", "S. Ioannidis", "M. Joye", "D. Boneh", "N. Taft"],
+    "venue": "In IEEE Symposium on Security and Privacy,",
+    "year": 2013
+  }, {
+    "title": "The Role of Data Protection Law and Non-discrimination Law in Group Profiling in the Private Sector",
+    "authors": ["W. Schreurs", "M. Hildebrandt", "E. Kindt", "Vanfleteren", "M. Cogitas", "Ergo Sum"],
+    "venue": "In Profiling the European Citizen,",
+    "year": 2008
+  }, {
+    "title": "Stealing machine learning models via prediction apis",
+    "authors": ["F. Tramèr", "F. Zhang", "A. Juels", "M.K. Reiter", "T. Ristenpart"],
+    "venue": "In USENIX Security Symposium,",
+    "year": 2016
+  }, {
+    "title": "Fairer machine learning in the real world: Mitigating discrimination without collecting sensitive data",
+    "authors": ["M. Veale", "R. Binns"],
+    "venue": "Big Data & Society,",
+    "year": 2017
+  }, {
+    "title": "Clarity, Surprises, and Further Questions in the Article 29 Working Party Draft Guidance on Automated Decision-Making and Profiling",
+    "authors": ["M. Veale", "L. Edwards"],
+    "venue": "Computer Law & Security Review,",
+    "year": 2018
+  }, {
+    "title": "How to Generate and Exchange Secrets (Extended Abstract)",
+    "authors": ["Yao", "A.C.-C"],
+    "venue": "In FOCS,",
+    "year": 1986
+  }, {
+    "title": "Fairness beyond disparate treatment & disparate impact: Learning classification without disparate mistreatment",
+    "authors": ["M.B. Zafar", "I. Valera", "M. Gomez-Rodriguez", "K.P. Gummadi"],
+    "venue": "In WWW,",
+    "year": 2017
+  }, {
+    "title": "From parity to preference-based notions of fairness in classification",
+    "authors": ["M.B. Zafar", "I. Valera", "M. Rodriguez", "K. Gummadi", "A. Weller"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2017
+  }, {
+    "title": "Fairness Constraints: Mechanisms for Fair Classification",
+    "authors": ["M.B. Zafar", "I. Valera", "M.G. Rodriguez", "K.P. Gummadi"],
+    "venue": "In AISTATS,",
+    "year": 2017
+  }, {
+    "title": "Obliv-c: A language for extensible data-oblivious computation",
+    "authors": ["S. Zahur", "D. Evans"],
+    "venue": "IACR Cryptology ePrint Archive,",
+    "year": 2015
+  }, {
+    "title": "Obliv-C: A Language for Extensible Data-Oblivious Computation",
+    "authors": ["S. Zahur", "D. Evans"],
+    "venue": "IACR Cryptology ePrint Archive,",
+    "year": 2015
+  }, {
+    "title": "Using sensitive personal data may be necessary for avoiding discrimination in datadriven decision models",
+    "authors": ["I. Žliobaitė", "B. Custers"],
+    "venue": "Artificial Intelligence and Law,",
+    "year": 2016
+  }],
+  "id": "SP:8545a17810192afdadf32303d0aaf59536f1ae51",
+  "authors": [{
+    "name": "Niki Kilbertus",
+    "affiliations": []
+  }, {
+    "name": "Adrià Gascón",
+    "affiliations": []
+  }, {
+    "name": "Matt Kusner",
+    "affiliations": []
+  }, {
+    "name": "Michael Veale",
+    "affiliations": []
+  }, {
+    "name": "Krishna P. Gummadi",
+    "affiliations": []
+  }, {
+    "name": "Adrian Weller",
+    "affiliations": []
+  }],
+  "abstractText": "Recent work has explored how to train machine learning models which do not discriminate against any subgroup of the population as determined by sensitive attributes such as gender or race. To avoid disparate treatment, sensitive attributes should not be considered. On the other hand, in order to avoid disparate impact, sensitive attributes must be examined—e.g., in order to learn a fair model, or to check if a given model is fair. We introduce methods from secure multi-party computation which allow us to avoid both. By encrypting sensitive attributes, we show how an outcomebased fair model may be learned, checked, or have its outputs verified and held to account, without users revealing their sensitive attributes.",
+  "title": "Blind Justice: Fairness with Encrypted Sensitive Attributes"
+}

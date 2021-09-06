@@ -1,0 +1,251 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Back-propagation through time (BPTT) (Werbos, 1990) is nowadays the standard approach for training recurrent neural networks (RNNs). However, the computation and memory cost of BPTT scale linearly with the number of steps which makes BPTT impractical for applications where long sequences are common (Sutskever et al., 2014; Goodfellow\n*Equal contribution 1Department of Computer Science, University of Toronto 2Uber ATG Toronto 3Vector Institute 4Department of Electrical and Computer Engineering, Rice University 5Department of Neuroscience, Baylor College of Medicine 6Canadian Institute for Advanced Research. Correspondence to: Renjie Liao <rjliao@cs.toronto.edu>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\net al., 2016). Moreover, as the number of unrolling steps increases, the numerical error accumulates which may render the algorithm useless in some applications, e.g., gradientbased hyperparameter optimization (Maclaurin et al., 2015). This issue is often solved in practice by using truncated back-propagation through time (TBPTT) (Williams & Peng, 1990; Sutskever, 2013) which has constant computation and memory cost, is simple to implement, and effective in some applications. However, the quality of the TBPTT approximate gradient is not well understood. A natural question to ask is, can we get better gradient approximations while still using the same computational cost as TBPTT?\nHere will show that under certain conditions on the underlying model, the answer is positive. In particular, we consider a class of RNNs whose hidden state converges to a steady state. For this class of RNNs, we can bypass BPTT and compute the exact gradient using an algorithm called recurrent back-propagation (RBP) (Almeida, 1987; Pineda, 1987). The key observation exploited by RBP is that the gradient of the steady state w.r.t. the learnable parameters can be directly computed using the implicit function theorem, alleviating the need to unroll the entire forward pass. The main computational cost of RBP is in solving a linear system which has constant memory and computation time w.r.t. the number of unrolling steps. However, due to the strong assumptions that RBP imposes, TBPTT has become the standard approach used in practice and RBP did not get much attention for many years.\nIn this paper, we first revisit RBP in the context of modern deep learning. We discuss the original algorithm, the assumptions it imposes and how to satisfy them for deep neural networks. Second, we notice that although the fixed point iteration method used in (Almeida, 1987; Pineda, 1987) is guaranteed to converge if the steady hidden state is achievable, in practice it can fail to do so within a reasonable amount of steps. This may be caused by the fact that there are many fixed points and the algorithm is sensitive to initialization. We try to overcome the instability issue by proposing two variants of RBP based on conjugate gradient on normal equations (CG-RBP) and Neumann series (Neumann-RBP). We show a connection between NeumannRBP and TBPTT which sheds some new light on the approximation quality of TBPTT. In the experiments, we show\nseveral important applications which are naturally amenable to RBP. For example, we show how RBP can be used to back propagate thorough the optimization of deep neural networks in order to tune hyperparameters. Throughout our experiments, we found that Neumann-RBP not only inherits the advantages of original RBP but also remains consistently stable across different applications."
+  }, {
+    "heading": "2. Related Work",
+    "text": "In the context of neural networks, RBP was independently discovered by Almeida (Almeida, 1987) and Pineda (Pineda, 1987) in 1987, which is why this algorithm is sometimes called the Almeida-Pineda algorithm. Back then, RBP was shown to be useful in learning content-addressable memory (CAM) models (Hopfield, 1982; 1984) and other computational neurodynamic models (Lapedes & Farber, 1986; Haykin, 1993; Chauvin & Rumelhart, 1995). These models are special RNNs in a sense that their inference stage is a convergent dynamic system by design. For these systems, one can construct a Lyapunov function for the underlying dynamics which further guarantees the asymptotic stability. We refer readers to chapter 13 of (Haykin, 1993) for more details on neurodynamic models. The goal of learning in these models is to manipulate the attractors, i.e. steady states, such that they are close to the input data. Therefore, during inference stage, even if the input data is corrupted, the corresponding correct attractor or “memory“ can still be retrieved. Instead of computing gradient via BPTT, RBP provides an more efficient alternative for manipulating the attractors.\nRBP was later applied to learning graph neural networks (GNNs) (Scarselli et al., 2009), which are generalizations of RNNs that handle graph-structured input data. Specifically, the inference of GNNs is essentially a propagation process which spreads information along the graph. One can force the propagation process to converge by either constructing a contraction map explicitly, or by regularizing the Jacobian of the update function. Similarly, the goal is to push the converged inference solution close to the target. RBP is naturally applicable here and demonstrated to save both computation time and memory. A recent investigation (Scellier & Bengio, 2017a) shows that RBP is related to equilibrium propagation (Scellier & Bengio, 2017b) which is motivated from the perspective of biological plausibility. Another recent related work in deep learning is OptNet (Amos & Kolter, 2017) where the gradient of the optimized solution of a quadratic programming problem w.r.t. parameters is obtained by analytically differentiating the KKT system.\nIn the probabilistic graphical models (PGMs) literature, similar techniques to RBP have been developed as well. For example, an efficient gradient-based method to learn the hyperparameters of log-linear models is provided in (Foo et al.,\n2008) where the core contribution is to use the implicit differentiation trick to compute the gradient of the optimized inference solution w.r.t. the hyperparameters. A similar implicit differentiation technique is used in (Samuel & Tappen, 2009) to optimize the maximum a posterior (MAP) solution of continuous MRFs, since the MAP solution can be regarded as the steady state of the inference process. An implicit-differentiation-based optimization method for generic energy models is proposed in (Domke, 2012) where the gradient of the optimal state (steady state) of the energy w.r.t. the parameters can be efficiently computed given the fast matrix-vector product implementation (Pearlmutter, 1994). If one regards the inference algorithms from aforementioned applications as unrolled RNNs, the implicit differentiation technique is essentially equivalent to RBP.\nOther efforts have been made to develop alternatives to BPTT. NoBackTrack (Ollivier et al., 2015) maintains an online estimate of the gradient via the random rank-one reduction technique. ARTBP (Tallec & Ollivier, 2017) introduces a probability distribution over the truncation points in the sequence and compensates the truncated gradient based on the distribution. Both approaches provide an unbiased estimation of the gradient although their variances differ."
+  }, {
+    "heading": "3. Revisiting Recurrent Back-Propagation",
+    "text": "In this section, we review the original RBP algorithm and discuss its assumptions."
+  }, {
+    "heading": "3.1. Recurrent Back-Propagation",
+    "text": "We denote the input data and initial hidden state as x and h0. During inference, the hidden state at time t is computed as follows,\nht+1 = F (x,wF , ht), (1)\nwhere F is the update function parameterized by wF . A typical instantiation of F is an LSTM (Hochreiter & Schmidhuber, 1997) cell function. This RNN formulation differs from the one commonly used in language modeling, as the input is not time-dependent. We restrict our attention to RNNs with fixed inputs for now as it requires fewer assumptions. Assuming the dynamical system, (i.e., the forward pass of the RNN), reaches steady state before time step T , we have the following equation,\nh∗ = F (x,wF , h ∗), (2)\nwhere h∗ is the steady hidden state. We compute the predicted output y based on the steady hidden state as follows,\ny = G(x,wG, h ∗), (3)\nwhere G is the output function parameterized by wG. Typically, a loss function L = l(ȳ, y) measures the closeness\nbetween ground truth ȳ and predicted output y. Since the input data x is fixed for all time steps, we can construct a function Ψ of wF and h as follows,\nΨ(wF , h) = h− F (x,wF , h). (4)\nAt the fixed point, we have Ψ(wF , h∗) = 0. Assuming some proper conditions on F , e.g., continuous differentiability, we can take the derivative w.r.t. wF at h∗ on both sides. Using the total derivative and the dependence of h∗ on wF we obtain,\n∂Ψ(wF , h ∗)\n∂wF =\n∂h∗\n∂wF − dF (x,wF , h\n∗)\ndwF\n= (I − JF,h∗) ∂h∗\n∂wF − ∂F (x,wF , h\n∗)\n∂wF = 0, (5)\nwhere JF,h∗ = ∂F (x,wF ,h ∗) ∂h is the Jacobian matrix of F evaluated at h∗ and d is the total derivative operator. Assuming that I − JF,h∗ is invertible, we rearrange Eq. (5) to get,\n∂h∗ ∂wF = (I − JF,h∗)−1 ∂F (x,wF , h ∗) ∂wF . (6)\nIn fact, Equations (4- 6) are an application of the Implicit Function Theorem (Rudin, 1964), which guarantees the existence and uniqueness of an implicit function φ such that h∗ = φ(wF ) if two conditions hold: I, Ψ is continuously differentiable and II, I − JF,h∗ is invertible. Although we do not know the analytic expression of the function φ, we can still compute its gradient at the fixed point.\nBased on Eq. (6), we now turn our attention towards computing the gradient of the loss w.r.t. the parameters of the RNN. By using the total derivative and the chain rule, we have\n∂L ∂wG = ∂L ∂y\n∂G(x,wG, h ∗)\n∂wG (7)\n∂L ∂wF = ∂L ∂y ∂y ∂h∗ (I − JF,h∗)−1\n∂F (x,wF , h ∗)\n∂wF . (8)\nSince the gradient of the loss w.r.t. wG can be easily obtained by back-propagation, we focus our exposition on the computation of ∂L∂wF . The original RBP algorithm (Pineda, 1987; Almeida, 1987) introduces an auxiliary variable z such that,\nz = ( I − J>F,h∗ )−1(∂L ∂y ∂y ∂h∗ )> , (9)\nwhere z is a column vector. If we managed to compute z, then we can substitute it into Eq. (8) to get the gradient. Note that the Jacobian matrix JF,h∗ is nonsymmetric for\nAlgorithm 1 : Original RBP 1: Initialization: initial guess z0, e.g., draw uniformly\nfrom [0, 1], i = 0, threshold 2: repeat 3: i = i+ 1\n4: zi = J>F,h∗zi−1 + ( ∂L ∂y ∂y ∂h∗ )> 5: until ‖zi − zi−1‖ < 6: ∂L∂wF = z > i ∂F (x,wF ,h ∗) ∂wF 7: Return ∂L∂wF\ngeneral RNNs which renders direct solvers of linear system impractical. To compute z, the original RBP algorithm uses fixed point iteration. In particular, we multiply ( I − J>F,h∗ ) on the left hand of both sides of Eq. (9) and rearrange the terms as follows,\nz = J>F,h∗z +\n( ∂L\n∂y\n∂y\n∂h∗\n)> . (10)\nIf we view the right hand side of the above equation as a function of z, then applying the fixed point iteration results in the Algorithm 1. Note that the most expensive operation in this algorithm is the matrix-vector product J>F,h∗z, which is the same operator as back-propagation."
+  }, {
+    "heading": "3.2. Assumptions of RBP",
+    "text": "In this section, we discuss how to satisfy the assumptions of RBP. Recall that in order to apply the implicit function theorem, Ψ(wF , h) has to satisfy two assumptions: I, Ψ is continuously differentiable. II, I − JF,h∗ is invertible. Condition I requires the derivative of F to be continuous, a condition satisfied by many RNNs, like LSTM and GRU (Cho et al., 2014). Condition II is equivalent to requiring the determinant of I − JF,h∗ to be nonzero, i.e., det(I − JF,h∗) 6= 0. One sufficient but not necessary condition to ensure this is to force F to be a contraction map, as in Scarselli et al. (2009). Recall that F is a contraction map on Banach space B, i.e., a complete normed vector space, iff, ∀h1, h2 ∈ B, ‖F (h1)− F (h2)‖ ≤ µ‖h1 − h2‖ where 0 ≤ µ < 1. Banach fixed point theorem guarantees the uniqueness of the fix point of the contraction map F in B. Note that here we drop the dependency of F on w for readability. Based on the first order Taylor approximation, F (h) = F (h∗) + JF,h∗(h− h∗), we have,\n‖F (h)− F (h∗)‖ ‖h− h∗‖ = ‖JF,h∗(h− h∗)‖ ‖h− h∗‖ . (11)\nNote that if we use L2 vector norm, then the induced matrix norm, a.k.a., operator norm, is,\n‖JF,h∗‖ = sup { ‖JF,h∗h‖ ‖h‖ : ∀h 6= 0 } = σmax(JF,h∗), (12)\nwhere σmax is the largest singular value. Therefore, relying on the contraction map definition, we have,\n‖JF,h∗‖ ≤ µ < 1, (13)\nMoreover, since the minimum singular value of I − JF,h∗ is 1− σmax(JF,h∗), we have\n|det(I − JF,h∗)| = ∏ i |σi(I − JF,h∗)|\n≥ [1− σmax(JF,h∗)]d > 0. (14)\nThus our second condition holds following Eq. (14).\nScarselli et al. (2009) use L1 vector norm which results in a looser inequality since ‖JF,h∗‖2 ≤ √ d‖JF,h∗‖1. They obtain an easier to compute regularization term maxi(‖JF,h∗(: , i)‖1 − η)2 where (:, i) denotes the i-th column and η ∈ (0, 1) is the desired contraction constant. We note, however, that this work makes a claim that the contraction map assumption can be achieved by regularizing the local Jacobian JF,h∗ of a general neural network. This is problematic because the contraction map property is a global property of F that requires regularizing every h in the spaceB, not just h∗. Nevertheless, this regularization evaluated at h∗ encourages local contraction at the fixed point h∗, which is sufficient for satisfying condition II. Another way to enforce condition II to hold is directly formalizing the Lagrangian of equality constraint Ψ(wF , h∗) = 0. Since all applications we considered in this paper have converged dynamic systems in practice, we leave further discussions of condition II to the appendix."
+  }, {
+    "heading": "4. New Recurrent Back-Propagation Variants",
+    "text": "In this section, we present our newly proposed variants of RBP, CG-RBP and Neumann-RBP, in detail."
+  }, {
+    "heading": "4.1. Recurrent Back-Propagation based on Conjugate Gradient",
+    "text": "Facing the system of linear equations like Eq. (9) in the derivation of original RBP, one would naturally think of the most common iterative solver, i.e., conjugate gradient method (Hestenes & Stiefel, 1952). In particular, multiplying I − J>F,h∗ on both sides, we obtain the following equations,\n( I − J>F,h∗ ) z =\n( ∂L\n∂y\n∂y\n∂h∗\n)> . (15)\nUnfortunately, for general RNNs, the Jacobian matrix JF,h∗ of the update function, e.g., a cell function of LSTM, is non-symmetric in general. This increases the difficulty of solving the system. One simple yet sometimes effective way to approach this problem is to exploit the conjugate\ngradient method on the normal equations (CGNE) (Golub & Van Loan, 2012). Specifically, we multiply I − JF,h∗ on both sides of Eq. (15) which results in,\n(I − JF,h∗) ( I − J>F,h∗ ) z = (I − JF,h∗)\n( ∂L\n∂y\n∂y\n∂h∗\n)> .\nHaving a symmetric matrix multiplying z on the left hand side, we can now use the conjugate gradient method. The detailed algorithm is easily obtained by instantiating the standard conjugate gradient (CG) template. The most expensive operation used in CGNE is JF,h∗J>F,h∗z, which can be implemented by successive matrix-vector products similarly for computing the Fisher information product of the natural gradient method (Schraudolph, 2002). Once we solve z via K-step CGNE, we obtain the final gradient by substituting the solution into Eq. (8). Since the condition number of the current system is the square of the original one, the system may be slower to converge in practice. Exploring more advanced and faster convergent numerical methods under this setting, like LSQR (Paige & Saunders, 1982), is left for future work."
+  }, {
+    "heading": "4.2. Recurrent Back-Propagation based on Neumann Series",
+    "text": "We now develop a new RBP variant called Neumann-RBP, which uses Neumann series from functional analysis and is efficient in terms of computation and memory. We then show its connections to BPTT and TBPTT. A Neumann series is a mathematical series of the form∑∞ t=0A\nt where A is an operator. In matrix theory, it is also known as the geometric series of a matrix. A convergent Neumann series has the following property,\n(I −A)−1 = ∞∑ k=0 Ak. (16)\nOne sufficient condition of convergence is that the spectral radius (i.e., the largest absolute eigenvalue value) ofA is less than 1. This convergence criterion applied to A = JF,h∗ implies condition II. Other cases where the convergence hold is beyond the scope of this paper. If the Neumann series ∑∞ t=0 J t F,h∗ converges, we can use it to replace the term (I − JF,h∗)−1 in E.q. (8). Furthermore, the gradient of RBP can be approximated with the K-th order truncation of Neumann series as below,\n∂L ∂wF ≈ ∂L ∂y K∑ k=0 ∂y ∂h∗ JkF,h∗ ∂F (x,wF , h ∗) ∂wF . (17)\nThere is a rich body of literature on how to compute Neumann series efficiently using binary or ternary decomposition (Westreich, 1989; Vassil & Diego, 2017). However,\nAlgorithm 2 : Neumann-RBP 1: Initialization: v0 = g0 = ( ∂L ∂y ∂y ∂h∗ )> 2: for step t = 1, 2, . . . ,K do 3: vt = J>vt−1 4: gt = gt−1 + vt 5: end for 6: ∂L∂wF = (gK) > ∂F (x,wF ,h∗) ∂wF\n7: Return ∂L∂wF\nthese decomposition based approaches are inapplicable in our context since we cannot compute the Jacobian matrix JF,h∗ efficiently for general neural networks. Fortunately, we can instead efficiently compute the matrix-vector product J>F,h∗u and JF,h∗u (u is a proper sized vector) by using reverse and forward mode auto-differentiation (Pearlmutter, 1994). Relying on this technique, we summarize the Neumann series based RBP algorithm in Algorithm 2. In practice, we can obtain further memory efficiency by performing updates within the for loops in-place (please refer to the example code in appendix), so that memory usage need not scale with the number of truncation steps. Moreover, since the algorithm does not rely on hidden states except the fixed point h∗, we no longer need to store the hidden states in the forward pass of the RNN. Besides the computational benefit, we now have the following proposition to connect Neumann-RBP to BPTT and TBPTT.\nProposition 1. Assume that there exists some step K where 0 < K ≤ T such that for the convergent sequence of hidden states h0, h1, . . . , hT of an RNN, we have h∗ = hT = hT−1 = · · · = hT−K where h∗ is the fixed point. If the Neumann series ∑∞ t=0 J t F,h∗ converges, then the full and K-step Neumann-RBP are equivalent to BPTT and K-step TBPTT respectively.\nMoreover, the following proposition bounds the error of K-step Neumann-RBP. Proposition 2. If the Neumann series ∑∞ t=0 J t F,h∗ converges, then the error between K-step and full Neumann series is as follows,∥∥∥∥∥ K∑ t=0 JtF,h∗ − (I − JF,h∗)−1 ∥∥∥∥∥ ≤ ∥∥(I − JF,h∗)−1∥∥ ‖JF,h∗‖K+1\nWe leave all proofs in appendix."
+  }, {
+    "heading": "5. Experiments",
+    "text": "In this section, we thoroughly study all RBP variants on diverse applications. Our implementation based on PyTorch is publicly available1. Note that our Neumann-RBP is very\n1https://github.com/lrjconan/RBP\nsimple to implement using automatic differentiation and we provide a very short example program in the appendix."
+  }, {
+    "heading": "5.1. Associative Memory",
+    "text": "The classical testbed for RBP is the associative memory (Hopfield, 1982). Several images or patterns are presented to the neural network which learns to store or memorize the images. After the learning process, the network is subsequently presented with a corrupted or noisy version of the original image. The task is then to retrieve the corresponding original image. We consider a simplified continuous Hopfield network as described in (Haykin, 1993). Specifically, the system of nonlinear first-order differential equations is,\nd dt hi(t) = − hi(t) a + N∑ j=1 wijφ(b · hj(t)) + Ii, (18)\nwhere subscript i denotes the index of the neuron. wij is the learnable weight between a pair of neurons. hi is the hidden state of the i-th neuron. φ is a nonlinear activate function which is a sigmoid function in our experiments. a, b are positive constants and are set to 1 and 0.5. The set of neurons consists of three parts: observed, hidden and output neurons, of size 784, 1024 and 784 respectively. For observed neuron, the state hi is clamped to observed pixel value Ii. For hidden and output neurons, the observed pixel value Ii = 0 and their states hi are updated according to Eq. (18). During inference, the output neurons return xi = φ(b · hi) and we further binarize it for visualization. An important property of continuous Hopfield networks is\nthat by updating the states according to Eq. (18) until convergence (which corresponds to the forward pass of RNNs), we are guaranteed to minimize the following (Lyapunov) energy function.\nE = N∑ i=1 ( 1 a ∫ xi 0 φ−1(x)dx− Iixi ) − N∑ i=1 N∑ j=1 wijxixj 2 ,\nwhere we drop the dependency on time t for simplicity. Instead of adopting the Hebbian learning rule as in (Hopfield, 1982), we directly formulate the learning objective as minimizing ∑ i∈I ‖xi− Ii‖1 where I is the set of observed neurons. In our experiments, we train and test on 10 MNIST images. In training we feed clean data, and during testing we randomly corrupt 50% of the non-zero pixel values to zero. The number of updates for one inference pass is 50.\nFig. 1 shows the training and validation curves of continuous Hopfield network with different optimization methods. Here truncation steps for TBPTT, RBP, CG-RBP and Neumann-RBP are all set to 20. From the figure, we can see that CG-RBP and Neumann-RBP match BPTT under this setting which verifies that their gradients are accurate. Nevertheless, we can see that training curve of the original RBP blows up which validates its instability issue. The hidden state of Hopfield network becomes steady within 10 steps. However, we notice that if we set the truncation step to 10, original RBP exhibits behaviors which fails to converge. We also show some visualizations of retrieved images of the Hopfield network under different optimization methods in Fig. 2. More visual results are provided in the appendix."
+  }, {
+    "heading": "5.2. Semi-supervised Document Classification",
+    "text": "We investigate RBPs on semi-supervised document classification with citation networks. A node of a network represents a document associated with a bag-of-words feature. Nodes are connected based on the citation links. Given a portion of nodes labeled with subject categories, e.g., science, history, the task is to predict the categories for unlabeled nodes within the same network. We use two citation networks from (Yang et al., 2016), i.e., Cora, Pubmed, of which the statistics are summarized in the appendix. We adopt graph neural networks (GNNs) (Scarselli et al., 2009) model and employ the GRU as the update function similarly as (Li et al., 2016). We refer to (Li et al., 2016; Liao et al., 2018) for more details. We compare different optimization methods with the same GNN. We also add a logistic regression model as a baseline which is applied to every node independently. The labeled documents are randomly split into 1%, 49% and 50% for training, validation and testing. We run all experiments with 10 different random seeds and report the average results. The training, validation and difference norm curves of BPTT, TBPTT and all RBPs are shown in Fig. 3. We can see that the hidden states of GNNs with different optimization methods become steady during inference from Fig. 3 (c). As shown in Fig. 3 (a) and (b), Neumann-RBP is on par with TBPTT on both datasets. This matches our analysis in proposition 1 since the changes of successive hidden states of TBPTT and Neumann-RBP are almost zero as shown in Fig. 3 (c). Moreover, they outperform other variants and the baseline model. On the other hand, BPTT on both datasets encounter issues in learning which may be attributable to the accumulation of errors in\nthe many steps of unrolling. Note that CG-RBP sometimes performs significantly worse than Neumann-RBP, e.g., on Cora. This may be caused by the fact that the underlying linear system of CG-RBP is ill-conditioned in some applications as the condition number is squared in CGNE. The test accuracy of different methods are summarized in Table 1. It generally matches the behavior in the validation curves."
+  }, {
+    "heading": "5.3. Hyperparameter Optimization",
+    "text": "In our next experiment, we test the abilities of RBP to perform hyperparameter optimization. In this experiment, we view the optimization process as a RNN. When training a neural network, the model parameters, e.g., weights and bias, are regarded as the hidden states of the RNN. Hyperparameters such as learning rate and momentum are learnable parameters of this ‘meta-learning’ RNN. Here we focus on the gradient based hyperparameter optimization rather than the gradient-free one (Snoek et al., 2012). We adopt the same experiment setting as in (Maclaurin et al., 2015), using an initial learning rate of exp(−1) and momentum 0.5. The optimization is on a fully connected network with 4 layers, of sizes 784, 50, 50, and 50. For each layer, we associate one learning rate and one momentum with weight and bias respectively which results in 16 hyperparameters in total. We use tanh non-linearities and train on 10, 000 examples on MNIST. At each forward step of the RNN, i.e., at each optimization step, a different mini-batch of images is fed to the model. This is different from the previous setting where input data is fixed. However, since the minibatches are assumed to be i.i.d., the sequential input data can be viewed as sampled from a stationary distribution. We can thus safely apply RBP as the steady state holds in expectation. In terms of implementation, we just need to average the meta gradient returned by RBPs or TBPTT across multiple mini-batches at the end of one meta step. We use Adam (Kingma & Ba, 2014) as the meta optimizer and set the learning rate to 0.05. The initialization of the\nfully connected network at each meta step is controlled to be the same.\nFig. 5 shows the meta training losses under different training and truncation steps. For better understanding, one can consider the training step as the unrolling step of the RNN. Truncation step is the the number of steps that TBPTT and RBPs execute. From the figure, we can see that as the number of training steps increases (e.g., from (a) to (d)), the meta loss becomes smoother. This makes sense since more steps make the training per meta step closer to convergence. Another surprising phenomenon we found is the meta loss of TBPTT becomes worse when the training step increases. One possible explanation is that the initial meta training loss of small training steps (e.g., (a)) is still very high as you can see from the log y-axis whereas the one with large training step, e.g., (d) is much lower. The probability of using incorrect gradients to decrease the meta loss in case (a) is most likely higher than that of (d) since it is farther from convergence. On the other hand, our Neumann-RBP performs consistently better than the original RBP and TBPTT which empirically validates that Neumann-RBP provides better estimation of the gradient in this case. The potential reason why RBP performs poorly is that the stochasticity of mini-batches worsen the instability issue. Training losses under similar settings at the last meta step are also provided in Fig. 6. We can see that at the end of hyperparameter optimization, our Neumann-RBP generally matches the performance of BPTT and outperforms the other methods. Fig. 4 depicts the trajectories of hidden states in 2D space via t-SNE (Maaten & Hinton, 2008). From the figure, we can see that as the meta training goes on, TBPTT tends to oscillate whereas Neumann-RBP converges, which matches the finding in the train loss curves in Fig. 6.\nWe also compare the running time and memory cost of our unoptimized Neumann-RBP implementation with the standard BPTT, i.e., using autograd of PyTorch. With 1000 training steps, one meta step of BPTT cost 310.4s and 4061MB GPU memory in average. We take BPTT as the reference cost and report the ratio BPTT’s cost divided by Neumann-\nRBP’s in Table 2. All results are reported as the average of 10 runs. Even without optimizing the code, the practical runtime and memory footprint advantages of Neumann-RBP over BPTT is still significant."
+  }, {
+    "heading": "6. Conclusion",
+    "text": "In this paper, we revisit the RBP algorithm and discuss its assumptions and how to satisfy them for deep learning. Moreover, we propose two variants of RBP based on conjugate gradient on normal equations and Neumann series. Connections between Neumann-RBP and TBPTT are established which sheds some light on analyzing the approximation quality of the gradient of TBPTT. Experimental results on diverse tasks demonstrate that Neumann-RBP is a stable and efficient alternative to original RBP and is promising for several practical problems. In the future, we would like to explore RBP on hyperparameter optimization with large scale deep neural networks."
+  }, {
+    "heading": "Acknowledgements",
+    "text": "We thank Barak Pearlmutter for the enlightening discussion and anonymous ICML reviewers for valuable comments. R.L. was supported by Connaught International Scholarships. R.L., E.F., L.Z., K.Y., X.P., R.U. and R.Z. were supported in part by the Intelligence Advanced Research Projects Activity (IARPA) via Department of Interior/Interior Business Center (DoI/IBC) contract number D16PC00003. K.Y. and X.P. were supported in part by BRAIN Initiative grant NIH 5U01NS094368. The U.S. Government is authorized to reproduce and distribute reprints for Governmental purposes notwithstanding any copyright annotation thereon. Disclaimer: the views and conclusions contained herein are those of the authors and should not be interpreted as necessarily representing the official policies or endorsements, either expressed or implied, of IARPA, DoI/IBC, or the U.S. Government."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "A learning rule for asynchronous perceptrons with feedback in a combinatorial environment",
+    "authors": ["L.B. Almeida"],
+    "venue": "In IEEE International Conference on Neural Networks,",
+    "year": 1987
+  }, {
+    "title": "Optnet: Differentiable optimization as a layer in neural networks",
+    "authors": ["B. Amos", "J.Z. Kolter"],
+    "venue": "In ICML,",
+    "year": 2017
+  }, {
+    "title": "Backpropagation: theory, architectures, and applications",
+    "authors": ["Y. Chauvin", "D.E. Rumelhart"],
+    "year": 1995
+  }, {
+    "title": "Learning phrase representations using rnn encoder-decoder for statistical machine translation",
+    "authors": ["K. Cho", "B. Van Merriënboer", "C. Gulcehre", "D. Bahdanau", "F. Bougares", "H. Schwenk", "Y. Bengio"],
+    "venue": "In EMNLP,",
+    "year": 2014
+  }, {
+    "title": "Generic methods for optimization-based modeling",
+    "authors": ["J. Domke"],
+    "venue": "In AISTATS, pp",
+    "year": 2012
+  }, {
+    "title": "Efficient multiple hyperparameter learning for log-linear models",
+    "authors": ["Foo", "C.-s", "C.B. Do", "A.Y. Ng"],
+    "venue": "In NIPS, pp",
+    "year": 2008
+  }, {
+    "title": "Neural Networks and Learning Machines",
+    "authors": ["S. Haykin"],
+    "year": 1993
+  }, {
+    "title": "Methods of conjugate gradients for solving linear systems, volume 49",
+    "authors": ["M.R. Hestenes", "E. Stiefel"],
+    "venue": "NBS Washington,",
+    "year": 1952
+  }, {
+    "title": "Long short-term memory",
+    "authors": ["S. Hochreiter", "J. Schmidhuber"],
+    "venue": "Neural Computation,",
+    "year": 1997
+  }, {
+    "title": "Neural networks and physical systems with emergent collective computational abilities",
+    "authors": ["J.J. Hopfield"],
+    "year": 1982
+  }, {
+    "title": "Neurons with graded response have collective computational properties like those of two-state neurons",
+    "authors": ["J.J. Hopfield"],
+    "venue": "PNAS, 81(10):3088–3092,",
+    "year": 1984
+  }, {
+    "title": "Adam: A method for stochastic optimization",
+    "authors": ["D.P. Kingma", "J. Ba"],
+    "venue": "arXiv preprint arXiv:1412.6980,",
+    "year": 2014
+  }, {
+    "title": "A self-optimizing, nonsymmetrical neural net for content addressable memory and pattern recognition",
+    "authors": ["A. Lapedes", "R. Farber"],
+    "venue": "Physica D: Nonlinear Phenomena,",
+    "year": 1986
+  }, {
+    "title": "Gated graph sequence neural networks",
+    "authors": ["Y. Li", "D. Tarlow", "M. Brockschmidt", "R. Zemel"],
+    "year": 2016
+  }, {
+    "title": "Graph partition neural networks for semi-supervised classification",
+    "authors": ["R. Liao", "M. Brockschmidt", "D. Tarlow", "A. Gaunt", "R. Urtasun", "R. Zemel"],
+    "venue": "In ICLR Workshop,",
+    "year": 2018
+  }, {
+    "title": "Visualizing data using t-sne",
+    "authors": ["Maaten", "L. v. d", "G. Hinton"],
+    "venue": "Journal of machine learning research,",
+    "year": 2008
+  }, {
+    "title": "Gradientbased hyperparameter optimization through reversible learning",
+    "authors": ["D. Maclaurin", "D. Duvenaud", "R. Adams"],
+    "venue": "In ICML, pp",
+    "year": 2015
+  }, {
+    "title": "Training recurrent networks online without backtracking",
+    "authors": ["Y. Ollivier", "C. Tallec", "G. Charpiat"],
+    "venue": "arXiv preprint arXiv:1507.07680,",
+    "year": 2015
+  }, {
+    "title": "Lsqr: An algorithm for sparse linear equations and sparse least squares",
+    "authors": ["C.C. Paige", "M.A. Saunders"],
+    "venue": "ACM transactions on mathematical software,",
+    "year": 1982
+  }, {
+    "title": "Fast exact multiplication by the hessian",
+    "authors": ["B.A. Pearlmutter"],
+    "venue": "Neural Computation,",
+    "year": 1994
+  }, {
+    "title": "Generalization of back-propagation to recurrent neural networks",
+    "authors": ["F.J. Pineda"],
+    "venue": "Physical review letters,",
+    "year": 1987
+  }, {
+    "title": "Principles of mathematical analysis, volume 3. McGraw-hill",
+    "authors": ["W. Rudin"],
+    "venue": "New York,",
+    "year": 1964
+  }, {
+    "title": "Learning optimized map estimates in continuously-valued mrf models",
+    "authors": ["K.G. Samuel", "M.F. Tappen"],
+    "venue": "In CVPR,",
+    "year": 2009
+  }, {
+    "title": "The graph neural network model",
+    "authors": ["F. Scarselli", "M. Gori", "A.C. Tsoi", "M. Hagenbuchner", "G. Monfardini"],
+    "venue": "IEEE Transactions on Neural Networks,",
+    "year": 2009
+  }, {
+    "title": "Equivalence of equilibrium propagation and recurrent backpropagation",
+    "authors": ["B. Scellier", "Y. Bengio"],
+    "venue": "arXiv preprint arXiv:1711.08416,",
+    "year": 2017
+  }, {
+    "title": "Equilibrium propagation: Bridging the gap between energy-based models and backpropagation",
+    "authors": ["B. Scellier", "Y. Bengio"],
+    "venue": "Frontiers in Computational Neuroscience,",
+    "year": 2017
+  }, {
+    "title": "Fast curvature matrix-vector products for second-order gradient descent",
+    "authors": ["N.N. Schraudolph"],
+    "venue": "Neural Computation,",
+    "year": 2002
+  }, {
+    "title": "Practical bayesian optimization of machine learning algorithms",
+    "authors": ["J. Snoek", "H. Larochelle", "R.P. Adams"],
+    "venue": "In NIPS, pp",
+    "year": 2012
+  }, {
+    "title": "Training recurrent neural networks",
+    "authors": ["I. Sutskever"],
+    "venue": "PhD thesis, University of Toronto,",
+    "year": 2013
+  }, {
+    "title": "Sequence to sequence learning with neural networks",
+    "authors": ["I. Sutskever", "O. Vinyals", "Q.V. Le"],
+    "venue": "In NIPS,",
+    "year": 2014
+  }, {
+    "title": "Unbiasing truncated backpropagation through time",
+    "authors": ["C. Tallec", "Y. Ollivier"],
+    "venue": "arXiv preprint arXiv:1705.08209,",
+    "year": 2017
+  }, {
+    "title": "On the computation of neumann series",
+    "authors": ["S.D. Vassil", "F.G.C. Diego"],
+    "venue": "arXiv preprint arXiv:1707.05846,",
+    "year": 2017
+  }, {
+    "title": "Backpropagation through time: what it does and how to do it",
+    "authors": ["P.J. Werbos"],
+    "venue": "Proceedings of the IEEE,",
+    "year": 1990
+  }, {
+    "title": "Evaluating the matrix polynomial i+a+",
+    "authors": ["D. Westreich"],
+    "venue": ".+a n-1. IEEE Transactions on Circuits and Systems,",
+    "year": 1989
+  }, {
+    "title": "An efficient gradient-based algorithm for on-line training of recurrent network trajectories",
+    "authors": ["R.J. Williams", "J. Peng"],
+    "venue": "Neural Computation,",
+    "year": 1990
+  }, {
+    "title": "Revisiting semi-supervised learning with graph embeddings",
+    "authors": ["Z. Yang", "W.W. Cohen", "R. Salakhutdinov"],
+    "venue": "In ICML,",
+    "year": 2016
+  }],
+  "id": "SP:7d663f5195969453f5f8c5e8fd6cef256d514c75",
+  "authors": [{
+    "name": "Renjie Liao",
+    "affiliations": []
+  }, {
+    "name": "Yuwen Xiong",
+    "affiliations": []
+  }, {
+    "name": "Ethan Fetaya",
+    "affiliations": []
+  }, {
+    "name": "Lisa Zhang",
+    "affiliations": []
+  }, {
+    "name": "KiJung Yoon",
+    "affiliations": []
+  }, {
+    "name": "Xaq Pitkow",
+    "affiliations": []
+  }, {
+    "name": "Raquel Urtasun",
+    "affiliations": []
+  }, {
+    "name": "Richard Zemel",
+    "affiliations": []
+  }],
+  "abstractText": "In this paper, we revisit the recurrent backpropagation (RBP) algorithm (Almeida, 1987; Pineda, 1987), discuss the conditions under which it applies as well as how to satisfy them in deep neural networks. We show that RBP can be unstable and propose two variants based on conjugate gradient on the normal equations (CG-RBP) and Neumann series (Neumann-RBP). We further investigate the relationship between Neumann-RBP and back propagation through time (BPTT) and its truncated version (TBPTT). Our NeumannRBP has the same time complexity as TBPTT but only requires constant memory, whereas TBPTT’s memory cost scales linearly with the number of truncation steps. We examine all RBP variants, along with BPTT and TBPTT, in three different application domains: associative memory with continuous Hopfield networks, document classification in citation networks using graph neural networks, and hyperparameter optimization for fully connected networks. All experiments demonstrate that RBPs, especially the Neumann-RBP variant, are efficient and effective for optimizing convergent recurrent neural networks.",
+  "title": "Reviving and Improving Recurrent Back-Propagation"
+}

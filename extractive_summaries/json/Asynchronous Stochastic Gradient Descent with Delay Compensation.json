@@ -1,0 +1,240 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Deep Neural Networks (DNN) have pushed the frontiers of many applications, such as speech recognition (Sak et al., 2014; Sercu et al., 2016), computer vision (Krizhevsky et al., 2012; He et al., 2016; Szegedy et al., 2016), and natural language processing (Mikolov et al., 2013; Bahdanau et al., 2014; Gehring et al., 2017). Part of the success of DNN should be attributed to the availability of big training data and powerful computational resources, which allow people to learn very deep and big DNN models in parallel\n1University of Science and Technology of China 2School of Mathematical Sciences, Peking University 3Microsoft Research 4Academy of Mathematics and Systems Science, Chinese Academy of Sciences. Correspondence to: Taifeng Wang, Wei Chen <taifengw, wche@microsoft.com>.\nProceedings of the 34 th International Conference on Machine Learning, Sydney, Australia, PMLR 70, 2017. Copyright 2017 by the author(s).\n(Zhang et al., 2015; Chen & Huo, 2016; Chen et al., 2016).\nStochastic Gradient Descent (SGD) is a popular optimization algorithm to train neural networks (Bottou, 2012; Dean et al., 2012; Kingma & Ba, 2014). As for the parallelization of SGD algorithms (suppose we use M machines for the parallelization), one can choose to do it in either a synchronous or asynchronous way. In synchronous SGD (SSGD), local workers compute the gradients over their own mini-batches of data, and then add the gradients to the global model. By using a barrier, these workers wait for each other, and will not continue their local training until the gradients from all the M workers have been added to the global model. It is clear that the training speed will be dragged by the slowest worker1. To improve the training efficiency, asynchronous SGD (ASGD) (Dean et al., 2012) has been adopted, with which no barrier is imposed, and each local worker continues its training process right after its gradient is added to the global model. Although ASGD can achieve faster speed due to no waiting overhead, it suffers from another problem which we call delayed gradient. That is, before a worker wants to add its gradient g(wt) (calculated based on the model snapshot wt) to the global model, several other workers may have already added their gradients and the global model has been updated to wt+τ (here τ is called the delay factor). Adding gradient of model wt to another model wt+τ does not make a mathematical sense, and the training trajectory may suffer from unexpected turbulence. This problem has been well known, and some researchers have analyzed its negative effect on the convergence speed (Lian et al., 2015; Avron et al., 2015).\nIn this paper, we propose a novel method, called Delay Compensated ASGD (or DC-ASGD for short), to tackle the problem of delayed gradients. For this purpose, we study the Taylor expansion of the gradient function g(wt+τ ) at wt. We find that the delayed gradient g(wt) is just the zero-order approximator of the correct gradient g(wt+τ ), and we can leverage more items in the Taylor expansion to achieve more accurate approximation of g(wt+τ ). However, this straightforward idea is practically non-trivial, be-\n1Recently, people proposed to use additional backup workers (Chen et al., 2016) to tackle this problem. However, this solution requires redundant computation resources and relies on the assumption that the majority of workers train almost equally fast.\ncause even including the first-order derivative of the gradient g(wt+τ ) will require the computation of the secondorder derivative of the original loss function (i.e., the Hessian matrix), which will introduce high computation and space complexity. To overcome this challenge, we propose a cheap yet effective approximator of the Hessian matrix, which can achieve a good trade-off between bias and variance of approximation, only based on previously available gradients (without the necessity of directly computing the Hessian matrix).\nDC-ASGD is similar to ASGD in the sense that no worker needs to wait for others. It differs from ASGD in that it does not directly add the local gradient to the global model, but compensates the delay in the local gradient by using the approximate Taylor expansion. By doing so, it maintains almost the same efficiency as ASGD and achieves much higher accuracy. Theoretically, we proved that DC-ASGD can converge at a rate of the same order with sequential SGD for non-convex neural networks, if the delay is upper bounded; and it is more tolerant on the delay than ASGD2. Empirically, we conducted experiments on both CIFAR-10 and ImageNet datasets. The results show that (1) as compared to SSGD and ASGD, DC-ASGD accelerated the convergence of the training process; (2) the accuracy of the model obtained by DC-ASGD within the same time period is very close to the accuracy obtained by sequential SGD."
+  }, {
+    "heading": "2. Problem Setting",
+    "text": "In this section, we introduce DNN and its parallel training through ASGD.\nGiven a multi-class classification problem, we denote X = Rd as the input space, Y = {1, ...,K} as the output space, and P as the joint distribution over X × Y . Here d denotes the dimension of the input space, and K denotes the number of categories in the output space.\nWe have a training set {(x1, y1), ..., (xS , yS)}, whose elements are i.i.d. sampled from X × Y according to distribution P. Our goal is to learn a neural network model O ∈ F : X × Y → R parameterized by w ∈ Rn based on the training set. Specifically, the neural network models have hierarchical structures, in which each node conducts linear combination and non-linear activation over its connected nodes in the lower layer. The parameters are the weights on the edges between two layers. The neural network model produces an output vector, i.e., (O(x, k;w); k ∈ Y) for each input x ∈ X , indicating its likelihoods of belonging to different categories. Because the underlying distribution P is unknown, a common way of learning the model is to minimize the empirical loss function. A widely-used loss function for deep neural networks is the cross-entropy loss,\n2We also obtained similar results for the convex cases. Due to space restrictions, we put the corresponding theorems and proofs in the appendix.\nwhich is defined as follows,\nf(x, y;w) = − K∑\nk=1\n(I[y=k] log σk(x;w)). (1)\nHere σk(x;w) = e O(x,k;w)∑K\nk′=1 e O(x,k′;w) is the Softmax operator.\nThe objective is to optimize the empirical risk, defined as below,\nF (w) = 1 S S∑ s=1 fs(w) := 1 S S∑ s=1 f(xs, ys;w). (2)\nAs mentioned in the introduction, ASGD is a widely-used approach to perform parallel training of neural networks. Although ASGD is highly efficient, it is well known to suffer from the problem of delayed gradient. To better illustrate this problem, let us have a close look at the training process of ASGD as shown in Figure 1. According to the figure, local worker m starts from wt, the snapshot of the global model at time t, calculates the local gradient g(wt), and then add this gradient back to the global model3. However, before this happens, some other τ workers may have already added their local gradients to the global model, the global model has been updated τ times and becomes wt+τ . The ASGD algorithm is blind to this situation, and simply adds the gradient g(wt) to the global model wt+τ , as follows.\nwt+τ+1 = wt+τ − ηg(wt), (3)\nwhere η is the learning rate.\nIt is clear that the above update rule of ASGD is problematic (and inequivalent to that of sequential SGD): one actually adds a “delayed” gradient g(wt) to the current global model wt+τ . In contrast, the correct way is to update the global model wt+τ based on the gradient w.r.t. wt+τ . This\n3Actually, the local gradient is also related to the randomly sampled data (xit , yit). For simplicity, when there is no confusion, we will omit xit , yit in the notations.\nproblem of delayed gradient has been well known (Agarwal & Duchi, 2011; Recht et al., 2011; Lian et al., 2015; Avron et al., 2015), and many practical observations indicate that it usually costs ASGD more iterations to converge than sequential SGD, and sometimes, the converged model of ASGD cannot reach accuracy parity of sequential SGD, especially when the number of workers is large (Dean et al., 2012; Ho et al., 2013; Zhang et al., 2015). Researchers have tried to improve ASGD from different perspectives (Ho et al., 2013; McMahan & Streeter, 2014; Zhang et al., 2015; Sra et al., 2015; Mitliagkas et al., 2016), however, to the best of our knowledge, there is still no solution that can compensate the delayed gradient while keeping the high efficiency of ASGD. This is exactly the motivation of our paper."
+  }, {
+    "heading": "3. Delay Compensation using Taylor Expansion and Hessian Approximation",
+    "text": "As explained in the previous sections, ideally, the optimization algorithm should add gradient g(wt+τ ) to the global model wt+τ , however, ASGD adds a delayed version g(wt). In this section, we propose a novel method to bridge this gap by using Taylor expansion and Hessian approximation."
+  }, {
+    "heading": "3.1. Gradient Decomposition using Taylor Expansion",
+    "text": "The Taylor expansion of the gradient function g(wt+τ ) at wt can be written as follows (Folland, 2005),\ng(wt+τ ) = g(wt)+∇g(wt)(wt+τ −wt)+O((wt+τ −wt)2)In, (4)\nwhere ∇g denotes the matrix with the element gij = ∂2f ∂wi∂wj for i ∈ [n] and j ∈ [n], (wt+τ − wt)2 =\n(wt+τ,1−wt,1)α1 · · · (wt+τ,n−wt,n)αn with ∑n\ni=1 αi = 2 and αi ∈ N and In is a n-dimension vector with all the elements equal to 1.\nBy comparing the above formula with Eqn. (3), we can immediately find that ASGD actually uses the zero-order item in Taylor expansion as its approximation to g(wt+τ ), and totally ignores all the higher-order terms ∇g(wt)(wt+τ − wt) + O((wt+τ − wt)2)In. This is exactly the root cause of the problem of delayed gradient. With this insight, a straightforward and ideal method is to use the full Taylor expansion to compensate the delay. However, this is practically intractable, since it involves the sum of an infinite number of items. And even the simplest delay compensation, i.e., additionally keeping the first-order item in the Taylor expansion (which is shown below), is highly nontrivial,\ng(wt+τ ) ≈ g(wt) +∇g(wt)(wt+τ − wt). (5)\nThis is because the first-order derivative of the gradient function g corresponds to the Hessian matrix of the original loss function f (e.g., cross entropy for neural net-\nworks), which is defined as Hf(w) = [hij ]i,j=1,··· ,n where hij =\n∂2f ∂wi∂wj (w).\nFor a neural network model with millions of parameters (which is very common and may only be regarded as a medium-size network today), the corresponding Hessian matrix will contain trillions of elements. It is clearly very computationally and spatially expensive to obtain such a large matrix4. Fortunately, as shown in the next subsection, we find an easy-to-compute/store approximator to the Hessian matrix, which makes our proposal of delay compensation technically feasible."
+  }, {
+    "heading": "3.2. Approximation of Hessian Matrix",
+    "text": "Computing the exact Hessian matrix is computationally and spatially expensive, especially for large models. Alternatively, we want to find some approximators that are theoretically close to the Hessian matrix, but can be easily stored and computed without introducing additional complexity (i.e., just using what we already have during the previous training process).\nFirst, we show that the outer product of the gradients is an asymptotically unbiased estimation of the Hessian matrix. Let us use G(wt) to denote the outer product matrix of the gradient at wt, i.e.,\nG(wt) = ( ∂\n∂w f(x, y,wt)\n)( ∂\n∂w f(x, y,wt)\n)T . (6)\nBecause the cross entropy loss is a negative log-likelihood with respect to the Softmax distribution of the model, i.e., P(Y = k|x,wt) , σk(x;wt), it is not difficult to obtain that the outer product of the gradient is an asymptotically unbiased estimation of Hessian, according to the two equivalent methods to calculate the fisher information matrix (Friedman et al., 2001)5:\nϵt , E(y|x,w∗)||G(wt)−H(wt)|| → 0, t → ∞. (7)\nThe assumption behind the above equivalence is that the underlying distribution equals the model distribution with parameter w∗ (or there is no approximation error of the NN hypothesis space) and the training model wt gradually converges to the optimal model w∗ along with the training process. This assumption is reasonable considering the universal approximation property of DNN (Hornik, 1991) and the recent results on the optimality of the local optima of DNN (Choromanska et al., 2015; Kawaguchi, 2016).\nSecond, we show that by further introducing a welldesigned weight to the outer product of the gradients, we\n4Although Hessian-free methods were used in some previous works (Martens, 2010), they double the computation and communication for each local worker and are therefore not very feasible in practice.\n5In this paper, the norm of the matrix is Frobenius norm.\ncan achieve a better trade-off between bias and variance for the approximation.\nAlthough the outer product of the gradients can achieve unbiased estimation to the Hessian matrix, it may induce high approximation error due to potentially large variance. To further control the variance, we use mean square error (MSE) to measure the quality of an approximator, which is defined as follows,\nmset(G) = E(y|x,w∗)∥ ( G(wt)−H(wt) ) ||2. (8)\nWe consider the following new approximator λG(wt) ∆ = [ λgtij ] , and prove that with appropriately set λ, λG(wt) can lead to smaller MSE than G(wt), for arbitrary model wt during the training.\nTheorem 3.1 Assume that the loss function is L1-Lipschitz, and for arbitrary k ∈ [K], ∣∣∣ ∂σk∂wi ∣∣∣ ∈ [li, ui], |σk(x,w∗)σk(x,wt) | ∈ [α, β]. If λ ∈ [0, 1] makes the following inequality holds,\nK∑ k=1\n1\nσ3k(x,wt) ≥ 2C ( K∑ k=1\n1\nσk(x,wt)\n)2 + 2L21ϵt  , (9) where C = maxi,j 11+λ ( uiujβ liljα )2, and the model wt converges\nto the optimal model w∗, then mset(λG) ≤ mset(G).\nThe following corollary gives simpler sufficient conditions for Theorem 3.1.\nCorollary 3.2 A sufficient condition for inequality (9) is ∃k0 ∈ [K] such that σk0 ∈ [ 1− K−1 2C(K2+L21ϵt) , 1 ] .\nAccording to Corollary 3.2, we have the following discussions. Please note that, if wt converges to w∗, ϵt is a decreasing term and approaches 0. Thus, ϵt can be upper bounded by a very small constant for large t. Therefore, the condition on σk(x,wt) is more likely to be satisfied when σk(x,wt) (∃k ∈ [K]) is close to 1. Please note that this is not a strong condition, since if σk(x,wt) (∀k ∈ [K]) is very small, the classification power of the corresponding neural network model will be very weak and not useful in practice.\nThird, to reduce the storage of the approximator λG(w), we adopt a widely-used diagonalization trick (Becker et al., 1988), which has shown promising empirical results. To be specific, we only store the diagonal elements of the approximator λG(w) and make all the other elements to be zero. We denote the refined approximator as Diag(λG(w)) and assume that the diagonalization error is upper bounded by ϵD , i.e., ||Diag(H(wt)) − H(wt)|| ≤ ϵD . We give a uniform upper bound of its MSE in the supplementary materials, from which we can see that λ plays a role of trading off variance and Lipschitz6.\n4. Delay Compensated ASGD: Algorithm Description\nIn Section 3, we have shown that Diag(λG(w)) is a cheap approximator of the Hessian matrix, with guaranteed approxi-\n6See Lemma 3.1 in Supplementary.\nAlgorithm 1 DC-ASGD: worker m repeat\nPull wt from the parameter server. Compute gradient gm = ∇fm(wt). Push gm to the parameter server.\nuntil forever\nAlgorithm 2 DC-ASGD: parameter server Input: learning rate η, variance control parameter λt. Initialize: t = 0, w0 is initialized randomly, wbak(m) = w0, m ∈ {1, 2, · · · ,M} repeat\nif receive “gm\" then wt+1 ← wt−η· ( gm+λtgm⊙gm⊙(wt−wbak(m)) ) t← t+ 1\nelse if receive “pull request” then wbak(m)← wt Send wt back to worker m.\nend if until forever\nmation accuracy. In this section, we will use this approximator to compensate the gradient delay, and call the corresponding algorithm Delay-Compensated ASGD (DC-ASGD). Since Diag(λG(w)) = λg(wt) ⊙ g(wt), where ⊙ indicates the element-wise product, the update rule for DC-ASGD can be written as follows:\nwt+τ+1 = wt+τ − η (g(wt) + λg(wt)⊙ g(wt)⊙ (wt+τ − wt)) , (10)\nWe call g(wt) + λg(wt) ⊙ g(wt) ⊙ (wt+τ − wt) the delaycompensated gradient for ease of reference.\nThe flow of DC-ASGD is shown in Algorithms 1 and 2. Here we assume that DC-ASGD is implemented by using the parameter server framework (although it can also be implemented in other frameworks). According to Algorithm 1, local worker m pulls the latest global model wt from the parameter server, computes its gradient gm and sends it back to the server. According to Algorithm 2, the parameter server will store a backup model wbak(m) when worker m pulls wt. When the delayed gradient gm calculated by worker m is received at time t, the parameter server updates the global model according to Eqn (10).\nPlease note that as compared to ASGD, DC-ASGD has no extra communication cost and no extra computational requirement on the local workers. And the additional computations regarding Eqn(10) only introduce a lightweight overhead to the parameter server. As for the space requirement, for each worker m ∈ {1, 2, · · · ,M}, the parameter server needs to additionally store a backup model wbak(m). This is not a critical issue since the parameter server is usually implemented in a distributed manner, and the parameters and its backup version are stored in CPU-side memory which is usually far beyond the total parameter size. In this case, the cost of DC-ASGD is quite similar to ASGD, which is also reflected by our experiments.\nThe Delay Compensation is not only applicable to ASGD but SSGD. Recently a study on SSGD(Goyal et al., 2017) assumes\ng(wt+j) ≈ g(wt) for j < M to make the updates from small and large mini-batch SGD similar, which can be immediately improved by applying delay-compensated gradient. Please check the detailed discussion in Supplementary."
+  }, {
+    "heading": "5. Convergence Analysis",
+    "text": "In this section, we prove the convergence rate of DC-ASGD. Due to space restrictions, we only give the results for the non-convex case, and leave the results for the convex case (which is much easier) to the supplementary.\nIn order to present our main theorem, we need to introduce the following mild assumptions.\nAssumption 1 (Smoothness): (Lian et al., 2015)(Recht et al., 2011) The loss function is smooth w.r.t. the model parameter, and we use L1, L2, L3 to denote the upper bounds of the first, second, and third-order derivatives of the loss function. The activation function σk(w) is L-Lipschitz continuous.\nAssumption 2 (Non-convexity): (Lee et al., 2016) The loss function is µ-strongly convex in a ball centered at each local optimum which is denoted as d(wloc, r) with radius r, and twice differential about w.\nWe also introduce some notations to simplify the presentation of our results, i.e.,\nM = max k,wloc\n|P(Y = k|x,wloc)− P(Y = k|x,w∗)| ,\nH = max k,x,w ∣∣∣∣∂2P(Y = k|x,w)∂2w × 1P(Y = k|x,w) ∣∣∣∣ ,\n∀k ∈ [K], x, w.\nActually, the non-convexity error ϵnc = HKM , which is defined as the upper bound of the difference between the prediction outputs of the local optima and the global optimum (Please see Lemma 5.1 in the supplementary materials). We assume that the DC-ASGD search in the set ∥w − w′∥22 ≤ π2, ∀w,w′ and denote D0 = F (w1)−F (w∗), C2λ = (L23π2/2+2((1−λ)L21+ ϵD)2+ 2ϵ2nc), C̃2λ = 4T0 maxs=1,··· ,T0 ϵs 2 + 4θ2 log (T − T0) where\nT0 ≥ O(1/r4), θ = 2HKLV L2µ2 √ 1 µ ( 1 + L2+λL 2 1 L2 τ ) .\nWith all the above, we have the following theorem.\nTheorem 5.1 Assume that Assumptions 1-2 hold. Set the learning rate η = √ 2D0\nbTL2V 2 ,where b is the mini-batch size, and V is\nthe upper bound of the variance of the delay-compensated gradient. If T ≥ max{O(1/r4), 2D0bL2/V 2} and delay τ is upperbounded as below,\nτ ≤ min { L2γ\nCλ , γ Cλ ,\n√ Tγ\nC̃ , L2Tγ 4C̃\n} , (11)\nwhere γ = √ L2TV 2\n2D0b , then DC-ASGD has the following ergodic\nconvergence rate,\nmin t={1,··· ,T}\nE(∥∇F (wt)∥2) ≤ V √\n2D0L2 bT , (12)\nwhere T is the number of iteration, the expectation is taken with respect to the random sampling in SGD and the data distribution P (Y |x,w∗).\nProof Sketch7:\nStep 1: We denote the delay-compensated gradient as gdcm (wt) where m ∈ {1, · · · , b} is the index of instances in the mini-batch and ∇Fh(wt) = ∇F (wt) + EH(wt)(wt+τ − wt). According to Assumption 1, we have\nEF (wt+τ+1)− F (wt+τ )\n≤ − bηt+τ 2 ∥∇F (wt+τ )∥2 + ∥∥∥∥∥ b∑\nm=1\nEgdcm (wt) ∥∥∥∥∥ 2 \n+bηt+τ ∥∥∥∥∥∇F (wt+τ )− b∑\nm=1\n∇Fh(wt) ∥∥∥∥∥ 2\n+bηt+τ ∥∥∥∥∥ b∑\nm=1\nEgdcm (wt)− b∑\nm=1\nFh(wt) ∥∥∥∥∥ 2\n+ η2t+τL2\n2 E ∥∥∥∥∥ b∑\nm=1\ngdcm (wt) ∥∥∥∥∥ 2  . (13)\nThe term ∥∥∥∑bm=1 Egdcm (wt)−∑bm=1 Fh(wt)∥∥∥2, measured by the expectation with respect to P(Y |x,w∗), is bounded by C2λ · ∥wt+τ − wt∥2. The term\n∥∥∥∇F (wt+τ )−∑bm=1 ∇Fh(wt)∥∥∥2 can be bounded by L\n2 3 4 ∥wt+τ −wt∥4, which will be smaller than\n∥wt+τ − wt∥2 when ∥wt+τ − wt∥ is small. Other terms which are related to the gradients can be further upper bounded by the smoothness property of the loss function.\nStep 2: We proved that, under the non-convexity assumption, if ∥λg(wt) ⊙ g(wt)∥ ≤ λL21, then when t > O(1/r4), ϵt ≤ θ √\n1 t−T0 + ϵnc, where T0 = O(1/r4). That is, we can find a weaker condition for the decreasing of ϵt than that for wt → w∗.\nStep 3: By plugging in the decreasing rate of ϵt in Step 1 and following a similar proof of the convergence rate of ASGD (Lian et al., 2015), we can get the result in the theorem.\nDiscussions:\n(1) The above theorem shows that the convergence rate of DCASGD is in the order of O( V√\nT ). Recall that the convergence rate\nof ASGD is O( V1√ T ), where V1 is the variance for the delayed gradient g(wt). By simple calculation, V can be upper bounded by V1 + λV2, where V2 is the extra moments of the noise introduced by the delay compensation term. Thus if we set λ ∈ [0, V1/V2], DC-ASGD and ASGD will converge at the same rate. As the training process goes on, g(w) will become smaller. Compared with V1, V2 (composed by variance of g ⊙ g) will not be the dominant order and can be gradually neglected. As a result, the feasible range for λ is actually very large.\n(2) Although DC-ASGD converges at the same rate with ASGD, its tolerance on the delay is much better if T ≥ max{C̃2, 4C̃/L2} and Cλ < min{L2, 1}. The intuition for the condition on T is that larger T induces smaller step size η. A small step size means that wt and wt+τ are close to each other. According to the upper bound of Taylor expansion series (Folland, 2005), we can see that delay compensated gradient will be more\n7Please check the complete proof in the supplementary material.\naccurate than the delayed gradient used in ASGD. Since Cλ is related to the diagonalization error ϵD and the non-convexity error ϵnc, smaller ϵD and ϵnc will lead to looser conditions for the convergence. If these two error are sufficiently small (which is usually the case according to (Choromanska et al., 2015; Kawaguchi, 2016; LeCun, 1987)), the condition L2 > Cλ can be simplified as L2 > (1 − λ)L21 + L3π, which is easy to be satisfied with a small 1−λ. Assume that L2−L3π > 0, which is easily to be satisfied if the gradient is small (e.g. at the later stage of the training progress). Accordingly, we can obtain the feasible range for λ as λ ∈ [1 − (L2 − L3π)/2L21, 1]. λ can be regarded as a trade-off between the extra variance introduced by the delay-compensate term λg(wt)⊙ g(wt) and the bias in Hessian approximation.\n(3) Actually ASGD is an extreme case for DC-ASGD, with λ = 0. Another extreme case is with λ = 1. DC-ASGD prefers larger T and smaller π, which can lead to a faster speed-up and larger tolerant for delay.\nBased on the above discussions, we have the following corollary, which indicates that DC-ASGD is superior to ASGD in most cases.\nCorollary 5.2 Let C0 = max{C̃2, 4C̃/L2}, which is a constant. If we choose λ ∈ [ 1− L2−L3π L21 , 1 ] ∩ [0, V1/V2] ∩ [0, 1] and the number of total iterations T ≥ C0, DC-ASGD will outperform ASGD by a factor of T/C0."
+  }, {
+    "heading": "6. Experiments",
+    "text": "In this section, we evaluate our proposed DC-ASGD algorithm. We used two datasets: CIFAR-10 (Hinton, 2007) and ImageNet ILSVRC 2013 (Russakovsky et al., 2015). The experiments were conducted on a GPU cluster interconnected with InfiniBand. Each node has four K40 Tesla GPU processors. We treat each GPU as a separate local worker. For the DNN algorithm running on\neach worker, we chose ResNet (He et al., 2016) since it produces the state-of-the-art accuracy in many image related tasks and its implementation is available through open-source projects8. For the parallelization of ResNet across machines, we leveraged an open-source parameter server9.\nWe implemented DC-ASGD on this experimental platform. We have two versions of implementations, one sets λt = λ0 as a constant, and the other adaptively tunes λt using a moving average method proposed by (Tieleman & Hinton, 2012). Specifically, we first define a quantity called MeanSquare as follows,\nMeanSquare(t) = m·MeanSquare(t−1)+(1−m)·g(wt)2, (14) where m is a constant taking value from [0, 1). And then we divide the initial λ0 by √ MeanSquare(t) + ϵ, where ϵ = 10−7 for all our experiments. This adaptive method is adopted to reduce the variance among coordinates with historical gradient values. For ease of reference, we denote the first implementation as DCASGD-c (constant) and the second as DC-ASGD-a (adaptive).\nIn addition to DC-ASGD, we also implemented ASGD and SSGD, which have been used in many previous works as baselines (Dean et al., 2012; Chen et al., 2016; Das et al., 2016). Furthermore, for the experiments on CIFAR-10, we used the sequential SGD algorithm as a reference model to examine the accuracy of parallel algorithms. However, for the experiments on ImageNet, we were not able to show this reference because it simply took too long time for a single machine to finish the training10. For sake of fairness, all experiments started from the same randomly initial-\n8https://github.com/KaimingHe/ deep-residual-networks\n9http://www.dmtk.io/ 10We also implemented the momentum variants of these algorithms. The corresponding comparisons are very similar to those without momentum.\nized model, and used the same strategy for learning rate scheduling. The data were repartitioned randomly onto the local workers every epoch."
+  }, {
+    "heading": "6.1. Experimental Results on CIFAR-10",
+    "text": "The CIFAR-10 dataset consists of a training set of 50k images and a test set of 10k images in 10 classes. We trained a 20-layer ResNet model on this dataset (without data augmentation). For all the algorithms under investigation, we performed training for 160 epochs, with a mini-batch size of 128, and an initial learning rate which was reduced by ten times after 80 and 120 epochs following the practice in (He et al., 2016). We performed grid search for the hyper-parameter and the best test performances are obtained by choosing the initial learning rate η = 0.5, λ0 = 0.04 for DC-ASGD-c, and λ0 = 2, m = 0.95 for DC-ASGD-a. We tried different numbers of local workers in our experiments: M = {1, 4, 8}.\nFirst, we investigate the learning curves with fixed number of effective passes as shown in Figure 2. From the figure, we have the following observations: (1) Sequential SGD achieves the best accuracy, and its final test error is 8.65%. (2) The test errors of ASGD and SSGD increase with respect to the number of local workers. In particular, when M = 4, ASGD and SSGD achieve test errors of 9.27% and 9.17% respectively; and when M = 8, their test errors become 10.26% and 10.10% respectively. These results are reasonable: ASGD suffers from delayed gradients which becomes more serious for a larger number of workers; SSGD increases the effective mini-batch size by M times, and enlarged mini-batch size usually affects the training performances of DNN. (3) For DC-ASGD, no matter which λt is used, its performance is significantly better than ASGD and SSGD, and catches up with sequential SGD. For example, when M = 4, the test error of DC-ASGD-c is 8.67%, which is indistinguishable from sequential SGD, and the test error for DC-ASGD-a is 8.19%, which is even better than that achieved by sequential SGD. It is not by design that DC-ASGD can beat sequential SGD. The test performance lift might be attributed to the regularization effect brought by the variance introduced by parallel training. When M = 8, DC-ASGD-c can reduce the test error to 9.27%, which is nearly 1% better than ASGD and SSGD, meanwhile the test error is 8.57% for DC-ASGD-a, which again slightly better than sequential SGD.\nWe further compared the convergence speeds of different algorithms as shown in Figure 3. From this figure, we have the following observations: (1) Although the convergent point is not very good, ASGD runs indeed very fast, and achieves almost linear speed-up as compared to sequential SGD in terms of throughput. (2) SSGD also runs faster than sequential SGD. However, due to the synchronization barrier, it is significantly slower than ASGD. (3) DC-ASGD achieves very good balance between accuracy and speed. On one hand, its converge speed is very similar to that of ASGD (although it involves a little more computational cost and\nsome memory cost when compensating the delay). On the other hand, its convergent point is as good as, or even better than that of sequential SGD. The experiments results clearly demonstrate the effectiveness of our proposed delay compensation technologies11."
+  }, {
+    "heading": "6.2. Experimental Results on ImageNet",
+    "text": "In order to further verify our method on the large-scale setting, we conducted the experiment on the ImageNet dataset, which contains 1.28 million training images and 50k validation images in 1000 categories. We trained a 50-layer ResNet model (He et al., 2016) on this dataset.\nAccording to the previous subsection, DC-ASGD-a seems to be better, therefore in this large-scale experiment, we only implemented DC-ASGD-a. For all algorithms in this experiment, we performed training for 120 epochs , with a mini-batch size of 32, and an initial learning rate reduced by ten times after every 30 epochs following the practice in (He et al., 2016). We did grid search for hyperparameter tuning and set the initial learning rate η = 0.1, λ0 = 2, m = 0. Since the training on the ImageNet dataset is very time consuming, we employed M = 16 GPU nodes in our experiments. The top-1 accuracies based on 1-crop testing of different algorithms are given in Figure 4.\n11Please refer to the supplementary materials for the experiments on tuning the parameter λ.\nAccording to the figure, we have the following observations: (1) After processing the same amount of training data, DC-ASGD always outperforms SSGD and ASGD. In particular, while the eventual test error achieved by ASGD and SSGD were 25.64% and 25.30% respectively, DC-ASGD achieved a lower error rate of 25.18%. Please note this time the accuracy of SSGD is quite good (which is consistent with a separate observation in (Chen et al., 2016)). An explanation is that the training on ImageNet is less sensitive to the mini-batch size than that on CIFAR-10. (2) If we look at the learning curve with respect to wallclock time, SSGD is slowed down due to the synchronization barrier; ASGD and DC-ASGD have similar efficiency, once again indicating that the extra overhead for delay compensation introduced by DC-ASGD can almost be neglected in practice. Based on all our experiments, we can clearly see that DC-ASGD has outstanding performance in terms of both classification accuracy and convergence speed, which in return verifies the soundness of our proposed delay compensation technologies."
+  }, {
+    "heading": "7. Conclusion",
+    "text": "In this paper, we have given a theoretical analysis on the problem of delayed gradients in the asynchronous parallelization of stochastic gradient descent (SGD) algorithms, and proposed a novel algorithm called Delay Compensated Asynchronous SGD (DC-ASGD) to tackle the problem. We have evaluated DC-ASGD on CIFAR-10 and ImageNet datasets, and the results demonstrate that it can achieve better accuracy than both synchronous SGD and asynchronous SGD, and nearly approaches the performance of sequential SGD. As for the future work, we plan to test DCASGD on larger computer clusters, where with the increasing number of local workers, the delay will become more serious. Furthermore, we will investigate the economical approximation of higher-order items in the Taylor expansion to achieve more effective delay compensation."
+  }, {
+    "heading": "Acknowledgments",
+    "text": "This work is partially supported by the National Natural Science Foundation of China (Grant No. 61371192)."
+  }],
+  "year": 2017,
+  "references": [{
+    "title": "Distributed delayed stochastic optimization",
+    "authors": ["Agarwal", "Alekh", "Duchi", "John C"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2011
+  }, {
+    "title": "Revisiting asynchronous linear solvers: Provable convergence rate through randomization",
+    "authors": ["Avron", "Haim", "Druinsky", "Alex", "Gupta", "Anshul"],
+    "venue": "Journal of the ACM (JACM),",
+    "year": 2015
+  }, {
+    "title": "Neural machine translation by jointly learning to align and translate",
+    "authors": ["Bahdanau", "Dzmitry", "Cho", "Kyunghyun", "Bengio", "Yoshua"],
+    "venue": "arXiv preprint arXiv:1409.0473,",
+    "year": 2014
+  }, {
+    "title": "Improving the convergence of back-propagation learning with second order methods",
+    "authors": ["Becker", "Sue", "Le Cun", "Yann"],
+    "venue": "In Proceedings of the 1988 connectionist models summer school,",
+    "year": 1988
+  }, {
+    "title": "Stochastic gradient descent tricks",
+    "authors": ["Bottou", "Léon"],
+    "venue": "In Neural networks: Tricks of the trade,",
+    "year": 2012
+  }, {
+    "title": "Revisiting distributed synchronous sgd",
+    "authors": ["Chen", "Jianmin", "Monga", "Rajat", "Bengio", "Samy", "Jozefowicz", "Rafal"],
+    "venue": "arXiv preprint arXiv:1604.00981,",
+    "year": 2016
+  }, {
+    "title": "Scalable training of deep learning machines by incremental block training with intra-block parallel optimization and blockwise model-update filtering",
+    "authors": ["Chen", "Kai", "Huo", "Qiang"],
+    "venue": "In Acoustics, Speech and Signal Processing (ICASSP),",
+    "year": 2016
+  }, {
+    "title": "The loss surfaces of multilayer networks",
+    "authors": ["Choromanska", "Anna", "Henaff", "Mikael", "Mathieu", "Michael", "Arous", "Gérard Ben", "LeCun", "Yann"],
+    "venue": "In AISTATS,",
+    "year": 2015
+  }, {
+    "title": "Distributed deep learning using synchronous stochastic gradient descent",
+    "authors": ["Das", "Dipankar", "Avancha", "Sasikanth", "Mudigere", "Dheevatsa", "Vaidynathan", "Karthikeyan", "Sridharan", "Srinivas", "Kalamkar", "Dhiraj", "Kaul", "Bharat", "Dubey", "Pradeep"],
+    "venue": "arXiv preprint arXiv:1602.06709,",
+    "year": 2016
+  }, {
+    "title": "Large scale distributed deep networks",
+    "authors": ["Dean", "Jeffrey", "Corrado", "Greg", "Monga", "Rajat", "Chen", "Kai", "Devin", "Matthieu", "Mao", "Mark", "Senior", "Andrew", "Tucker", "Paul", "Yang", "Ke", "Le", "Quoc V"],
+    "venue": "In Advances in neural information processing systems,",
+    "year": 2012
+  }, {
+    "title": "Higher-order derivatives and taylors formula in several variables",
+    "authors": ["Folland", "GB"],
+    "year": 2005
+  }, {
+    "title": "The elements of statistical learning, volume 1. Springer series in statistics",
+    "authors": ["Friedman", "Jerome", "Hastie", "Trevor", "Tibshirani", "Robert"],
+    "year": 2001
+  }, {
+    "title": "Convolutional sequence to sequence learning",
+    "authors": ["Gehring", "Jonas", "Auli", "Michael", "Grangier", "David", "Yarats", "Denis", "Dauphin", "Yann N"],
+    "venue": "arXiv preprint arXiv:1705.03122,",
+    "year": 2017
+  }, {
+    "title": "Accurate, large minibatch sgd: Training imagenet in 1 hour",
+    "authors": ["Goyal", "Priya", "Dollar", "Piotr", "Girshick", "Ross", "Noordhuis", "Pieter", "Wesolowski", "Lukasz", "Kyrola", "Aapo", "Tulloch", "Andrew", "Jia", "Yangqing", "He", "Kaiming"],
+    "venue": "arXiv preprint arXiv:1706.02677,",
+    "year": 2017
+  }, {
+    "title": "Deep residual learning for image recognition",
+    "authors": ["He", "Kaiming", "Zhang", "Xiangyu", "Ren", "Shaoqing", "Sun", "Jian"],
+    "venue": "In Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition,",
+    "year": 2016
+  }, {
+    "title": "Learning multiple layers of representation",
+    "authors": ["Hinton", "Geoffrey E"],
+    "venue": "Trends in cognitive sciences,",
+    "year": 2007
+  }, {
+    "title": "More effective distributed ml via a stale synchronous parallel parameter server",
+    "authors": ["Ho", "Qirong", "Cipar", "James", "Cui", "Henggang", "Lee", "Seunghak", "Kim", "Jin Kyu", "Gibbons", "Phillip B", "Gibson", "Garth A", "Ganger", "Greg", "Xing", "Eric P"],
+    "venue": "In Advances in neural information processing systems,",
+    "year": 2013
+  }, {
+    "title": "Approximation capabilities of multilayer feedforward networks",
+    "authors": ["Hornik", "Kurt"],
+    "venue": "Neural networks,",
+    "year": 1991
+  }, {
+    "title": "Deep learning without poor local minima",
+    "authors": ["Kawaguchi", "Kenji"],
+    "venue": "arXiv preprint arXiv:1605.07110,",
+    "year": 2016
+  }, {
+    "title": "Adam: A method for stochastic optimization",
+    "authors": ["Kingma", "Diederik", "Ba", "Jimmy"],
+    "venue": "arXiv preprint arXiv:1412.6980,",
+    "year": 2014
+  }, {
+    "title": "Imagenet classification with deep convolutional neural networks. In Advances in neural information processing",
+    "authors": ["Krizhevsky", "Alex", "Sutskever", "Ilya", "Hinton", "Geoffrey E"],
+    "year": 2012
+  }, {
+    "title": "Modèles connexionnistes de lapprentissage",
+    "authors": ["LeCun", "Yann"],
+    "venue": "PhD thesis, These de Doctorat, Universite Paris",
+    "year": 1987
+  }, {
+    "title": "Gradient descent converges to minimizers",
+    "authors": ["Lee", "Jason D", "Simchowitz", "Max", "Jordan", "Michael I", "Recht", "Benjamin"],
+    "venue": "University of California, Berkeley,",
+    "year": 2016
+  }, {
+    "title": "Asynchronous parallel stochastic gradient for nonconvex optimization",
+    "authors": ["Lian", "Xiangru", "Huang", "Yijun", "Li", "Yuncheng", "Liu", "Ji"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2015
+  }, {
+    "title": "Deep learning via hessian-free optimization",
+    "authors": ["Martens", "James"],
+    "venue": "In Proceedings of the 27th International Conference on Machine Learning",
+    "year": 2010
+  }, {
+    "title": "Delay-tolerant algorithms for asynchronous distributed online learning",
+    "authors": ["McMahan", "Brendan", "Streeter", "Matthew"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2014
+  }, {
+    "title": "Distributed representations of words and phrases and their compositionality",
+    "authors": ["Mikolov", "Tomas", "Sutskever", "Ilya", "Chen", "Kai", "Corrado", "Greg S", "Dean", "Jeff"],
+    "venue": "In Advances in neural information processing systems,",
+    "year": 2013
+  }, {
+    "title": "Asynchrony begets momentum, with an application to deep learning",
+    "authors": ["Mitliagkas", "Ioannis", "Zhang", "Ce", "Hadjis", "Stefan", "Ré", "Christopher"],
+    "venue": "arXiv preprint arXiv:1605.09774,",
+    "year": 2016
+  }, {
+    "title": "Hogwild: A lock-free approach to parallelizing stochastic gradient descent",
+    "authors": ["Recht", "Benjamin", "Re", "Christopher", "Wright", "Stephen", "Niu", "Feng"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2011
+  }, {
+    "title": "Imagenet large scale visual recognition challenge",
+    "authors": ["Russakovsky", "Olga", "Deng", "Jia", "Su", "Hao", "Krause", "Jonathan", "Satheesh", "Sanjeev", "Ma", "Sean", "Huang", "Zhiheng", "Karpathy", "Andrej", "Khosla", "Aditya", "Bernstein", "Michael"],
+    "venue": "International Journal of Computer Vision,",
+    "year": 2015
+  }, {
+    "title": "Long short-term memory recurrent neural network architectures for large scale acoustic modeling",
+    "authors": ["Sak", "Haşim", "Senior", "Andrew", "Beaufays", "Françoise"],
+    "venue": "In Fifteenth Annual Conference of the International Speech Communication Association,",
+    "year": 2014
+  }, {
+    "title": "Very deep multilingual convolutional neural networks for lvcsr",
+    "authors": ["Sercu", "Tom", "Puhrsch", "Christian", "Kingsbury", "Brian", "LeCun", "Yann"],
+    "venue": "In Acoustics, Speech and Signal Processing (ICASSP),",
+    "year": 2016
+  }, {
+    "title": "Adadelay: Delay adaptive distributed stochastic convex optimization",
+    "authors": ["Sra", "Suvrit", "Yu", "Adams Wei", "Li", "Mu", "Smola", "Alexander J"],
+    "venue": "arXiv preprint arXiv:1508.05003,",
+    "year": 2015
+  }, {
+    "title": "Inception-v4, inception-resnet and the impact of residual connections on learning",
+    "authors": ["Szegedy", "Christian", "Ioffe", "Sergey", "Vanhoucke", "Vincent", "Alemi", "Alex"],
+    "venue": "arXiv preprint arXiv:1602.07261,",
+    "year": 2016
+  }, {
+    "title": "Lecture 6.5-rmsprop: Divide the gradient by a running average of its recent magnitude",
+    "authors": ["Tieleman", "Tijmen", "Hinton", "Geoffrey"],
+    "venue": "COURSERA: Neural networks for machine learning,",
+    "year": 2012
+  }, {
+    "title": "Deep learning with elastic averaging sgd",
+    "authors": ["Zhang", "Sixin", "Choromanska", "Anna E", "LeCun", "Yann"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2015
+  }],
+  "id": "SP:dc588d4c89026edf2beebf3937a940ea9ff34414",
+  "authors": [{
+    "name": "Shuxin Zheng",
+    "affiliations": []
+  }, {
+    "name": "Qi Meng",
+    "affiliations": []
+  }, {
+    "name": "Taifeng Wang",
+    "affiliations": []
+  }, {
+    "name": "Wei Chen",
+    "affiliations": []
+  }, {
+    "name": "Nenghai Yu",
+    "affiliations": []
+  }, {
+    "name": "Zhi-Ming Ma",
+    "affiliations": []
+  }, {
+    "name": "Tie-Yan Liu",
+    "affiliations": []
+  }],
+  "abstractText": "With the fast development of deep learning, it has become common to learn big neural networks using massive training data. Asynchronous Stochastic Gradient Descent (ASGD) is widely adopted to fulfill this task for its efficiency, which is, however, known to suffer from the problem of delayed gradients. That is, when a local worker adds its gradient to the global model, the global model may have been updated by other workers and this gradient becomes “delayed”. We propose a novel technology to compensate this delay, so as to make the optimization behavior of ASGD closer to that of sequential SGD. This is achieved by leveraging Taylor expansion of the gradient function and efficient approximation to the Hessian matrix of the loss function. We call the new algorithm Delay Compensated ASGD (DCASGD). We evaluated the proposed algorithm on CIFAR-10 and ImageNet datasets, and the experimental results demonstrate that DC-ASGD outperforms both synchronous SGD and asynchronous SGD, and nearly approaches the performance of sequential SGD.",
+  "title": "Asynchronous Stochastic Gradient Descent with Delay Compensation"
+}

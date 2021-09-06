@@ -1,0 +1,286 @@
+{
+  "sections": [{
+    "text": "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing, pages 584–594 Copenhagen, Denmark, September 7–11, 2017. c©2017 Association for Computational Linguistics"
+  }, {
+    "heading": "1 Introduction",
+    "text": "The main goal of sentence simplification is to reduce the linguistic complexity of text, while still retaining its original information and meaning. The simplification task has been the subject of several modeling efforts in recent years due to its relevance for NLP applications and individuals alike (Siddharthan, 2014; Shardlow, 2014). For instance, a simplification component could be used as a preprocessing step to improve the performance of parsers (Chandrasekar et al., 1996), summarizers (Beigman Klebanov et al., 2004), and semantic role labelers (Vickrey and Koller, 2008; Woodsend and Lapata, 2014). Automatic simplification would also benefit people with low-literacy skills (Watanabe et al., 2009), such as children and\n1Our code and data are publicly available at https:// github.com/XingxingZhang/dress.\nnon-native speakers as well as individuals with autism (Evans et al., 2014), aphasia (Carroll et al., 1999), or dyslexia (Rello et al., 2013).\nThe most prevalent rewrite operations which give rise to simplified text include substituting rare words with more common words or phrases, rendering syntactically complex structures simpler, and deleting elements of the original text (Siddharthan, 2014). Earlier work focused on individual aspects of the simplification problem. For example, several systems performed syntactic simplification only, using rules aimed at sentence splitting (Carroll et al., 1999; Chandrasekar et al., 1996; Vickrey and Koller, 2008; Siddharthan, 2004) while others turned to lexical simplification by substituting difficult words with more common WordNet synonyms or paraphrases (Devlin, 1999; Inui et al., 2003; Kaji et al., 2002).\nRecent approaches view the simplification process more holistically as a monolingual textto-text generation task borrowing ideas from statistical machine translation. Simplification rewrites are learned automatically from examples of complex-simple sentences extracted from online resources such as the ordinary and simple English Wikipedia. For example, Zhu et al. (2010) draw inspiration from syntax-based translation and propose a model similar to Yamada and Knight (2001) which additionally performs simplification-specific rewrite operations (e.g., sentence splitting). Woodsend and Lapata (2011) formulate simplification in the framework of Quasi-synchronous grammar (Smith and Eisner, 2006) and use integer linear programming to score the candidate translations/simplifications. Wubben et al. (2012) propose a two-stage model: initially, a standard phrase-based machine translation (PBMT) model is trained on complex-simple sentence pairs. During inference, the K-best outputs of the PBMT model are reranked according\n584\nto their dis-similarity to the (complex) input sentence. The hybrid model developed in Narayan and Gardent (2014) also operates in two phases. Initially, a probabilistic model performs sentence splitting and deletion operations over discourse representation structures assigned by Boxer (Curran et al., 2007). The resulting sentences are further simplified by a model similar to Wubben et al. (2012). Xu et al. (2016) train a syntax-based machine translation model on a large scale paraphrase dataset (Ganitkevitch et al., 2013) using simplification-specific objective functions and features to encourage simpler output.\nIn this paper we propose a simplification model which draws on insights from neural machine translation (Bahdanau et al., 2015; Sutskever et al., 2014). Central to this approach is an encoderdecoder architecture implemented by recurrent neural networks. The encoder reads the source sequence into a list of continuous-space representations from which the decoder generates the target sequence. Although our model uses the encoder-decoder architecture as its backbone, it must also meet constraints imposed by the simplification task itself, i.e., the predicted output must be simpler, preserve the meaning of the input, and grammatical. To incorporate this knowledge, the model is trained in a reinforcement learning framework (Williams, 1992): it explores the space of possible simplifications while learning to maximize an expected reward function that encourages outputs which meet simplificationspecific constraints. Reinforcement learning has been previously applied to extractive summarization (Ryang and Abekawa, 2012), information extraction (Narasimhan et al., 2016), dialogue generation (Li et al., 2016), machine translation, and image caption generation (Ranzato et al., 2016).\nWe evaluate our system on three publicly available datasets collated automatically from Wikipedia (Zhu et al., 2010; Woodsend and Lapata, 2011) and human-authored news articles (Xu et al., 2015b). We experimentally show that the reinforcement learning framework is the key to successful generation of simplified text bringing significant improvements over strong simplification models across datasets."
+  }, {
+    "heading": "2 Neural Encoder-Decoder Model",
+    "text": "We will first define a basic encoder-decoder model for sentence simplification and then explain how to embed it in a reinforcement learning\nframework. Given a (complex) source sentence X = (x1, x2, . . . , x|X|), our model learns to predict its simplified target Y = (y1, y2, . . . , y|Y |). Inferring the target Y given the sourceX is a typical sequence to sequence learning problem, which can be modeled with attention-based encoderdecoder models (Bahdanau et al., 2015; Luong et al., 2015). Sentence simplification is slightly different from related sequence transduction tasks (e.g., compression) in that it can involve splitting operations. For example, a long source sentence (In 1883, Faur married Marie Fremiet, with whom he had two sons.) can be simplified as two sentences (In 1883, Faur married Marie Fremiet. They had two sons.). Nevertheless, we still view the target as a sequence, i.e., two or more sequences concatenated with full stops.\nThe encoder-decoder model has two parts (see left hand side in Figure 1). The encoder transforms the source sentence X into a sequence of hidden states (hS1 ,h S 2 , . . . ,h S |X|) with a Long Short-Term Memory Network (LSTM; Hochreiter and Schmidhuber 1997), while the decoder uses another LSTM to generate one word yt+1 at a time in the simplified target Y . Generation is conditioned on all previously generated words y1:t and a dynamically created context vector ct, which encodes the source sentence:\nP (Y |X) = |Y |∏ t=1 P (yt|y1:t−1, X) (1)\nP (yt+1|y1:t, X) = softmax(g(hTt , ct)) (2)\nwhere g(·) is a one-hidden-layer neural network with the following parametrization:\ng(hTt , ct) = Wo tanh(Uhh T t + Whct) (3)\nwhere Wo ∈ R|V |×d, Uh ∈ Rd×d, and Wh ∈ Rd×d; |V | is the output vocabulary size and d the hidden unit size. hTt is the hidden state of the decoder LSTM which summarizes y1:t, i.e., what has been generated so far:\nhTt = LSTM(yt,h T t−1) (4)\nThe dynamic context vector ct is the weighted sum of the hidden states of the source sentence:\nct = |X|∑ i=1 αtihSi (5)\nwhose weights αti are determined by an attention mechanism:\nαti = exp(hTt · hSi )∑ i exp(h T t · hSi )\n(6)\nwhere · is the dot product between two vectors. We use the dot product here mainly for efficiency reasons; alternative ways to compute attention scores have been proposed in the literature and we refer the interested reader to Luong et al. (2015). The model sketched above is usually trained by minimizing the negative log-likelihood of the training source-target pairs."
+  }, {
+    "heading": "3 Reinforcement Learning for Sentence Simplification",
+    "text": "In this section we present DRESS, our Deep REinforcement Sentence Simplification model. Despite successful application in numerous sequence transduction tasks (Jean et al., 2015; Chopra et al., 2016; Xu et al., 2015a), a vanilla encoder-decoder model is not ideal for sentence simplification. Although a number of rewrite operations (e.g., copying, deletion, substitution, word reordering) can be used to simplify text, copying is by far the most common. We empirically found that 73% of the target words are copied from the source in the Newsela dataset. This number further increases to 83% when considering Wikipedia-based datasets (we provide details on these datasets in Section 5). As a result, a generic encoder-decoder model learns to copy all too well at the expense of other rewrite operations, often parroting back the source or making only a few trivial changes.\nTo encourage a wider variety of rewrite operations while remaining fluent and faithful to the meaning of the source, we employ a reinforcement learning framework (see Figure 1). We view the encoder-decoder model as an agent which first reads the source sentence X; then at each step, it takes an action ŷt ∈ V (where V is the output vocabulary) according to a policy PRL(ŷt|ŷ1:t−1, X) (see Equation (2)). The agent continues to take actions until it produces an End Of Sentence (EOS) token yielding the action sequence Ŷ = (ŷ1, ŷ2, . . . , ŷ|Ŷ |), which is also the simplified output of our model. A reward r is then received and the REINFORCE algorithm (Williams, 1992) is used to update the agent. In the following, we first introduce our reward and then present the details of the REINFORCE algorithm."
+  }, {
+    "heading": "3.1 Reward",
+    "text": "The reward r(Ŷ ) for system output Ŷ is the weighted sum of the three components aimed at capturing key aspects of the target output, namely simplicity, relevance, and fluency:\nr(Ŷ ) = λS rS + λR rR + λF rF (7)\nwhere λS , λR, λF ∈ [0, 1]; r(Ŷ ) is a shorthand for r(X,Y, Ŷ ) whereX is the source, Y the reference (or target), and Ŷ the system output. rS , rR, and rF are shorthands for simplicity rS(X,Y, Ŷ ), relevance rR(X, Ŷ ), and fluency rF (Ŷ ). We provide details for each reward summand below.\nSimplicity To encourage the model to apply a wide range of simplification operations, we use SARI (Xu et al., 2016), a recently proposed metric which compares System output Against References and against the Input sentence. SARI is the arithmetic average of n-gram precision and recall of three rewrite operations: addition, copying, and deletion. It rewards addition operations where system output was not in the input but occurred in the references. Analogously, it rewards words retained/deleted in both the system output and the references. In experimental evaluation Xu et al. (2016) demonstrate that SARI correlates well with human judgments of simplicity, whilst correctly rewarding systems that both make changes and simplify the input.\nOne caveat with using SARI as a reward is the fact that it relies on the availability of multiple references which are rare for sentence simplification. Xu et al. (2016) provide eight references for 2,350 sentences, but these are primarily for system tuning and evaluation rather than training. The majority of existing simplification datasets (see Section 5 for details) have a single reference for each source sentence. Moreover, they are unavoidably noisy as they are mostly constructed automatically, e.g., by aligning sentences from the ordinary and simple English Wikipedias. When relying solely on a single reference, SARI will try to reward accidental n-grams that should never have occurred in it. To countenance the effect of noise, we apply SARI(X, Ŷ , Y ) in the expected direction, with X as the source, Ŷ the system output, and Y the reference as well as in the reverse direction with Y as the system output and Ŷ as the reference. Assuming our system can produce reasonably good simplifications, by swapping the output\nand the reference, reverse SARI can be used to estimate how good a reference is with respect to the system output. Our first reward is therefore the weighted sum of SARI and reverse SARI:\nrS=β SARI(X, Ŷ , Y )+(1−β) SARI(X,Y, Ŷ ) (8)\nRelevance While the simplicity-based reward rS tries to encourage the model to make changes, the relevance reward rR ensures that the generated sentences preserve the meaning of the source. We use an LSTM sentence encoder to convert the source X and the predicted target Ŷ into two vectors qX and qŶ . The relevance reward rR is simply the cosine similarity between these two vectors:\nrR = cos(qX ,qŶ ) = qX · qŶ ||qX || ||qŶ ||\n(9)\nWe use a sequence auto-encoder (SAE; Dai and Le 2015) to train the LSTM sentence encoder on both the complex and simple sentences. Specifically, the SAE uses sentence X = (x1, . . . , x|X|) to infer itself via an encoder-decoder model (without an attention mechanism). Firstly, an encoder LSTM convertsX into a sequence of hidden states (h1, . . . ,h|X|). Then, we use h|X| to initialize the hidden state of the decoder LSTM and recover/generate X one word at a time.\nFluency Xu et al. (2016) observe that SARI correlates less with fluency compared to other metrics such as BLEU (Papineni et al., 2002). The fluency reward rF models the well-formedness of the generated sentences explicitly. It is the normalized sentence probability assigned by an LSTM\nlanguage model trained on simple sentences:\nrF = exp  1 |Ŷ | |Ŷ |∑ i=1 logPLM (ŷi|ŷ0:i−1)  (10)\nWe take the exponential of Ŷ ’s perplexity to ensure that rF ∈ [0, 1] as is the case with rS and rR."
+  }, {
+    "heading": "3.2 The REINFORCE Algorithm",
+    "text": "The goal of the REINFORCE algorithm is to find an agent that maximizes the expected reward. The training loss for one sequence is its negative expected reward:\nL(θ) = −E(ŷ1,...,ŷ|Ŷ |)∼PRL(·|X)[r(ŷ1, . . ., ŷ|Ŷ |)]\nwhere PRL is our policy, i.e., the distribution produced by the encoder-decoder model (see Equation(2)) and r(·) is the reward function of an action sequence Ŷ = (ŷ1, . . . , ŷ|Ŷ |), i.e., a generated simplification. Unfortunately, computing the expectation term is prohibitive, since there is an infinite number of possible action sequences. In practice, we approximate this expectation with a single sample from the distribution of PLR(·|X). We refer to Williams (1992) for the full derivation of the gradients. The gradient of L(θ) is: ∇L(θ) ≈∑|Ŷ |\nt=1∇ logPRL(ŷt|ŷ1:t−1, X)[r(ŷ1:|Ŷ |)− bt]\nTo reduce the variance of gradients, we also introduce a baseline linear regression model bt to estimate the expected future reward at time t (Ranzato et al., 2016). bt takes the concatenation of hTt and ct as input and outputs a real value as the expected reward. The parameters of the regressor are\ntrained by minimizing mean squared error. We do not back-propagate this error to hTt or ct during training (Ranzato et al., 2016)."
+  }, {
+    "heading": "3.3 Learning",
+    "text": "Presented in its original form, the REINFORCE algorithm starts learning with a random policy. This assumption can make model training challenging for generation tasks like ours with large vocabularies (i.e., action spaces). We address this issue by pre-training our agent (i.e., the encoderdecoder model) with a negative log-likelihood objective (see Section 2), making sure it can produce reasonable simplifications, thereby starting off with a policy which is better than random. We follow prior work (Ranzato et al., 2016) in adopting a curriculum learning strategy. In the beginning of training, we give little freedom to our agent allowing it to predict the last few words for each target sentence. For every target sequence, we use negative log-likelihood to train the first L (initially, L = 24) tokens and apply the reinforcement learning algorithm to the (L + 1)th tokens onwards. Every two epochs, we set L = L− 3 and the training terminates when L is 0."
+  }, {
+    "heading": "4 Lexical Simplification",
+    "text": "Lexical substitution, the replacement of complex words with simpler alternatives, is an integral part of sentence simplification (Specia et al., 2012). The model presented so far learns lexical substitution and other rewrite operations jointly. In some cases, words are predicted because they seem natural in the their context, but are poor substitutes for the content of the complex sentence. To countenance this, we learn lexical simplifications explicitly and integrate them with our reinforcement learning-based model.\nWe use an pre-trained encoder-decoder model (which is trained on a parallel corpus of complex and simple sentences) to obtain probabilistic word alignments, aka attention scores (see αt in Equation (6)). Let X = (x1, x2, . . . , x|X|) denote a source sentence and Y = (y1, y2, . . . , y|Y |) a target sentence. We convert X into |X| hidden states (v1,v2, . . . ,v|X|) with an LSTM. Note that vt ∈ Rd×1 corresponds to the context dependent representation of xt. Let αt denote the alignment scores αt1, αt2, . . . , αt|X|. The lexical simplification probability of yt given the source sentence\nand the alignment scores is:\nPLS(yt|X,αt) = softmax(Wl st) (11)\nwhere Wl ∈ R|V |×d and st represents the source:\nst = |X|∑ i=1 αtivi (12)\nThe lexical simplification model on its own encourages lexical substitutions, without taking into account what has been generated so far (i.e., y1:t−1) and as a result fluency could be compromised. A straightforward solution is to integrate lexical simplification with our reinforcement learning trained model (Section 3) using linear interpolation, where η ∈ [0, 1]:\nP (yt|y1:t−1, X) = (1− η)PRL(yt|y1:t−1, X) + η PLS(yt|X,αt) (13)"
+  }, {
+    "heading": "5 Experimental Setup",
+    "text": "In this section we present our experimental setup for assessing the performance of the simplification model described above. We give details on our datasets, model training, evaluation protocol, and the systems used for comparison.\nDatasets We conducted experiments on three simplification datasets. WikiSmall (Zhu et al., 2010) is a parallel corpus which has been extensively used as a benchmark for evaluating text simplification systems (Wubben et al., 2012; Woodsend and Lapata, 2011; Narayan and Gardent, 2014; Zhu et al., 2010). It contains automatically aligned complex and simple sentences from the ordinary and simple English Wikipedias. The test set consists of 100 complex-simple sentence pairs. The training set contains 89,042 sentence pairs (after removing duplicates and test sentences). We randomly sampled 205 pairs for development and used the remaining sentences for training.\nWe also constructed WikiLarge, a larger Wikipedia corpus by combining previously created simplification corpora. Specifically, we aggregated the aligned sentence pairs in Kauchak (2013), the aligned and revision sentence pairs in Woodsend and Lapata (2011), and Zhu’s (2010) WikiSmall dataset described above. We used the development and test sets created in Xu et al. (2016). These are complex sentences taken from WikiSmall paired with simplifications provided by Amazon Mechanical Turk workers. The dataset\ncontains 8 (reference) simplifications for 2,359 sentences partitioned into 2,000 for development and 359 for testing. After removing duplicates and sentences in development and test sets, the resulting training set contains 296,402 sentence pairs.\nOur third dataset is Newsela, a corpus collated by Xu et al. (2015b) who argue that Wikipediabased resources are suboptimal due to the automatic sentence alignment which unavoidably introduces errors, and their uniform writing style which leads to systems that generalize poorly. Newsela2 consists of 1,130 news articles, each rewritten four times by professional editors for children at different grade levels (0 is the most complex level and 4 is simplest). Xu et al. (2015b) provide multiple aligned complex-simple pairs within each article. We removed sentence pairs corresponding to levels 0–1, 1–2, and 2–3, since they were too similar to each other. The first 1,070 documents were used for training (94,208 sentence pairs), the next 30 documents for development (1,129 sentence pairs) and the last 30 documents for testing (1,076 sentence pairs).3 We are not aware of any published results on this dataset.\nTraining Details We trained our models on an Nvidia GPU card. We used the same hyperparameters across datasets. We first trained an encoder-decoder model, and then performed reinforcement learning training (Section 3), and trained the lexical simplification model (Section 4). Encoder-decoder parameters were uniformly initialized to [−0.1, 0.1]. We used Adam (Kingma and Ba, 2014) to optimize the model with learning rate 0.001; the first momentum coefficient was set to 0.9 and the second momentum coefficient to 0.999. The gradient was rescaled when the norm exceeded 5 (Pascanu et al., 2013). Both encoder and decoder LSTMs have two layers with 256 hidden neurons in each layer. We regularized all LSTMs with a dropout rate of 0.2 (Zaremba et al., 2014). We initialized the encoder and decoder word embedding matrices with 300 dimensional Glove vectors (Pennington et al., 2014).\nDuring reinforcement training, we used plain stochastic gradient descent with a learning rate of 0.01. We set β = 0.1, λS = 1, λR = 0.25 and λF = 0.5.4 Training details for the lexical\n2https://newsela.com 3If a sentence has multiple references in the development or test set, we use the reference with highest simplicity level. 4Weights were tuned on the development set of the Newsela dataset and kept fixed for the other two datasets.\nsimplification model are identical to the encoderdecoder model except that word embedding matrices were randomly initialized. The weight of the lexical simplification model was set to η = 0.1.\nTo reduce vocabulary size, named entities were tagged with the Stanford CoreNLP (Manning et al., 2014) and anonymized with a NE@N token, where NE ∈ {PER,LOC,ORG,MISC} and N indicates NE@N is the N -th distinct NE typed entity. For example, “John and Bob are . . . ” becomes “PER@1 and PER@2 are . . . ”. At test time, we de-anonymize NE@N tokens in the output by looking them up in their source sentences. Note that the de-anonymization may fail, but the chance is small (around 2% of the time on the Newsela development set). We replaced words occurring three times or less in the training set with UNK. At test time, when our models predict UNK, we adopt the UNK replacement method proposed in Jean et al. (2015).\nEvaluation Following previous work (Woodsend and Lapata, 2011; Xu et al., 2016) we evaluated system output automatically adopting metrics widely used in the simplification literature. Specifically, we used BLEU5 (Papineni et al., 2002) to assess the degree to which generated simplifications differed from gold standard references and the Flesch-Kincaid Grade Level index (FKGL; Kincaid et al. 1975) to measure the readability of the output (lower FKGL6 implies simpler output). In addition, we used SARI (Xu et al., 2016), which evaluates the quality of the output by comparing it against the source and reference simplifications.7 BLEU, FKGL, and SARI are all measured at corpus-level. We also evaluated system output by eliciting human judgments via Amazon’s Mechanical Turk. Specifically (selfreported) native English speakers were asked to rate simplifications on three dimensions: Fluency (is the output grammatical and well formed?), Adequacy (to what extent is the meaning expressed in the original sentence preserved in the output?) and Simplicity (is the output simpler than the original sentence?). All ratings were obtained using a five point Likert scale.\nComparison Systems We compared our model against several systems previously proposed in the literature. These include PBMT-R, a mono-\n5With the default mtevalv13a.pl settings. 6FKGL implementation at http://goo.gl/OHP7k3. 7We used he implementation of SARI in Xu et al. (2016).\nlingual phrase-based machine translation system with a reranking post-processing step8 (Wubben et al., 2012) and Hybrid, a model which first performs sentence splitting and deletion operations over discourse representation structures and then further simplifies sentences with PBMT-R (Narayan and Gardent, 2014). Hybrid9 is state of the art on the WikiSmall dataset. Comparisons with SBMT-SARI, a syntax-based translation model trained on PPDB (Ganitkevitch et al., 2013) and tuned with SARI (Xu et al., 2016), are problematic due to the size of PPDB which is considerably larger than any of the datasets used in this work (it contains 106 million sentence pairs with 2 billion words). Nevertheless, we compare10 against SBMT-SARI, but only models trained on Wikilarge, our largest dataset."
+  }, {
+    "heading": "6 Results",
+    "text": "Since Newsela contains high quality simplifications created by professional editors, we performed the bulk of our experiments on this dataset. Specifically, we set out to answer two questions: (a) which neural model performs best and (b) how do neural models which are resource lean and do not have access to linguistic annotations fare against more traditional systems. We therefore compared the basic attention-based encoder-\n8We made a good-faith effort to re-implement their system following closely the details in Wubben et al. (2012).\n9We are grateful to Shashi Narayan for running his system on our three datasets.\n10The output of SBMT-SARI is publicly available.\ndecoder model (EncDecA), with the deep reinforcement learning model (DRESS; Section 3), and a linear combination of DRESS and the lexical simplification model (DRESS-LS; Section 4). Neural models were further compared against two strong baselines, PBMT-R and Hybrid. Table 3 shows example output of all models on the Newsela dataset.\nThe top block in Table 1 summarizes the results of our automatic evaluation. As can be seen, all neural models obtain higher BLEU, lower FKGL and higher SARI compared to PBMT-R. Hybrid has the lowest FKGL and highest SARI. Compared to EncDecA, DRESS scores lower on FKGL and higher on SARI, which indicates that the model has indeed learned to optimize the reward function which includes SARI. Integrating lexical simplification (DRESS-LS) yields better BLEU, but slightly worse FKGL and SARI.\nThe results of our human evaluation are presented in the top block of Table 2. We elicited judgments for 100 randomly sampled test sentences. Aside from comparing system output (PBMT-R, Hybrid, EncDecA, DRESS, and DRESS-LS), we also elicited ratings for the gold standard Reference as an upper bound. We report results for Fluency, Adequacy, and Simplicity individually and in combination (All is the average rating of the three dimensions). As can be seen, DRESS and DRESS-LS outperform PBMT-R and\nHybrid on Fluency, Simplicity, and overall. The fact that neural models (EncDecA, DRESS and DRESS-LS) fare well on Fluency, is perhaps not surprising given the recent success of LSTMs in language modeling and neural machine translation (Zaremba et al., 2014; Jean et al., 2015).\nNeural models obtain worse ratings on Adequacy but are closest to the human references on this dimension. DRESS-LS (and DRESS) are significantly better (p < 0.01) on Simplicity than EncDecA, PBMT-R, and Hybrid which indicates that our reinforcement learning based model is effective at creating simpler output. Combined ratings (All) for DRESS-LS are significantly different compared to the other models but not to DRESS and the Reference. Nevertheless, integration of the lexical simplification model boosts performance as ratings increase almost across the board (Simplicity is slightly worse). Returning to our original questions, we find that neural models are more fluent than comparison systems, while performing non-trivial rewrite operations (see the SARI\nscores in Table 1) which yield simpler output (see the Simplicity column in Table 2). Based on our judgment elicitation study, neural models trained with reinforcement learning perform best, with DRESS-LS having a slight advantage.\nWe further analyzed model performance by computing various statistics on the simplified output. We measured average sentence length and the degree to which DRESS and comparison systems perform rewriting operations. We approximated the latter with Translation Error Rate (TER; Snover et al. 2006), a measure commonly used to automatically evaluate the quality of machine translation output. We used TER to compute the (average) number of edits required to change an original complex sentence to simpler output. We also report the number of edits by type, i.e., the number of insertions, substitutions, deletions, and shifts needed (on average) to convert complex to simple sentences.\nAs shown in Table 4, Hybrid obtains the highest TER, followed by our models (DRESS and\nDRESS-LS), which indicates that they actively perform rewriting. Perhaps Hybrid is too aggressive when simplifying a sentence, it obtains low Fluency and Adequacy scores in human evaluation (Table 2). There is a strong correlation between sentence length and number of deletion operations (i.e., more deleteions lead to shorter sentences) and PBMT-R performs very few deletions. Overall, reinforcement learning encourages deletion (see DRESS and DRESS-LS), while performing a reasonable amount of additional operations (e.g., substitutions and shifts) compared to EncDecA and PBMT-R.\nThe middle blocks in Tables 1 and 2 report results on the WikiSmall dataset. FKGL and SARI follow a similar pattern as on Newsela. BLEU scores for PBMT-R, Hybrid, and EncDecA are much higher compared to DRESS and DRESS-LS. Hybrid obtains best BLEU and SARI scores, while DRESS and DRESS-LS do very well on FKGL. In human evaluation, we elicited judgments on the entire WikiSmall test set (100 sentences). We compared DRESS-LS, with PBMT-R, Hybrid, and gold standard Reference simplifications. As human experiments are time consuming and expensive, we did not include other neural models besides DRESS-LS based on our Newsela study which showed that EncDecA is inferior to variants trained with reinforcement learning and that DRESS-LS is the better performing model (however, we do compare all models in Table 1). DRESS-LS is significantly better on Simplicity than PBMT-R, Hybrid, and the Reference. It performs on par with PBMT-R on Fluency and worse on Adequacy (but still closer to the human Reference than PBMT-R or Hybrid). When combining all ratings (All in Table 2), DRESS-LS is significantly better than PBMT-R, Hybrid, and the Reference.\nThe bottom blocks in Tables 1 and 2 report results on Wikilarge. We compared our models with PBMT-R, Hybrid, and SBMT-SARI (Xu et al., 2016). The FKGL follows a similar pattern as in the previous datasets. PBMT-R and our models are best in terms of BLEU while SBMT-SARI outperforms all other systems on SARI.11 Because there are 8 references for each complex sentence in the test set, BLEU scores are much higher compared to Newsela and WikiSmall. In human evaluation, we again elicited judgments for 100 randomly sampled test sentences. We randomly selected one of the 8 references as the Reference upper bound. On Simplicity, DRESS-LS is significantly better than all comparison systems, except Hybrid. On Adequacy, it is better than Hybrid but significantly worse than other comparison systems. On Fluency, it is on par with PBMT-R12 but better than Hybrid and SBMT-SARI. On All dimension DRESS-LS significantly outperforms all comparison systems."
+  }, {
+    "heading": "7 Conclusions",
+    "text": "We developed a reinforcement learning-based text simplification model, which can jointly model simplicity, grammaticality, and semantic fidelity to the input. We also proposed a lexical simplification component that further boosts performance. Overall, we find that reinforcement learning offers a great means to inject prior knowledge to the simplification task achieving good results across three datasets. In the future, we would like to explicitly model sentence splitting and simplify entire documents (rather than individual sentences). Beyond sentence simplification, the reinforcement learning framework presented here is potentially applicable to generation tasks such as sentence compression (Chopra et al., 2016), generation of programming code (Ling et al., 2016), or poems (Zhang and Lapata, 2014).\nAcknowledgments We would like to thank Li Dong, Jianpeng Cheng, Shashi Narayan and the EMNLP reviewers for their valuable feedback. We are also grateful to Shashi Narayan for supplying us with the output of his system and Wei Xu for her help with this work. The authors acknowledge the support of the European Research Council (award number 681760).\n11BLEU and SARI scores reported in Xu et al. (2016) are 72.36 and 37.91, and measured at sentence-level.\n12We used more data to train PBMT-R and maybe that is why PBMT-R performs better than Xu et al. (2016) reported."
+  }],
+  "year": 2017,
+  "references": [{
+    "title": "Neural machine translation by jointly learning to align and translate",
+    "authors": ["References Dzmitry Bahdanau", "Kyunghyun Cho", "Yoshua Bengio."],
+    "venue": "Proceedings of ICLR, San Diego, CA.",
+    "year": 2015
+  }, {
+    "title": "Text simplification for informationseeking applications",
+    "authors": ["Beata Beigman Klebanov", "Kevin Knight", "Daniel Marcu."],
+    "venue": "Proceedings of ODBASE, volume 3290 of Lecture Notes in Computer Science, pages 735–747, Agia Napa, Cyprus. Springer.",
+    "year": 2004
+  }, {
+    "title": "Simplifying text for languageimpaired readers",
+    "authors": ["J. Carroll", "G. Minnen", "D. Pearce", "Y. Canning", "S. Devlin", "J Tait."],
+    "venue": "Proceedings of the 9th EACL, pages 269–270, Bergen, Norway.",
+    "year": 1999
+  }, {
+    "title": "Motivations and methods for text simplification",
+    "authors": ["R. Chandrasekar", "C. Doran", "B. Srinivas."],
+    "venue": "Proceedings of the 16th COLING, pages 1041–1044, Copenhagen, Denmark.",
+    "year": 1996
+  }, {
+    "title": "Abstractive sentence summarization with attentive recurrent neural networks",
+    "authors": ["Sumit Chopra", "Michael Auli", "Alexander M. Rush."],
+    "venue": "Proceedings of NAACL: HLT, pages 93–98, San Diego, CA.",
+    "year": 2016
+  }, {
+    "title": "Linguistically motivated large-scale nlp with c&c and boxer",
+    "authors": ["James Curran", "Stephen Clark", "Johan Bos."],
+    "venue": "Proceedings of the 45th ACL Companion Volume Proceedings of the Demo and Poster Sessions, pages 33–36, Prague, Czech Republic.",
+    "year": 2007
+  }, {
+    "title": "Semi-supervised sequence learning",
+    "authors": ["Andrew M Dai", "Quoc V Le."],
+    "venue": "Advances in Neural Information Processing Systems, pages 3079–3087.",
+    "year": 2015
+  }, {
+    "title": "Simplifying Natural Language for Aphasic Readers",
+    "authors": ["Siobhan Devlin."],
+    "venue": "Ph.D. thesis, University of Sunderland.",
+    "year": 1999
+  }, {
+    "title": "An evaluation of syntactic simplification rules for people with autism",
+    "authors": ["Richard Evans", "Constantin Or asan", "Iustin Dornescu."],
+    "venue": "Proceedings of the 3rd Workshop on Predicting and Improving Text Readability for Target Reader Populations (PITR),",
+    "year": 2014
+  }, {
+    "title": "PPDB: The paraphrase database",
+    "authors": ["Juri Ganitkevitch", "Benjamin Van Durme", "Chris Callison-Burch."],
+    "venue": "Proceedings of NAACL-HLT, pages 758–764, Atlanta, GA.",
+    "year": 2013
+  }, {
+    "title": "Long short-term memory",
+    "authors": ["Sepp Hochreiter", "Jürgen Schmidhuber."],
+    "venue": "Neural computation, 9(8):1735–1780.",
+    "year": 1997
+  }, {
+    "title": "Text simplification for reading assistance: A project note",
+    "authors": ["Kentaro Inui", "Atsushi Fujita", "Tetsuro Takahashi", "Ryu Iida", "Tomoya Iwakura."],
+    "venue": "Proceedings of the 2nd International Workshop on Paraphrasing, pages 9–16, Sapporo, Japan.",
+    "year": 2003
+  }, {
+    "title": "Montreal neural machine translation systems for WMT15",
+    "authors": ["Sébastien Jean", "Orhan Firat", "Kyunghyun Cho", "Roland Memisevic", "Yoshua Bengio."],
+    "venue": "Proceedings of the 10th Workshop on Statistical Machine Translation, pages 134–140, Lisbon, Portugal.",
+    "year": 2015
+  }, {
+    "title": "Verb paraphrase based on case frame alignment",
+    "authors": ["Nobuhiro Kaji", "Daisuke Kawahara", "Sadao Kurohashi", "Satoshi Sato."],
+    "venue": "Proceedings of 40th ACL, pages 215–222, Philadelphia, PA.",
+    "year": 2002
+  }, {
+    "title": "Improving text simplification language modeling using unsimplified text data",
+    "authors": ["David Kauchak."],
+    "venue": "Proceedings of the 51st ACL, pages 1537–1546, Sofia, Bulgaria.",
+    "year": 2013
+  }, {
+    "title": "Derivation of new readability formulas (automated readability index, fog count and flesch reading ease formula) for navy enlisted personnel",
+    "authors": ["J Peter Kincaid", "Robert P Fishburne Jr", "Richard L Rogers", "Brad S Chissom."],
+    "venue": "Technical report, DTIC",
+    "year": 1975
+  }, {
+    "title": "Adam: A method for stochastic optimization",
+    "authors": ["Diederik Kingma", "Jimmy Ba."],
+    "venue": "arXiv preprint arXiv:1412.6980.",
+    "year": 2014
+  }, {
+    "title": "Deep reinforcement learning for dialogue generation",
+    "authors": ["Jiwei Li", "Will Monroe", "Alan Ritter", "Dan Jurafsky", "Michel Galley", "Jianfeng Gao."],
+    "venue": "Proceedings of the 2016 EMNLP, pages 1192–1202, Austin, TX.",
+    "year": 2016
+  }, {
+    "title": "Latent predictor networks for code generation",
+    "authors": ["Wang Ling", "Phil Blunsom", "Edward Grefenstette", "Karl Moritz Hermann", "Tomáš Kočiský", "Fumin Wang", "Andrew Senior."],
+    "venue": "Proceedings of the 54th ACL, pages 599–609, Berlin, Germany.",
+    "year": 2016
+  }, {
+    "title": "Effective approaches to attention-based neural machine translation",
+    "authors": ["Thang Luong", "Hieu Pham", "Christopher D. Manning."],
+    "venue": "Proceedings of the 2015 EMNLP, pages 1412–1421, Lisbon, Portugal.",
+    "year": 2015
+  }, {
+    "title": "The Stanford CoreNLP natural language processing toolkit",
+    "authors": ["Christopher D. Manning", "Mihai Surdeanu", "John Bauer", "Jenny Finkel", "Steven J. Bethard", "David McClosky."],
+    "venue": "ACL System Demonstrations, pages 55–60.",
+    "year": 2014
+  }, {
+    "title": "Improving information extraction by acquiring external evidence with reinforcement learning",
+    "authors": ["Karthik Narasimhan", "Adam Yala", "Regina Barzilay."],
+    "venue": "Proceedings of the 2016 EMNLP, pages 2355– 2365, Austin, TX.",
+    "year": 2016
+  }, {
+    "title": "Hybrid simplification using deep semantics and machine translation",
+    "authors": ["Shashi Narayan", "Claire Gardent."],
+    "venue": "Proceedings of the 52nd ACL, pages 435– 445, Baltimore, MD.",
+    "year": 2014
+  }, {
+    "title": "Bleu: a method for automatic evaluation of machine translation",
+    "authors": ["Kishore Papineni", "Salim Roukos", "Todd Ward", "WeiJing Zhu."],
+    "venue": "Proceedings of the 40th ACL, pages 311–318, Philadelphia, PA.",
+    "year": 2002
+  }, {
+    "title": "On the difficulty of training recurrent neural networks",
+    "authors": ["Razvan Pascanu", "Tomas Mikolov", "Yoshua Bengio."],
+    "venue": "ICML (3), 28:1310–1318.",
+    "year": 2013
+  }, {
+    "title": "Glove: Global vectors for word representation",
+    "authors": ["Jeffrey Pennington", "Richard Socher", "Christopher D Manning."],
+    "venue": "In Proceedings of the EMNLP 2014, volume 14, pages 1532–43, Doha, Qatar.",
+    "year": 2014
+  }, {
+    "title": "Sequence level training with recurrent neural networks",
+    "authors": ["MarcAurelio Ranzato", "Sumit Chopra", "Michael Auli", "Wojciech Zaremba."],
+    "venue": "Proceedings of ICLR, San Juan, Puerto Rico.",
+    "year": 2016
+  }, {
+    "title": "Dyswebxia 2.0!: More accessible text for people with dyslexia",
+    "authors": ["Luz Rello", "Clara Bayarri", "Azuki Górriz", "Ricardo Baeza-Yates", "Saurabh Gupta", "Gaurang Kanvinde", "Horacio Saggion", "Stefan Bott", "Roberto Carlini", "Vasile Topac"],
+    "year": 2013
+  }, {
+    "title": "Framework of automatic text summarization using reinforcement learning",
+    "authors": ["Seonggi Ryang", "Takeshi Abekawa."],
+    "venue": "Proceedings of the 2012 EMNLP-CoNLL, pages 256–265, Jeju Island, Korea.",
+    "year": 2012
+  }, {
+    "title": "A survey of automated text simplification",
+    "authors": ["Matthew Shardlow."],
+    "venue": "International Journal of Advanced Computer Science and Applications, pages 581– 701. Special Issue on Natural Language Processing.",
+    "year": 2014
+  }, {
+    "title": "Syntactic simplification and text cohesion",
+    "authors": ["Advaith Siddharthan."],
+    "venue": "research on language and computation. Research on Language and Computation, 4(1):77–109.",
+    "year": 2004
+  }, {
+    "title": "A survey of research on text simplification",
+    "authors": ["Advaith Siddharthan."],
+    "venue": "International Journal of Applied Linguistics, 165(2):259–298.",
+    "year": 2014
+  }, {
+    "title": "Quasisynchronous grammars: Alignment by soft projection of syntactic dependencies",
+    "authors": ["David A Smith", "Jason Eisner."],
+    "venue": "Proceedings of the NAACL 206 Workshop on Statistical Machine Translation, pages 23–30, New York City.",
+    "year": 2006
+  }, {
+    "title": "A study of translation edit rate with targeted human annotation",
+    "authors": ["Matthew Snover", "Bonnie Dorr", "Richard Schwartz", "Linnea Micciulla", "John Makhoul."],
+    "venue": "Proceedings of association for machine translation in the Americas, volume 200.",
+    "year": 2006
+  }, {
+    "title": "Semeval-2012 task 1: English lexical simplification",
+    "authors": ["Lucia Specia", "Sujay Kumar Jauhar", "Rada Mihalcea."],
+    "venue": "In Proceedings of *SEM 2012, pages 347–355, Montréal, Canada.",
+    "year": 2012
+  }, {
+    "title": "Sequence to sequence learning with neural networks",
+    "authors": ["Ilya Sutskever", "Oriol Vinyals", "Quoc V Le."],
+    "venue": "Advances in Neural Information Processing Systems, pages 3104–3112.",
+    "year": 2014
+  }, {
+    "title": "Sentence simplification for semantic role labeling",
+    "authors": ["D. Vickrey", "D. Koller."],
+    "venue": "Proceedings of ACL-08: HLT, pages 344–352, Columbus, OH.",
+    "year": 2008
+  }, {
+    "title": "Simple statistical gradientfollowing algorithms for connectionist reinforcement learning",
+    "authors": ["Ronald J Williams."],
+    "venue": "Machine learning, 8(3-4):229–256.",
+    "year": 1992
+  }, {
+    "title": "Learning to simplify sentences with quasi-synchronous grammar and integer programming",
+    "authors": ["Kristian Woodsend", "Mirella Lapata."],
+    "venue": "Proceedings of the 2011 EMNLP, pages 409–420, Edinburgh, Scotland.",
+    "year": 2011
+  }, {
+    "title": "Text rewriting improves semantic role labeling",
+    "authors": ["Kristian Woodsend", "Mirella Lapata."],
+    "venue": "Journal of Artificial Intelligence Research, 51:133–164.",
+    "year": 2014
+  }, {
+    "title": "Sentence simplification by monolingual machine translation",
+    "authors": ["Sander Wubben", "Antal Van Den Bosch", "Emiel Krahmer."],
+    "venue": "Proceedings of the 50th ACL, pages 1015–1024, Jeju Island, Korea.",
+    "year": 2012
+  }, {
+    "title": "Show, attend and tell: Neural image caption generation with visual attention",
+    "authors": ["Kelvin Xu", "Jimmy Ba", "Ryan Kiros", "Kyunghyun Cho", "Aaron Courville", "Ruslan Salakhutdinov", "Richard S Zemel", "Yoshua Bengio."],
+    "venue": "arXiv preprint arXiv:1502.03044,",
+    "year": 2015
+  }, {
+    "title": "Problems in current text simplification research: New data can help",
+    "authors": ["Wei Xu", "Chris Callison-Burch", "Courtney Napoles."],
+    "venue": "Transactions of the Association for Computational Linguistics, 3:283–297.",
+    "year": 2015
+  }, {
+    "title": "Optimizing statistical machine translation for text simplification",
+    "authors": ["Wei Xu", "Courtney Napoles", "Ellie Pavlick", "Quanze Chen", "Chris Callison-Burch."],
+    "venue": "Transactions of the Association for Computational Linguistics, 4:401–415.",
+    "year": 2016
+  }, {
+    "title": "A syntaxbased statistical translation model",
+    "authors": ["Kenji Yamada", "Kevin Knight."],
+    "venue": "Proceedings of the 39th ACL, pages 523–530, Toulouse, France.",
+    "year": 2001
+  }, {
+    "title": "Recurrent neural network regularization",
+    "authors": ["Wojciech Zaremba", "Ilya Sutskever", "Oriol Vinyals."],
+    "venue": "arXiv preprint arXiv:1409.2329.",
+    "year": 2014
+  }, {
+    "title": "Chinese poetry generation with recurrent neural networks",
+    "authors": ["Xingxing Zhang", "Mirella Lapata."],
+    "venue": "Proceedings of the 2014 EMNLP, pages 670–680, Doha, Qatar.",
+    "year": 2014
+  }, {
+    "title": "A monolingual tree-based translation model for sentence simplification",
+    "authors": ["Zhemin Zhu", "Delphine Bernhard", "Iryna Gurevych."],
+    "venue": "Proceedings of the 23rd COLING, pages 1353–1361, Beijing, China.",
+    "year": 2010
+  }],
+  "id": "SP:1decfe4c92b9cdd90aa378faa52b85aa49b8a277",
+  "authors": [{
+    "name": "Xingxing Zhang",
+    "affiliations": []
+  }, {
+    "name": "Mirella Lapata",
+    "affiliations": []
+  }],
+  "abstractText": "Sentence simplification aims to make sentences easier to read and understand. Most recent approaches draw on insights from machine translation to learn simplification rewrites from monolingual corpora of complex and simple sentences. We address the simplification problem with an encoder-decoder model coupled with a deep reinforcement learning framework. Our model, which we call DRESS (as shorthand for Deep REinforcement Sentence Simplification), explores the space of possible simplifications while learning to optimize a reward function that encourages outputs which are simple, fluent, and preserve the meaning of the input. Experiments on three datasets demonstrate that our model outperforms competitive simplification systems.1",
+  "title": "Sentence Simplification with Deep Reinforcement Learning"
+}

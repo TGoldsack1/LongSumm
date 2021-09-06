@@ -1,0 +1,268 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Recent successes of deep learning go beyond achieving state-of-the-art results in research benchmarks, and push the frontiers in some of the most challenging real world applications such as speech recognition (Hinton et al., 2012), image recognition (Krizhevsky et al., 2012; Szegedy et al., 2015), and machine translation (Wu et al., 2016). The recently published WaveNet (van den Oord et al., 2016a) model achieves state-of-the-art results in speech synthesis, and significantly closes the gap with natural human speech. However, it is not well suited for real world deployment due to its prohibitive generation speed. In this paper, we present a new algorithm for distilling WaveNet into a feed-forward neural\n1DeepMind Technologies, London, United Kingdom. Correspondence to: Aaron van den Oord <avdnoord@google.com>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\nnetwork which can synthesise equally high quality speech much more efficiently, and is deployed to millions of users.\nWaveNet is one of a family of autoregressive deep generative models that have been applied with great success to data as diverse as text (Mikolov et al., 2010), images (Larochelle & Murray, 2011; Theis & Bethge, 2015; van den Oord et al., 2016c;b), video (Kalchbrenner et al., 2016), handwriting (Graves, 2013) as well as human speech and music. Modelling raw audio signals, as WaveNet does, represents a particularly extreme form of autoregression, with up to 24,000 samples predicted per second. Operating at such a high temporal resolution is not problematic during network training, where the complete sequence of input samples is already available and—thanks to the convolutional structure of the network—can be processed in parallel. When generating samples, however, each input sample must be drawn from the output distribution before it can be passed in as input at the next time step, making parallel processing impossible.\nInverse autoregressive flows (IAFs) (Kingma et al., 2016) represent a kind of dual formulation of deep autoregressive modelling, in which sampling can be performed in parallel, while the inference procedure required for likelihood estimation is sequential and slow. The goal of this paper is to marry the best features of both models: the efficient training of WaveNet and the efficient sampling of IAF networks. The bridge between them is a new form of neural network distillation (Hinton et al., 2015), which we refer to as Probability Density Distillation, where a trained WaveNet model is used as a teacher for a feedforward IAF model.\nThe next section describes the original WaveNet model, while Sections 3 and 4 define in detail the new, parallel version of WaveNet and the distillation process used to transfer knowledge between them. Section 5 then presents experimental results showing no loss in perceived quality for parallel versus original WaveNet, and continued superiority over previous benchmarks. We also present timings for sample generation, demonstrating more than 1000× speedup relative to original WaveNet."
+  }, {
+    "heading": "2. WaveNet",
+    "text": "Autoregressive networks model the joint distribution of highdimensional data as a product of conditional distributions using the probabilistic chain-rule:\np(x) = ∏ t p(xt|x<t,θ),\nwhere xt is the t-th variable of x and θ are the parameters of the autoregressive model. The conditional distributions are usually modelled with a neural network that receives x<t as input and outputs a distribution over possible xt.\nWaveNet (van den Oord et al., 2016a) is a convolutional autoregressive model which produces all p(xt|x<t) in one forward pass, by making use of causal—or masked— convolutions (van den Oord et al., 2016c; Germain et al., 2015). Every causal convolutional layer can process its input in parallel, making these architectures very fast to train compared to RNNs (van den Oord et al., 2016b), which can only be updated sequentially. At generation time, however, the waveform has to be synthesised in a sequential fashion as xt must be sampled first in order to obtain x>t. Due to this nature, real time (or faster) synthesis with a fully autoregressive system is challenging. While sampling speed is not a significant issue for offline generation, it is essential for real-word applications. A version of WaveNet that generates in real-time has been developed (Paine et al., 2016), but it required the use of a much smaller network, resulting in severely degraded quality.\nRaw audio data is typically very high-dimensional (e.g. 16,000 samples per second for 16kHz audio), and contains complex, hierarchical structures spanning many thousands of time steps, such as words in speech or melodies in music. Modelling such long-term dependencies with standard causal convolution layers would require a very deep network to ensure a sufficiently broad receptive field. WaveNet avoids this constraint by using dilated causal convolutions, which allow the receptive field to grow exponentially with depth.\nWaveNet uses gated activation functions, together with a simple mechanism introduced in (van den Oord et al., 2016c) to condition on extra information such as class labels or linguistic features:\nhi = σ ( Wg,i ∗ xi + V Tg,ic ) tanh ( Wf,i ∗ xi + V Tf,ic ) ,\n(1) where ∗ denotes a convolution operator, and denotes an element-wise multiplication operator. σ(·) is a logistic sigmoid function. c represents extra conditioning data. i is the layer index. f and g denote filter and gate, respectively. W and V are learnable weights. In cases where c encodes spatial or sequential information (such as a sequence of linguistic features), the matrix products (V Tf,ic and V T g,ic) are replaced by convolutions (Vf,i ∗ c and Vg,i ∗ c)."
+  }, {
+    "heading": "2.1. Higher Fidelity WaveNet",
+    "text": "For this work we made two improvements to the basic WaveNet model to enhance its audio quality for production use. Unlike previous versions of WaveNet (van den Oord et al., 2016a), where 8-bit (µ-law or PCM) audio was modelled with a 256-way categorical distribution, we increased the fidelity by modelling 16-bit audio. Since training a 65,536-way categorical distribution would be prohibitively costly, we instead modelled the samples with the discretized mixture of logistics distribution introduced in (Salimans et al., 2017). We further improved fidelity by increasing the audio sampling rate from 16kHz to 24kHz. This required a WaveNet with a wider receptive field, which we achieved by increasing the dilated convolution filter size from 2 to 3. An alternative strategy would be to increase the number of layers or add more dilation stages."
+  }, {
+    "heading": "3. Parallel WaveNet",
+    "text": "While the convolutional structure of WaveNet allows for rapid parallel training, sample generation remains inherently sequential and therefore slow, as it is for all autoregressive models which use ancestral sampling. We therefore seek an alternative architecture that will allow for rapid, parallel generation.\nInverse-autoregressive flows (IAFs) (Kingma et al., 2016) are stochastic generative models whose latent variables are arranged so that all elements of a high dimensional observable sample can be generated in parallel. IAFs are a special type of normalising flow (Dinh et al., 2014; Rezende & Mohamed, 2015; Dinh et al., 2016) which model a multivariate distribution pX(x) as an explicit invertible non-linear transformation x = f(z) of a simple tractable distribution pZ(z) (such as an isotropic Gaussian distribution). Using the change of variables formula the resulting distribution can be written as:\nlog pX(x) = log pZ(z)− log ∣∣∣dx dz ∣∣∣, where ∣∣dx dz\n∣∣ is the determinant of the Jacobian of f . For all normalizing flows the transformation f is chosen so that it is invertible and its Jacobian determinant is easy to compute. In the case of an IAF, the output is modelled by xt = f(z≤t). Because of this strict dependency structure, the transformation has a triangular Jacobian matrix which makes the determinant equal to the product of the diagonal entries:\nlog ∣∣∣dx dz ∣∣∣ =∑ t log ∂f(z≤t) ∂zt .\nTo sample from an IAF, a random sample is first drawn from z ∼ pZ(z) (we use the Logistic(0, I) distribution) which\nis then transformed as follows:\nxt = zt · s(z<t,θ) + µ(z<t,θ), (2)\nwhere µ and s are outputs by the network. Therefore, p(xt|z<t) follows a logistic distribution parameterised by µt and st.\np(xt|z<t,θ) = L ( xt ∣∣µ(z<t,θ), s(z<t,θ)) ,\nWhile µ(z<t,θ) and s(z<t,θ) can be any model, we use the same convolutional network structure as the original WaveNet (van den Oord et al., 2016a).\nAutoregressive models (or flows (Papamakarios et al., 2017)) model the data as p(xt|x<t) and IAFs as p(xt|z<t). If these models share the same output distribution class (e.g., mixture of logistics or categorical) then mathematically they should be able to model the same multivariate distributions. However, in practice there are some differences (see Section 3.1). To output the correct distribution for timestep xt, the inverse autoregressive flow can implicitly infer what it would have output at previous timesteps x1, . . . , xt−1 based on the noise inputs z1, . . . , zt−1, which allows it to output all xt in parallel given zt.\nIn general, normalising flows might require repeated iterations to transform uncorrelated noise into structured samples, with the output generated by the flow at each iteration passed in as input at the next (Rezende & Mohamed, 2015). This is less crucial for IAFs, as the autoregressive latents can induce significant structure in a single pass. Nonetheless we observed that having up to 4 flow iterations did improve the quality (the weights are not shared between the flows).\nThe first (bottom) network takes as input the white unconditional logistic noise: z0. Thereafter the output of each network i is passed as input to the next network i+1 , which again transforms it.\nzi = zi−1 · si + µi (3)\nBecause we use the same ordering in all the flows, the final distribution p(xt|z<t,θ) is still logistic with location µtot and scale stot:\nµtot = N∑ i µi  N∏ j>i sj  (4) stot =\nN∏ i si (5)\nwhere N is the number of flows and the dependencies on t and z are omitted for simplicity."
+  }, {
+    "heading": "3.1. Autoregressive Models and Inverse-autoregressive Flows",
+    "text": "Although inverse-autoregressive flows (IAFs) and autoregressive models can in principle model the same distributions (Chen et al., 2016), they have different inductive biases and may vary greatly in their capacity to model certain processes. As a simple example consider the Fibonacci series (1, 1, 2, 3, 5, 8, 13, . . . ). For an autoregressive model this is easy to model with a receptive field of two: f(k) = f(k − 1) + f(k − 2). For an IAF, however, the receptive field needs to be at least size k to correctly model k terms, leading to a larger model that is less able to generalise."
+  }, {
+    "heading": "4. Probability Density Distillation",
+    "text": "Training the parallel WaveNet model directly with maximum likelihood would be impractical, as the inference procedure required to estimate the log-likelihoods is sequential and slow1. We therefore introduce a novel form of neural network distillation (Hinton et al., 2015) that uses an al-\n1In this sense the two architectures are dual to one another: slow training and fast generation with parallel WaveNet versus fast training and slow generation with WaveNet.\nready trained WaveNet as a ‘teacher’ from which a parallel WaveNet ‘student’ can efficiently learn. To stress the fact that we are dealing with normalised density models, we refer to this process as Probability Density Distillation (in contrast to Probability Density Estimation). The basic idea is for the student to attempt to match the probability of its own samples under the distribution learned by the teacher.\nGiven a parallel WaveNet student pS(x) and WaveNet teacher pT (x) which has been trained on a dataset of audio, we define the Probability Density Distillation loss as follows:\nDKL (PS ||PT ) = H(PS , PT )−H(PS) (6)\nwhere DKL is the Kullback–Leibler divergence, and H(PS , PT ) is the cross-entropy between the student PS and teacher PT , and H(PS) is the entropy of the student distribution. When the KL divergence becomes zero, the student distribution has fully recovered the teacher’s distribution. The entropy term (which is not present in previous distillation objectives (Hinton et al., 2015)) is vital in that it prevents the student’s distribution from collapsing to the mode of the teacher (which, counter-intuitively, does not yield a good sample—see Section 4.1). Crucially, all the operations required to estimate derivatives for this loss (sampling from pS(x), evaluating pT (x), and evaluating H(PS)) can be performed efficiently, as we will see.\nIt is worth noting the parallels to Generative Adversarial Networks (GANs (Goodfellow et al., 2014)), with the student playing the role of generator, and the teacher playing the role of discriminator. As opposed to GANs, however, the student is not attempting to fool the teacher in an adversarial manner; rather it co-operates by attempting to match the teacher’s probabilities. Furthermore the teacher is held constant, rather than being trained in tandem with the student, and both models yield tractable normalised distributions.\nRecently (Gu et al., 2017) has presented a related idea to train feed-forward networks for neural machine translation. Their method is based on conditioning the feedforward decoder on fertility values, which require supervision by an external alignment system. The training procedure also involves the creation of an additional dataset as well as finetuning. During inference, their model relies on re-scoring by an auto-regressive model.\nFirst, observe that the entropy term H(PS) in Equation 6 can be rewritten as follows:\nH(PS) = E z∼L(0,1)\n[ T∑\nt=1\n− ln pS(xt|z<t) ]\n(7)\n= E z∼L(0,1)\n[ T∑\nt=1\nln s(z<t,θ)\n] + 2T, (8)\nwherex = g(z) and zt are independent samples drawn from the logistic distribution. The second equality in Equation 8 follows because the entropy of a logistic distribution L(µ, s) is ln s + 2. We can therefore compute this term without having to explicitly generate x.\nThe cross-entropy term H(PS , PT ) however explicitly depends on x = g(z), and therefore requires sampling from the student to estimate.\nH(PS , PT ) = ∫ x pS(x) ln pT (x) (9)\n= T∑ t=1 ∫ x pS(x) ln pT (xt|x<t) (10)\n= T∑ t=1 ∫ x pS(x<t)pS(x≥t|x<t) ln pT (xt|x<t) (11)\n= T∑ t=1 E pS(x<t) [ ∫ xt\npS(xt|x<t) ln pT (xt|x<t) (12)∫ x>t pS(x>t|x≤t) ] (13)\n= T∑ t=1 E pS(x<t) H ( pS(xt|x<t), pT (xt|x<t) ) . (14)\n= T∑ t=1 E z∼L\nx=g(z)\nH ( pS(xt|z<t), pT (xt|x<t) ) . (15)\nIn Equation 11 we apply the chain rule to mathematicaly decompose PS(x) into conditional distributions but they are only explicitly constructed with a neural network to depend on z as in Equation 15.\nFor every sample x we draw from the student pS we can compute all pT (xt|x<t) in parallel with the teacher and then evaluate H(pS(xt|z<t), pT (xt|x<t)) very efficiently by drawing multiple different samples xt from pS(xt|z<t) for each timestep. This unbiased estimator has a much lower variance than naively evaluating the sample under the teacher with Equation 9.\nWe parameterise the teacher’s output distribution pT (xt|x<t) as a mixture of logistics distribution (Salimans et al., 2017), which allows the loss term ln pT (xt|x<t) to be differentiable with respect to both xt and x<t. A categorical distribution, on the other hand, would only be differentiable w.r.t. x<t."
+  }, {
+    "heading": "4.1. Argument against MAP estimation",
+    "text": "In this section we make an argument against maximum a posteriori (MAP) estimation for distillation; similar arguments have been made by previous authors in a different setting (Sønderby et al., 2016)."
+  }, {
+    "heading": "WaveNet Teacher",
+    "text": "The distillation loss defined in Section 4 minimises the KL divergence between the teacher and generator. We could instead have minimised only the cross-entropy between the teacher and generator (the standard distillation loss term (Hinton et al., 2015)), so that the samples by the generator are as likely as possible according to the teacher. Doing so would give rise to MAP estimation. Counterintuitively, audio samples obtained through MAP estimation do not sound as good as typical examples from the teacher: in fact they are almost completely silent, even if using conditional information such as linguistic features. This effect is not due to adversarial behaviour on the part of the teacher, but rather is a fundamental property of the data distribution which the teacher has approximated.\nAs an example consider the simple case where we have audio from a white random noise source: the distribution at every timestep is N (0, 1), regardless of the samples at previous timesteps. White noise has a very specific and perceptually recognizable sound: a continual hiss. The MAP estimate of this data distribution, and thus of any generative model that matches it well, recovers the distribution mode, which is 0 at every timestep: i.e. complete silence. More generally, any highly stochastic process is liable to have a ‘noiseless’ and therefore atypical mode. For the KL divergence the optimum is to recover the full teacher distribution. This is clearly different from any random sample from the distribution. Furthermore, if one changes the representation of the data (e.g., by nonlinearly pre-processing the audio signal), then the MAP estimate changes, unlike the KL-divergence in Equation 6, which is invariant to the coordinate system."
+  }, {
+    "heading": "4.2. Additional loss terms",
+    "text": "Training with Probability Density Distillation alone might not sufficiently constrain the student to generate high quality audio streams. Therefore, we also introduce additional loss functions to guide the student distribution towards the desired output space."
+  }, {
+    "heading": "POWER LOSS",
+    "text": "The first additional loss we propose is the power loss, which ensures that the power in different frequency bands of the speech are on average used as much as in human speech. The power loss helps to avoid the student from collapsing to a high-entropy WaveNet-mode, such as whispering.\nThe power-loss is defined as:\n||φ(g(z, c))− φ(y)||2, (16)\nwhere (y, c) is an example with conditioning from the training set, φ(x) = |STFT(x)|2 and STFT stands for the ShortTerm Fourier Transform. We found that φ(x) can be averaged over time before taking the Euclidean distance with little difference in effect, which means it is the average power for various frequencies that is important."
+  }, {
+    "heading": "PERCEPTUAL LOSS",
+    "text": "In the power loss formulation given in equation 16, one can also use a neural network instead of the STFT to conserve a perceptual property of the signal rather than total energy. In our case we have used a WaveNet-like classifier trained to predict the phones from raw audio. Because such a classifier naturally extracts high-level features that are relevant for\nrecognising the phones, this loss term penalises bad pronunciations. A similar principle has been used in computer vision for artistic style transfer (Gatys et al., 2015), or to get better perceptual reconstruction losses, e.g., in superresolution (Johnson et al., 2016).\nWe have experimented with two different ways of using the perceptual loss, the feature reconstruction loss (the Euclidean distance between feature maps in the classifier) and the style loss (the Euclidean distance between the Gram matrices (Johnson et al., 2016)). The latter produced better results in our experiments."
+  }, {
+    "heading": "CONTRASTIVE LOSS",
+    "text": "Finally, we also introduce a contrastive distillation loss as follows:\nDKL ( PS(c1) ∣∣∣∣∣∣PT (c1))−γDKL(PS(c1)∣∣∣∣∣∣PT c2)), (17) which minimises the KL-divergence between the teacher and student when both are conditioned on the same information c1 (e.g., linguistic features, speaker ID, . . . ), but also maximises it for different conditioning pairs c1 6= c2. In order to implement this loss, we use the output of the student x = g(z, c1) and evaluate the waveform twice under the teacher: once with the same conditioning PT (x|c1) and once with a randomly sampled conditioning input: PT (x|c2). The weight for the contrastive term γ was set to 0.3 in our experiments. The contrastive loss penalises waveforms that have high likelihood regardless of the conditioning vector."
+  }, {
+    "heading": "5. Experiments",
+    "text": "In all our experiments we used text-to-speech models that were conditioned on linguistic features (similar to (van den Oord et al., 2016a)), providing phonetic and duration information to the network. We also conditioned the models\non pitch information (logarithm of f0, the fundamental frequency) predicted by a different model. We never used ground-truth information (such as pitch or duration) extracted from human speech for generating audio samples and the test sentences were not present (or similar to those) in the training set.\nThe teacher WaveNet network was trained for 1,000,000 steps with the ADAM optimiser (Kingma & Ba, 2014) with a minibatch size of 32 audio clips, each containing 7,680 timesteps (roughly 320ms). Remarkably, a relatively short snippet of time is sufficient to train the parallel WaveNet to produce long term coherent waveforms. The learning rate was held constant at 2×10−4, and Polyak averaging (Polyak & Juditsky, 1992) was applied over the parameters. The model consists of 30 layers, grouped into 3 dilated residual block stacks of 10 layers. In every stack, the dilation rate increases by a factor of 2 in every layer, starting with rate 1 (no dilation) and reaching the maximum dilation of 512 in the last layer. The filter size of causal dilated convolutions is 3. The number of hidden units in the gating layers is 512 (split into two groups of 256 for the two parts of the activation function (1)). The number of hidden units in the residual connection is 512, and in the skip connection and the 1× 1 convolutions before the output layer is also 256. We used 10 mixture components for the mixture of logistics output distribution.\nThe student network consisted of the same WaveNet architecture layout, except with different inputs and outputs and no skip connections. The student was also trained for 1,000,000 steps with the same optimisation settings. The student typically consisted of 4 flows with 10, 10, 10, 30 layers respectively, with 64 hidden units for the residual and gating layers."
+  }, {
+    "heading": "AUDIO GENERATION SPEED",
+    "text": "We have benchmarked the sampling speed of autoregressive and distilled WaveNets on an NVIDIA P100 GPU. Both models were implemented in Tensorflow (Abadi et al., 2016) and compiled with XLA. The hidden layer activations from previous timesteps in the autoregressive model were cached with circular buffers (Paine et al., 2016). The resulting sampling speed with this implementation is 172 timesteps/second for a minibatch of size 1. The distilled model, which is more parallelizable, achieves over 500,000 timesteps/second with same batch size of 1, resulting in three orders of magnitude speed-up."
+  }, {
+    "heading": "AUDIO FIDELITY",
+    "text": "In our first set of experiments, we looked at the quality of WaveNet distillation compared to the autoregressive WaveNet teacher and other baselines on data from a professional female speaker (van den Oord et al., 2016a). Table\n1 gives a comparison of autoregressive WaveNet, distilled WaveNet and current production systems in terms of mean opinion score (MOS). There is no difference between MOS scores of the distilled WaveNet (4.41±0.08) and autoregressive WaveNet (4.41±0.07), and both are significantly better than the concatenative unit-selection baseline (4.19± 0.1). It is also important to note that the difference in MOS scores of our WaveNet baseline result 4.41 compared to the previous reported result 4.21 (van den Oord et al., 2016a) is due to the improvement in audio fidelity as explained in Section 2.1: modelling a sample rate of 24kHz instead of 16kHz and bit-depth of 16-bit PCM instead of 8-bit µ-law."
+  }, {
+    "heading": "MULTI-SPEAKER GENERATION",
+    "text": "By conditioning on the speaker-ids we can construct a single parallel WaveNet model that is able to generate multiple speakers’ voices and their accents. These networks require slightly more capacity than single speaker models and thus had 30 layers in each flow. In Table 2 we show a comparison of such a distilled parallel WaveNet model with two main baselines: a parametric and a concatenative system. In the comparison, we use a number of English speakers from a single model (one of them, English speaker 1, is the same speaker as in Table 1) and a Japanese speaker from another model. For some speakers, the concatenative system gets better results than the parametric system, while for other speakers it is the opposite. The parallel WaveNet model, on the other hand, significantly outperforms both baselines for all the speakers."
+  }, {
+    "heading": "ABLATION STUDIES",
+    "text": "To analyse the importance of the loss functions introduced in Section 4.2 we show how the quality of the distilled WaveNet changes with different loss functions in Table 3 (top). We found that MOS scores of these models tend to be very similar to each other (and similar to the result in Table 1). Therefore, we report subjective preference scores from a paired comparison test (“A/B test”), which we found to be more reliable for noticing small (sometimes qualitative) differences. In these tests, the subjects were\nasked to listen to a pair of samples and choose which they preferred, though they could choose “neutral” if they did not have any preference.\nAs mentioned before, the KL loss alone does not constrain the distillation process enough to obtain natural sounding speech (e.g., low-volume audio suffices for the KL), therefore we do not report preference scores with only this term. The KL loss (section 4) combined with power-loss is enough to generate quite natural speech. Adding the perceptual loss gives a small but noticeable improvement. Adding the contrastive loss does not improve the preference scores any further, but makes the generated speech less noisy, which is something most raters do not pay attention to, but is important for production quality speech.\nAs explained in Section 3, we use multiple inverseautoregressive flows in the parallel WaveNet architecture: A model with a single flow gets a MOS score of 4.21, compared to a MOS score of 4.41 for models with multiple flows."
+  }, {
+    "heading": "6. Conclusion",
+    "text": "In this paper we have introduced a novel method for highfidelity speech synthesis based on WaveNet (van den Oord et al., 2016a) using Probability Density Distillation. The proposed model achieved several orders of magnitude speed-up compared to the original WaveNet with no significant difference in quality. Moreover, we have successfully transferred\nthis algorithm to new languages and multiple speakers.\nAs a result, we have been able to run a real-time speech synthesis system, opening the door to many exciting future developments thanks to the flexibility of deep learning models. We believe that the same method presented here can be used in many different domains to achieve similar speed improvements whilst maintaining output accuracy."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Tensorflow: Large-scale machine learning on heterogeneous distributed systems",
+    "authors": ["M. Abadi", "A. Agarwal", "P. Barham", "E. Brevdo", "Z. Chen", "C. Citro", "G.S. Corrado", "A. Davis", "J. Dean", "M Devin"],
+    "venue": "arXiv preprint arXiv:1603.04467,",
+    "year": 2016
+  }, {
+    "title": "Variational lossy autoencoder",
+    "authors": ["X. Chen", "D.P. Kingma", "T. Salimans", "Y. Duan", "P. Dhariwal", "J. Schulman", "I. Sutskever", "P. Abbeel"],
+    "venue": "arXiv preprint arXiv:1611.02731,",
+    "year": 2016
+  }, {
+    "title": "Nice: Non-linear independent components estimation",
+    "authors": ["L. Dinh", "D. Krueger", "Y. Bengio"],
+    "venue": "arXiv preprint arXiv:1410.8516,",
+    "year": 2014
+  }, {
+    "title": "Density estimation using real nvp",
+    "authors": ["L. Dinh", "J. Sohl-Dickstein", "S. Bengio"],
+    "venue": "arXiv preprint arXiv:1605.08803,",
+    "year": 2016
+  }, {
+    "title": "A neural algorithm of artistic style",
+    "authors": ["L.A. Gatys", "A.S. Ecker", "M. Bethge"],
+    "venue": "arXiv preprint arXiv:1508.06576,",
+    "year": 2015
+  }, {
+    "title": "Made: masked autoencoder for distribution estimation",
+    "authors": ["M. Germain", "K. Gregor", "I. Murray", "H. Larochelle"],
+    "venue": "In Proceedings of the 32nd International Conference on Machine Learning",
+    "year": 2015
+  }, {
+    "title": "Generative adversarial nets",
+    "authors": ["I. Goodfellow", "J. Pouget-Abadie", "M. Mirza", "B. Xu", "D. Warde-Farley", "S. Ozair", "A. Courville", "Y. Bengio"],
+    "venue": "In Advances in neural information processing systems,",
+    "year": 2014
+  }, {
+    "title": "Generating sequences with recurrent neural networks",
+    "authors": ["A. Graves"],
+    "venue": "arXiv preprint arXiv:1308.0850,",
+    "year": 2013
+  }, {
+    "title": "Non-autoregressive neural machine translation",
+    "authors": ["J. Gu", "J. Bradbury", "C. Xiong", "V.O. Li", "R. Socher"],
+    "venue": "arXiv preprint arXiv:1711.02281,",
+    "year": 2017
+  }, {
+    "title": "Distilling the knowledge in a neural network",
+    "authors": ["G. Hinton", "O. Vinyals", "J. Dean"],
+    "venue": "arXiv preprint arXiv:1503.02531,",
+    "year": 2015
+  }, {
+    "title": "Perceptual losses for real-time style transfer and super-resolution",
+    "authors": ["J. Johnson", "A. Alahi", "L. Fei-Fei"],
+    "venue": "In European Conference on Computer Vision,",
+    "year": 2016
+  }, {
+    "title": "Video pixel networks",
+    "authors": ["N. Kalchbrenner", "A. van den Oord", "K. Simonyan", "I. Danihelka", "O. Vinyals", "A. Graves", "K. Kavukcuoglu"],
+    "venue": "arXiv preprint arXiv:1610.00527,",
+    "year": 2016
+  }, {
+    "title": "Adam: A method for stochastic optimization",
+    "authors": ["D. Kingma", "J. Ba"],
+    "venue": "arXiv preprint arXiv:1412.6980,",
+    "year": 2014
+  }, {
+    "title": "Improving variational inference with inverse autoregressive flow",
+    "authors": ["D.P. Kingma", "T. Salimans", "M. Welling"],
+    "venue": "arXiv preprint arXiv:1606.04934,",
+    "year": 2016
+  }, {
+    "title": "Imagenet classification with deep convolutional neural networks. In Advances in neural information processing",
+    "authors": ["A. Krizhevsky", "I. Sutskever", "G.E. Hinton"],
+    "year": 2012
+  }, {
+    "title": "The neural autoregressive distribution estimator",
+    "authors": ["H. Larochelle", "I. Murray"],
+    "venue": "In Proceedings of the Fourteenth International Conference on Artificial Intelligence and Statistics,",
+    "year": 2011
+  }, {
+    "title": "Recurrent neural network based language model",
+    "authors": ["T. Mikolov", "M. Karafiát", "L. Burget", "J. Cernockỳ", "S. Khudanpur"],
+    "venue": "In Interspeech,",
+    "year": 2010
+  }, {
+    "title": "Masked autoregressive flow for density estimation",
+    "authors": ["G. Papamakarios", "I. Murray", "T. Pavlakou"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2017
+  }, {
+    "title": "Acceleration of stochastic approximation by averaging",
+    "authors": ["B.T. Polyak", "A.B. Juditsky"],
+    "venue": "SIAM Journal on Control and Optimization,",
+    "year": 1992
+  }, {
+    "title": "Variational inference with normalizing flows",
+    "authors": ["D.J. Rezende", "S. Mohamed"],
+    "venue": "arXiv preprint arXiv:1505.05770,",
+    "year": 2015
+  }, {
+    "title": "Pixelcnn++: Improving the pixelcnn with discretized logistic mixture likelihood and other modifications",
+    "authors": ["T. Salimans", "A. Karpathy", "X. Chen", "D.P. Kingma"],
+    "venue": "arXiv preprint arXiv:1701.05517,",
+    "year": 2017
+  }, {
+    "title": "Amortised map inference for image superresolution",
+    "authors": ["C.K. Sønderby", "J. Caballero", "L. Theis", "W. Shi", "F. Huszár"],
+    "venue": "arXiv preprint arXiv:1610.04490,",
+    "year": 2016
+  }, {
+    "title": "Going deeper with convolutions",
+    "authors": ["C. Szegedy", "W. Liu", "Y. Jia", "P. Sermanet", "S. Reed", "D. Anguelov", "D. Erhan", "V. Vanhoucke", "A. Rabinovich"],
+    "venue": "In Proceedings of the IEEE conference on computer vision and pattern recognition,",
+    "year": 2015
+  }, {
+    "title": "Generative image modeling using spatial lstms",
+    "authors": ["L. Theis", "M. Bethge"],
+    "venue": "In Advances in Neural Information Processing Systems, pp. 1927–1935,",
+    "year": 2015
+  }, {
+    "title": "Wavenet: A generative model for raw audio",
+    "authors": ["A. van den Oord", "S. Dieleman", "H. Zen", "K. Simonyan", "O. Vinyals", "A. Graves", "N. Kalchbrenner", "A. Senior", "K. Kavukcuoglu"],
+    "venue": "arXiv preprint arXiv:1609.03499,",
+    "year": 2016
+  }, {
+    "title": "Conditional image generation with pixelcnn decoders",
+    "authors": ["A. van den Oord", "N. Kalchbrenner", "L. Espeholt", "O. Vinyals", "A Graves"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2016
+  }, {
+    "title": "Pixel recurrent neural networks",
+    "authors": ["A. van den Oord", "N. Kalchbrenner", "K. Kavukcuoglu"],
+    "venue": "arXiv preprint arXiv:1601.06759,",
+    "year": 2016
+  }, {
+    "title": "Google’s neural machine translation system: Bridging the gap between human and machine translation",
+    "authors": ["Y. Wu", "M. Schuster", "Z. Chen", "Q.V. Le", "M. Norouzi", "W. Macherey", "M. Krikun", "Y. Cao", "Q. Gao", "K Macherey"],
+    "venue": "arXiv preprint arXiv:1609.08144,",
+    "year": 2016
+  }],
+  "id": "SP:a2868e1e497d277c5a60767055e3cf312e953160",
+  "authors": [{
+    "name": "Aaron van den Oord",
+    "affiliations": []
+  }, {
+    "name": "Yazhe Li",
+    "affiliations": []
+  }, {
+    "name": "Igor Babuschkin",
+    "affiliations": []
+  }, {
+    "name": "Karen Simonyan",
+    "affiliations": []
+  }, {
+    "name": "Oriol Vinyals",
+    "affiliations": []
+  }, {
+    "name": "Koray Kavukcuoglu",
+    "affiliations": []
+  }, {
+    "name": "George van den Driessche",
+    "affiliations": []
+  }, {
+    "name": "Edward Lockhart",
+    "affiliations": []
+  }, {
+    "name": "Luis C. Cobo",
+    "affiliations": []
+  }, {
+    "name": "Florian Stimberg",
+    "affiliations": []
+  }, {
+    "name": "Norman Casagrande",
+    "affiliations": []
+  }, {
+    "name": "Dominik Grewe",
+    "affiliations": []
+  }, {
+    "name": "Seb Noury",
+    "affiliations": []
+  }, {
+    "name": "Sander Dieleman",
+    "affiliations": []
+  }, {
+    "name": "Erich Elsen",
+    "affiliations": []
+  }, {
+    "name": "Nal Kalchbrenner",
+    "affiliations": []
+  }, {
+    "name": "Heiga Zen",
+    "affiliations": []
+  }, {
+    "name": "Alex Graves",
+    "affiliations": []
+  }, {
+    "name": "Helen King",
+    "affiliations": []
+  }, {
+    "name": "Tom Walters",
+    "affiliations": []
+  }, {
+    "name": "Dan Belov",
+    "affiliations": []
+  }, {
+    "name": "Demis Hassabis",
+    "affiliations": []
+  }],
+  "abstractText": "The recently-developed WaveNet architecture (van den Oord et al., 2016a) is the current state of the art in realistic speech synthesis, consistently rated as more natural sounding for many different languages than any previous system. However, because WaveNet relies on sequential generation of one audio sample at a time, it is poorly suited to today’s massively parallel computers, and therefore hard to deploy in a real-time production setting. This paper introduces Probability Density Distillation, a new method for training a parallel feed-forward network from a trained WaveNet with no significant difference in quality. The resulting system is capable of generating high-fidelity speech samples at more than 20 times faster than real-time, a 1000x speed up relative to the original WaveNet, and capable of serving multiple English and Japanese voices in a production setting.",
+  "title": "Parallel WaveNet: Fast High-Fidelity Speech Synthesis"
+}

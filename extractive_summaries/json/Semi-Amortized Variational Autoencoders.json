@@ -1,0 +1,389 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Variational inference (VI) (Jordan et al., 1999; Wainwright & Jordan, 2008) is a framework for approximating an intractable distribution by optimizing over a family of tractable surrogates. Traditional VI algorithms iterate over the observed data and update the variational parameters with closed-form coordinate ascent updates that exploit conditional conjugacy (Ghahramani & Beal, 2001). This style of optimization is challenging to extend to large datasets and non-conjugate models. However, recent advances in stochastic (Hoffman et al., 2013), black-box (Ranganath et al., 2014; 2016), and amortized (Mnih & Gregor, 2014; Kingma & Welling, 2014; Rezende et al., 2014) variational inference have made it possible to scale to large datasets and rich, non-conjugate models (see Blei et al. (2017), Zhang et al. (2017) for a review of modern methods).\n1School of Engineering and Applied Sciences, Harvard University, Cambridge, MA, USA 2CSAIL & IMES, Massachusetts Institute of Technology, Cambridge, MA, USA. Correspondence to: Yoon Kim <yoonkim@seas.harvard.edu>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\nIn stochastic variational inference (SVI), the variational parameters for each data point are randomly initialized and then optimized to maximize the evidence lower bound (ELBO) with, for example, gradient ascent. These updates are based on a subset of the data, making it possible to scale the approach. In amortized variational inference (AVI), the local variational parameters are instead predicted by an inference (or recognition) network, which is shared (i.e. amortized) across the dataset. Variational autoencoders (VAEs) are deep generative models that utilize AVI for inference and jointly train the generative model alongside the inference network.\nSVI gives good local (i.e. instance-specific) distributions within the variational family but requires performing optimization for each data point. AVI has fast inference, but having the variational parameters be a parametric function of the input may be too strict of a restriction. As a secondary effect this may militate against learning a good generative model since its parameters may be updated based on suboptimal variational parameters. Cremer et al. (2018) observe that the amortization gap (the gap between the log-likelihood and the ELBO due to amortization) can be significant for VAEs, especially on complex datasets.\nRecent work has targeted this amortization gap by combining amortized inference with iterative refinement during training (Hjelm et al., 2016; Krishnan et al., 2018). These methods use an encoder to initialize the local variational parameters, and then subsequently run an iterative procedure to refine them. To train with this hybrid approach, they utilize a separate training time objective. For example Hjelm et al. (2016) train the inference network to minimize the KL-divergence between the initial and the final variational distributions, while Krishnan et al. (2018) train the inference network with the usual ELBO objective based on the initial variational distribution.\nIn this work, we address the train/test objective mismatch and consider methods for training semi-amortized variational autoencoders (SA-VAE) in a fully end-to-end manner. We propose an approach that leverages differentiable optimization (Domke, 2012; Maclaurin et al., 2015; Belanger et al., 2017) and differentiates through SVI while training the inference network/generative model. We find that this method is able to both improve estimation of variational parameters and produce better generative models.\nWe apply our approach to train deep generative models of text and images, and observe that they outperform autoregressive/VAE/SVI baselines, in addition to direct baselines that combine VAE with SVI but do not perform end-to-end training. We also find that under our framework, we are able to utilize a powerful generative model without experiencing the “posterior-collapse” phenomenon often observed in VAEs, wherein the variational posterior collapses to the prior and the generative model ignores the latent variable (Bowman et al., 2016; Chen et al., 2017; Zhao et al., 2017). This problem has particularly made it very difficult to utilize VAEs for text, an important open issue in the field. With SA-VAE, we are able to outperform an LSTM language model by utilizing an LSTM generative model that maintains non-trivial latent representations. Code is available at https://github.com/harvardnlp/sa-vae."
+  }, {
+    "heading": "2. Background",
+    "text": "Notation Let f : Rn → R be a scalar valued function with partitioned inputs u = [u1, . . . ,um] such that∑m i=1 dim(ui) = n. With a slight abuse of notation we define f(u1, . . . ,um) = f([u1, . . . ,um]). We denote ∇uif(û) ∈ Rdim(ui) to be the i-th block of the gradient of f evaluated at û = [û1, . . . , ûm], and further use dfdv to denote the total derivative of f with respect to v, which exists if u is a differentiable function of v. Note that in general ∇uif(û) 6= df dui\nsince other components of u could be a function of ui.1 We also let Hui,ujf(û) ∈ Rdim(ui)×dim(uj) be the matrix formed by taking the i-th group of rows and the j-th group of columns of the Hessian of f evaluated at û. These definitions generalize straightforwardly when f : Rn → Rp is a vector-valued function (e.g. dfdu ∈ R n×p).2"
+  }, {
+    "heading": "2.1. Variational Inference",
+    "text": "Consider the following generative process for x,\nz ∼ p(z) x ∼ p(x | z; θ)\nwhere p(z) is the prior and p(x | z; θ) is given by a generative model with parameters θ. As maximizing the loglikelihood log p(x; θ) = log ∫ z p(x | z; θ)p(z)dz is usually intractable, variational inference instead defines a variational family of distributions q(z;λ) parameterized by λ and maximizes the evidence lower bound (ELBO)\nlog p(x; θ) ≥ Eq(z;λ)[log p(x | z)]−KL[q(z;λ) ‖ p(z)] = ELBO(λ, θ,x)\nThe variational posterior, q(z;λ), is said to collapse to the prior if KL[q(z;λ) ‖ p(z)] ≈ 0. In the general case we are\n1This will indeed be the case in our approach: when we calculate ELBO(λK , θ,x), λK is a function of the data point x, the generative model θ, and the inference network φ (Section 3).\n2Total derivatives/Jacobians are usually denoted with row vectors but we denote them with column vectors for clearer notation.\ngiven a dataset x(1), . . . ,x(N) and need to find variational parameters λ(1), . . . , λ(N) and generative model parameters θ that jointly maximize ∑N i=1 ELBO(λ (i), θ,x(i))."
+  }, {
+    "heading": "2.2. Stochastic Variational Inference",
+    "text": "We can apply SVI (Hoffman et al., 2013) with gradient ascent to approximately maximize the above objective:3\n1. Sample x ∼ pD(x) 2. Randomly initialize λ0 3. For k = 0, . . . ,K − 1, set λk+1 = λk + α∇λ ELBO(λk, θ,x) 4. Update θ based on ∇θ ELBO(λK , θ,x)\nHere K is the number of SVI iterations and α is the learning rate. (Note that θ is updated based on the gradient ∇θ ELBO(λK , θ,x) and not the total derivative dELBO(λK ,θ,x) dθ . The latter would take into account the fact that λk is a function of θ for k > 0.)\nSVI optimizes directly for instance-specific variational distributions, but may require running iterative inference for a large number of steps. Further, because of this block coordinate ascent approach the variational parameters λ are optimized separately from θ, potentially making it difficult for θ to adapt to local optima."
+  }, {
+    "heading": "2.3. Amortized Variational Inference",
+    "text": "AVI uses a global parametric model to predict the local variational parameters for each data point. A particularly popular application of AVI is in training the variational autoencoder (VAE) (Kingma & Welling, 2014), which runs an inference network (i.e. encoder) enc(·) parameterized by φ over the input to obtain the variational parameters:\n1. Sample x ∼ pD(x) 2. Set λ = enc(x;φ)\n3. Update θ based on ∇θ ELBO(λ, θ,x) (which in this case is equal to the total derivative)\n4. Update φ based on\ndELBO(λ, θ,x)\ndφ =\ndλ dφ ∇λ ELBO(λ, θ,x)\nThe inference network is learned jointly alongside the generative model with the same loss function, allowing the pair to coadapt. Additionally inference for AVI involves running the inference network over the input, which is usually much faster than running iterative optimization on the ELBO. Despite these benefits, requiring the variational parameters to be a parametric function of the input may be too strict of a\n3While we describe the various algorithms for a specific data point, in practice we use mini-batches.\nrestriction and can lead to an amortization gap. This gap can propagate forward to hinder the learning of the generative model if θ is updated based on suboptimal λ."
+  }, {
+    "heading": "3. Semi-Amortized Variational Autoencoders",
+    "text": "Semi-amortized variational autoencoders (SA-VAE) utilize an inference network over the input to give the initial variational parameters, and subsequently run SVI to refine them. One might appeal to the universal approximation theorem (Hornik et al., 1989) and question the necessity of additional SVI steps given a rich-enough inference network. However, in practice we find that the variational parameters found from VAE are usually not optimal even with a powerful inference network, and the amortization gap can be significant especially on complex datasets (Cremer et al., 2018; Krishnan et al., 2018).\nSA-VAE models are trained using a combination of AVI and SVI steps:\n1. Sample x ∼ pD(x) 2. Set λ0 = enc(x;φ)\n3. For k = 0, . . . ,K − 1, set λk+1 = λk + α∇λ ELBO(λk, θ,x)\n4. Update θ based on dELBO(λK ,θ,x)dθ\n5. Update φ based on dELBO(λK ,θ,x)dφ Note that for training we need to compute the total derivative of the final ELBO with respect to θ, φ (i.e. steps 4 and 5 above). Unlike with AVI, in order to update the encoder and generative model parameters, this total derivative requires backpropagating through the SVI updates. Specifically this requires backpropagating through gradient ascent (Domke, 2012; Maclaurin et al., 2015).\nFollowing past work, this backpropagation step can be done efficiently with fast Hessian-vector products (LeCun et al., 1993; Pearlmutter, 1994). In particular, consider the case where we perform one step of refinement, λ1 = λ0 + α∇λ ELBO(λ0, θ,x), and for brevity let L = ELBO(λ1, θ,x). To backpropagate through this, we receive the derivative dLdλ1 and use the chain rule,\ndL dλ0 = dλ1 dλ0 dL dλ1 = (I+ αHλ,λ ELBO(λ0, θ,x)) dL dλ1\n= dL dλ1 + αHλ,λ ELBO(λ0, θ,x) dL dλ1\nWe can then backpropagate dLdλ0 through the inference network to calculate the total derivative, i.e. dLdφ = dλ0 dφ dL dλ0\n. Similar rules can be used to derive dLdθ .\n4 The full forward/backward step, which uses gradient descent with momentum on the negative ELBO, is shown in Algorithm 1.\n4We refer the reader to Domke (2012) for the full derivation.\nAlgorithm 1 Semi-Amortized Variational Autoencoders Input: inference network φ, generative model θ,\ninference steps K, learning rate α, momentum γ, loss function f(λ, θ,x) = −ELBO(λ, θ,x)\nSample x ∼ pD(x) λ0 ← enc(x;φ) v0 ← 0 for k = 0 to K − 1 do vk+1 ← γvk −∇λf(λk, θ,x) λk+1 ← λk + αvk+1 end for L ← f(λK , θ,x) λK ← ∇λf(λK , θ,x) θ ← ∇θf(λK , θ,x) vK ← 0 for k = K − 1 to 0 do vk+1 ← vk+1 + αλk+1 λk ← λk+1 −Hλ,λf(λk, θ,x)vk+1 θ ← θ −Hθ,λf(λk, θ,x)vk+1 vk ← γvk+1 end for dL dθ ← θ dL dφ ← dλ0 dφ λ0 Update θ, φ based on dLdθ , dL dφ\nIn our implementation we calculate Hessian-vector products with finite differences (LeCun et al., 1993; Domke, 2012), which was found to be more memory-efficient than automatic differentiation (and therefore crucial for scaling our approach to rich inference networks/generative models). Specifically, we estimate Hui,ujf(û)v with\nHui,ujf(û)v ≈ 1 ( ∇uif(û0, . . . , ûj + v, . . . , ûm)\n−∇uif(û0, . . . , ûj . . . , ûm) )\nwhere is some small number (we use = 10−5).5 We further clip the results (i.e. rescale the results if the norm exceeds a threshold) before and after each Hessian-vector product as well as during SVI, which helped mitigate exploding gradients and further gave better training signal to the inference network.6 See Appendix A for details.\n5Since in our case the ELBO is a non-deterministic function due to sampling (and dropout, if applicable), care must be taken when calculating Hessian-vector product with finite differences to ensure that the source of randomness is the same when calculating the two gradient expressions.\n6Without gradient clipping, in addition to numerical issues we empirically observed the model to degenerate to a case whereby it learned to rely too much on iterative inference, and thus the initial parameters from the inference network were poor. Another way to provide better signal to the inference network is to train against a weighted sum ∑K k=0 wk ELBO(λk, θ,x) for wk ≥ 0."
+  }, {
+    "heading": "4. Experiments",
+    "text": "We apply our approach to train generative models on a synthetic dataset in addition to text/images. For all experiments we utilize stochastic gradient descent with momentum on the negative ELBO. Our prior is the spherical GaussianN (0, I) and the variational posterior is diagonal Gaussian, where the variational parameters are given by the mean vector and the diagonal log variance vector, i.e. λ = [µ, logσ2].\nIn preliminary experiments we also experimented with natural gradients, other optimization algorithms, and learning the learning rates, but found that these did not significantly improve results. Full details regarding hyperparameters/model architectures for all experiments are in Appendix B."
+  }, {
+    "heading": "4.1. Synthetic Data",
+    "text": "We first apply our approach to a synthetic dataset where we have access to the true underlying generative model of discrete sequences. We generate synthetic sequential data according to the following oracle generative process with 2-dimensional latent variables and xt:\nz1, z2 ∼ N (0, 1) ht = LSTM(ht−1,xt) xt+1 ∼ softmax(MLP([ht, z1, z2]))\nWe initialize the LSTM/MLP randomly as θ, where the LSTM has a single layer with hidden state/input dimension equal to 100. We generate for 5 time steps (so each example is given by x = [x1, . . . ,x5]) with a vocabulary size of 1000 for each xt. Training set consists of 5000 points. See Appendix B.1 for the exact setup.\nWe fix this oracle generative model p(x | z; θ) and learn an inference network (also a one-layer LSTM) with VAE and SA-VAE.7 For a randomly selected test point, we plot the\n7With a fixed oracle, these models are technically not VAEs as VAE usually implies that the the generative model is learned (alongside the encoder).\nELBO landscape in Figure 1 as a function of the variational posterior means (µ1, µ2) learned from the different methods. For SVI/SA-VAE we run iterative optimization for 20 steps. Finally we also show the optimal variational parameters found from grid search.\nAs can be seen from Figure 1, the variational parameters from running SA-VAE are closest to the optimum while those obtained from SVI and VAE are slightly further away. In Table 1 we show the variational upper bounds (i.e. negative ELBO) on the negative log-likelihood (NLL) from training the various models with both the oracle/learned generative model, and find that SA-VAE outperforms VAE/SVI in both cases."
+  }, {
+    "heading": "4.2. Text",
+    "text": "The next set of experiments is focused on text modeling on the Yahoo questions corpus from Yang et al. (2017). Text modeling with deep generative models has been a challenging problem, and few approaches have been shown to produce rich generative models that do not collapse to standard language models. Ideally a deep generative model trained with variational inference would make use of the latent space (i.e. maintain a nonzero KL term) while accurately modeling the underlying distribution.\nOur architecture and hyperparameters are identical to the LSTM-VAE baselines considered in Yang et al. (2017), except that we train with SGD instead of Adam, which was found to perform better for training LSTMs. Specifically, both the inference network and the generative model are onelayer LSTMs with 1024 hidden units and 512-dimensional word embeddings. The last hidden state of the encoder is used to predict the vector of variational posterior means/log variances. The sample from the variational posterior is used to predict the initial hidden state of the generative LSTM and additionally fed as input at each time step. The latent variable is 32-dimensional. Following previous works (Bowman et al., 2016; Sønderby et al., 2016; Yang et al., 2017), for all the variational models we utilize a KL-cost annealing strategy whereby the multiplier on the KL term is increased linearly from 0.1 to 1.0 each batch over 10 epochs. Appendix B.2 has the full architecture/hyperparameters.\nIn addition to autoregressive/VAE/SVI baselines, we consider two other approaches that also combine amortized inference with iterative refinement. The first approach is from Krishnan et al. (2018), where the generative model takes a gradient step based on the final variational parameters and the inference network takes a gradient step based on the initial variational parameters, i.e. we update θ based on ∇θ ELBO(λK , θ,x) and update φ based on dλ0 dφ ∇λ ELBO(λ0, θ,x). The forward step (steps 1-3 in Section 3) is identical to SA-VAE. We refer to this baseline as VAE + SVI.\nIn the second approach, based on Salakhutdinov & Larochelle (2010) and Hjelm et al. (2016), we train the inference network to minimize the KL-divergence between the initial and the final variational distributions, keeping the latter fixed. Specifically, letting g(ν, ω) = KL[q(z; ν) ‖ q(z;ω)], we update θ based on ∇θ ELBO(λK , θ,x) and update φ based on dλ0 dφ ∇νg(λ0, λK). Note that the inference network is not updated based on dgdφ , which would take into account the fact that both λ0 and λK are functions of φ. We found g(λ0, λK) to perform better than the reverse direction g(λK , λ0). We refer to this setup as VAE + SVI + KL.\nResults from the various models are shown in Table 2. Our baseline models (LM/VAE/SVI in Table 2) are already quite strong and outperform the models considered in Yang et al. (2017). However models trained with VAE/SVI make neg-\nligible use of the latent variable and practically collapse to a language model, negating the benefits of using latent variables.8 In contrast, models that combine amortized inference with iterative refinement make use of the latent space and the KL term is significantly above zero.9 VAE + SVI and VAE + SVI + KL do not outperform a language model, and while SA-VAE only modestly outperforms it, to our knowledge this is one of the first instances in which we are able to train an LSTM generative model that does not ignore the latent code and outperforms a language model.\nOne might wonder if the improvements are coming from simply having a more flexible inference scheme at test time, rather than from learning a better generative model. To test this, for the various models we discard the inference network at test time and perform SVI for a variable number of steps from random initialization. The results are shown in Figure 2 (left). It is clear that the learned generative model (and the associated ELBO landscape) is quite different—it is not possible to train with VAE and perform SVI at test time to obtain the same performance as SA-VAE (although the performance of VAE does improve slightly from 62.7 to 62.3 when we run SVI for 40 steps from random initialization).\nFigure 2 (right) has the results for a similar experiment where we refine the variational parameters initialized from the inference network for a variable number of steps at test time. We find that the inference network provides better initial parameters than random initialization and thus requires fewer iterations of SVI to reach the optimum. We do not observe improvements for running more refinement steps than was used in training at test time. Interestingly, SA-VAE without any refinement steps at test time has a substantially nonzero KL term (KL = 6.65, PPL = 62.0). This indicates that the posterior-collapse phenomenon when\n8Models trained with word dropout (+ WORD-DROP in Table 2) do make use of the latent space but significantly underperform a language model.\n9A high KL term does not necessarily imply that the latent variable is being utilized in a meaningful way (it could simply be due to bad optimization). In Section 5.1 we investigate the learned latent space in more detail.\ntraining LSTM-based VAEs for text is partially due to optimization issues. Finally, while Yang et al. (2017) found that initializing the encoder with a pretrained language model improved performance (+ INIT in Table 2), we did not observe this on our baseline VAE model when we trained with SGD and hence did not pursue this further."
+  }, {
+    "heading": "4.3. Images",
+    "text": "We next apply our approach to model images on the OMNIGLOT dataset (Lake et al., 2015).10 While posterior collapse is less of an issue for VAEs trained on images, we still expect that improving the amortization gap would result in generative models that better model the underlying data and make more use of the latent space. We use a three-layer ResNet (He et al., 2016) as our inference network. The generative model first transforms the 32-dimensional latent vector to the image spatial resolution, which is concatenated with the original image and fed to a 12-layer Gated PixelCNN (van den Oord et al., 2016) with varying filter sizes, followed by a final sigmoid layer. We employ the same KL-cost annealing schedule as in the text experiments. See Appendix B.3 for the exact architecture/hyperparameters.\nResults from the various models are shown in Table 3. Our findings are largely consistent with results from text: the semi-amortized approaches outperform VAE/SVI baselines, and further they learn generative models that make more\n10We focus on the more complex OMNIGLOT dataset instead of the simpler MNIST dataset as prior work has shown that the amortization gap on MNIST is minimal (Cremer et al., 2018).\nuse of the latent representations (i.e. KL portion of the loss is higher). Even with 80 steps of SVI we are unable to perform as well as SA-VAE trained with 10 refinement steps, indicating the importance of good initial parameters provided by the inference network. In Appendix C we further investigate the performance of VAE and SA-VAE as we vary the training set size and the capacity of the inference network/generative model. We find that SA-VAE outperforms VAE and has higher latent variable usage in all scenarios. We note that we do not outperform the state-of-the-art models that employ hierarchical latent variables and/or more sophisticated priors (Chen et al., 2017; Tomczak & Welling, 2018). However these additions are largely orthogonal to our approach and we hypothesize they will also benefit from combining amortized inference with iterative refinement.11"
+  }, {
+    "heading": "5. Discussion",
+    "text": ""
+  }, {
+    "heading": "5.1. Learned Latent Space",
+    "text": "For the text model we investigate what the latent variables are learning through saliency analysis with our best model (SA-VAE trained with 20 steps). Specifically, we calculate the output saliency of each token xt with respect to z as\nEq(z;λ) [ ∥∥∥ d log p(xt |x<t, z; θ)\ndz\n∥∥∥ 2 ] where ‖ · ‖2 is the l2 norm and the expectation is approximated with 5 samples from the variational posterior. Saliency is therefore a measure of how much the latent variable is being used to predict a particular token.\nWe visualize the saliency of a few examples from the test set in Figure 3 (top). Each example consists of a question followed by an answer from the Yahoo corpus. From a qualitative analysis several things are apparent: the latent variable seems to encode question type (i.e. if, what, how, why, etc.) and therefore saliency is high for the first word; content words (nouns, adjectives, lexical verbs) have much higher saliency than function words (determiners, prepositions, conjunctions, etc.); saliency of the </s> token is quite high, indicating that the length information is also encoded in the latent space. In the third example we observe that the left parenthesis has higher saliency than the right parenthesis (0.32 vs. 0.24 on average across the test set), as the latter can be predicted by conditioning on the former rather than on the latent representation z.\nThe previous definition of saliency measures the influence of z on the output xt. We can also roughly measure the influence of the input xt on the latent representation z, which we refer to as input saliency:∥∥∥Eq(z;λ)[d‖z‖2\ndwt\n] ∥∥∥ 2\n11Indeed, Cremer et al. (2018) observe that the amortization gap can be substantial for VAE trained with richer variational families.\nHere wt is the encoder word embedding for xt.12 We visualize the input saliency for a test example (Figure 3, middle) and a made-up example (Figure 3, bottom). Under each input example we also visualize a two samples from the variational posterior, and find that the generated examples are often meaningfully related to the input example.13\nWe quantitatively analyze output saliency across part-ofspeech, token position, word frequency, and log-likelihood in Figure 4: nouns (NN), adjectives (JJ), verbs (VB), numbers (CD), and the </s> token have higher saliency than conjunctions (CC), determiners (DT), prepositions (IN), and the TO token—the latter are relatively easier to predict by conditioning on previous tokens; similarly, on average, tokens occurring earlier have much higher saliency than those\n12As the norm of z is a rather crude measure, a better measure would be obtained by analyzing the spectra of the Jacobian dz\ndwt .\nHowever this is computationally too expensive to calculate for each token in the corpus.\n13We first sample z ∼ q(z;λK) then x ∼ p(x | z; θ). When sampling xt ∼ p(xt |x<t, z) we sample with temperature T = 0.25, i.e. p(xt |x<t, z) = softmax( 1T st) where st is the vector with scores for all words. We found the generated examples to be related to the original (in some way) in roughly half the cases.\noccurring later (Figure 4 shows absolute position but the plot is similar with relative position); the latent variable is used much more when predicting rare tokens; there is some negative correlation between saliency and log-likelihood (-0.51), though this relationship does not always hold—e.g. </s> has high saliency but is relatively easy to predict with an average log-likelihood of -1.61 (vs. average log-likelihood of -4.10 for all tokens). Appendix D has the corresponding analysis for input saliency, which are qualitatively similar.\nThese results seem to suggest that the latent variables are encoding interesting and potentially interpretable aspects of language. While left as future work, it is possible that manipulations in the latent space of a model learned this way could lead to controlled generation/manipulation of output text (Hu et al., 2017; Mueller et al., 2017)."
+  }, {
+    "heading": "5.2. Limitations",
+    "text": "A drawback of our approach (and other non-amortized inference methods) is that each training step requires backpropagating through the generative model multiple times, which can be costly especially if the generative model is expensive to compute (e.g. LSTM/PixelCNN). This may potentially be mitigated through more sophisticated meta learning ap-\nproaches (Andrychowicz et al., 2016; Marino et al., 2018), or with more efficient use of the past gradient information during SVI via averaging (Schmidt et al., 2013) or importance sampling (Sakaya & Klami, 2017). One could also consider employing synthetic gradients (Jaderberg et al., 2017) to limit the number of backpropagation steps during training. Krishnan et al. (2018) observe that it is more important to train with iterative refinement during earlier stages (we also observed this in preliminary experiments), and therefore annealing the number of refinement steps as training progresses could also speed up training.\nOur approach is mainly applicable to variational families that avail themselves to differentiable optimization (e.g. gradient ascent) with respect to the ELBO, which include much recent work on employing more flexible variational families with VAEs. In contrast, VAE + SVI and VAE + SVI + KL are applicable to more general optimization algorithms."
+  }, {
+    "heading": "6. Related Work",
+    "text": "Our work is most closely related the line of work which uses a separate model to initialize variational parameters and subsequently updates them through an iterative procedure (Salakhutdinov & Larochelle, 2010; Cho et al., 2013; Salimans et al., 2015; Hjelm et al., 2016; Krishnan et al., 2018; Pu et al., 2017). Marino et al. (2018) utilize meta-learning to train an inference network which learns to perform iterative inference by training a deep model to output the variational parameters for each time step.\nWhile differentiating through inference/optimization was initially explored by various researchers primarily outside the area of deep learning (Stoyanov et al., 2011; Domke, 2012; Brakel et al., 2013), they have more recently been explored in the context of hyperparameter optimization (Maclaurin et al., 2015) and as a differentiable layer of a deep model (Belanger et al., 2017; Kim et al., 2017; Metz et al., 2017; Amos & Kolter, 2017).\nInitial work on VAE-based approaches to image modeling focused on simple generative models that assumed independence among pixels conditioned on the latent variable (Kingma & Welling, 2014; Rezende et al., 2014). More recent works have obtained substantial improvements in loglikelihood and sample quality through utilizing powerful autoregressive models (PixelCNN) as the generative model (Chen et al., 2017; Gulrajani et al., 2017).\nIn contrast, modeling text with VAEs has remained challenging. Bowman et al. (2016) found that using an LSTM generative model resulted in a degenerate case whereby the variational posterior collapsed to the prior and the generative model ignored the latent code (even with richer variational families). Many works on VAEs for text have thus made simplifying conditional independence assumptions (Miao et al., 2016; 2017), used less powerful generative models such as convolutional networks (Yang et al., 2017; Semeniuta et al., 2017), or combined a recurrent generative model with a topic model (Dieng et al., 2017; Wang et al., 2018). Note that unlike to sequential VAEs that employ different latent variables at each time step (Chung et al., 2015; Fraccaro et al., 2016; Krishnan et al., 2017; Serban et al., 2017; Goyal et al., 2017a), in this work we focus on modeling the entire sequence with a global latent variable.\nFinally, since our work only addresses the amortization gap (the gap between the log-likelihood and the ELBO due to amortization) and not the approximation gap (due to the choice of a particular variational family) (Cremer et al., 2018), it can be combined with existing work on employing richer posterior/prior distributions within the VAE framework (Rezende & Mohamed, 2015; Kingma et al., 2016; Johnson et al., 2016; Tran et al., 2016; Goyal et al., 2017b; Guu et al., 2017; Tomczak & Welling, 2018)."
+  }, {
+    "heading": "7. Conclusion",
+    "text": "This work outlines semi-amortized variational autoencoders, which combine amortized inference with local iterative refinement to train deep generative models of text and images. With the approach we find that we are able to train deep latent variable models of text with an expressive autogressive generative model that does not ignore the latent code.\nFrom the perspective of learning latent representations, one might question the prudence of using an autoregressive model that fully conditions on its entire history (as opposed to assuming some conditional independence) given that p(x) can always be factorized as ∏T t=1 p(xt |x<t), and therefore the model is non-identifiable (i.e. it does not have to utilize the latent variable). However in finite data regimes we might still expect a model that makes use of its latent variable to generalize better due to potentially better inductive bias (from the latent variable). Training generative models that both model the underlying data well and learn good latent representations is an important avenue for future work."
+  }, {
+    "heading": "Acknowledgements",
+    "text": "We thank Rahul Krishnan, Rachit Singh, and Justin Chiu for insightful comments/discussion. We additionally thank Zichao Yang for providing the text dataset. YK and AM are supported by Samsung Research. SW is supported by an Amazon AWS ML Award."
+  }],
+  "references": [{
+    "title": "OptNet: Differentiable Optimization as a Layer in Neural Networks",
+    "authors": ["Amos", "Brandon", "Kolter", "J. Zico"],
+    "venue": "In Proceedings of ICML,",
+    "year": 2017
+  }, {
+    "title": "Learning to Learn by Gradient Descent by Gradient Descent",
+    "authors": ["Andrychowicz", "Marcin", "Denil", "Misha", "Gomez", "Sergio", "Hoffman", "Matthew", "Pfau", "David", "Schaul", "Tom", "de Freitas", "Nando"],
+    "venue": "In Proceedings of NIPS,",
+    "year": 2016
+  }, {
+    "title": "End-toend Learning for Structured Prediction Energy Networks",
+    "authors": ["Belanger", "David", "Yang", "Bishan", "McCallum", "Andrew"],
+    "venue": "In Proceedings of ICML,",
+    "year": 2017
+  }, {
+    "title": "Variational inference: A review for statisticians",
+    "authors": ["Blei", "David M", "Kucukelbir", "Alp", "McAuliffe", "Jon D"],
+    "venue": "Journal of the American Statistical Association,",
+    "year": 2017
+  }, {
+    "title": "Generating Sentences from a Continuous Space",
+    "authors": ["Bowman", "Samuel R", "Vilnis", "Luke", "Vinyal", "Oriol", "Dai", "Andrew M", "Jozefowicz", "Rafal", "Bengio", "Samy"],
+    "venue": "In Proceedings of CoNLL,",
+    "year": 2016
+  }, {
+    "title": "Training Energy-Based Models for Time-Series Imputation",
+    "authors": ["Brakel", "Philemon", "Stroobandt", "Dirk", "Schrauwen", "Benjamin"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2013
+  }, {
+    "title": "Importance Weighted Autoencoders",
+    "authors": ["Burda", "Yuri", "Grosse", "Roger", "Salakhutdinov", "Ruslan"],
+    "venue": "In Proceedings of ICLR,",
+    "year": 2015
+  }, {
+    "title": "Accurate and Conservative Estimates of MRF Log-likelihood using Reverse Annealing",
+    "authors": ["Burda", "Yuri", "Grosse", "Roger", "Salakhutdinov", "Ruslan"],
+    "venue": "In Proceedings of AISTATS,",
+    "year": 2015
+  }, {
+    "title": "Variational Lossy Autoencoder",
+    "authors": ["Chen", "Xi", "Kingma", "Diederik P", "Salimans", "Tim", "Duan", "Yan", "Dhariwal", "Prafulla", "Schulman", "John", "Sutskever", "Ilya", "Abbeel", "Pieter"],
+    "venue": "In Proceedings of ICLR,",
+    "year": 2017
+  }, {
+    "title": "A Two-Stage Pretraining Algorithm for Deep Boltzmann Machines",
+    "authors": ["Cho", "Kyunghyun", "Raiko", "Tapani", "Ilin", "Alexander", "Karhunen", "Juha"],
+    "venue": "In Proceedings of ICANN,",
+    "year": 2013
+  }, {
+    "title": "A Recurrent Latent Variable Model for Sequential Data",
+    "authors": ["Chung", "Junyoung", "Kastner", "Kyle", "Dinh", "Laurent", "Goel", "Kratarth", "Courville", "Aaron", "Bengio", "Yoshua"],
+    "venue": "In Proceedings of NIPS,",
+    "year": 2015
+  }, {
+    "title": "Inference Suboptimality in Variational Autoencoders",
+    "authors": ["Cremer", "Chris", "Li", "Xuechen", "Duvenaud", "David"],
+    "venue": "In Proceedings of ICML,",
+    "year": 2018
+  }, {
+    "title": "TopicRNN: A Recurrent Neural Network With Long-Range Semantic Dependency",
+    "authors": ["Dieng", "Adji B", "Wang", "Chong", "Gao", "Jianfeng", "Paisley", "John"],
+    "venue": "In Proceedings of ICLR,",
+    "year": 2017
+  }, {
+    "title": "Generic Methods for Optimization-based Modeling",
+    "authors": ["Domke", "Justin"],
+    "venue": "In Proceedings of AISTATS,",
+    "year": 2012
+  }, {
+    "title": "Sequential Neural Models with Stochastic Layers",
+    "authors": ["Fraccaro", "Marco", "Sonderby", "Soren Kaae", "Paquet", "Ulrich", "Winther", "Ole"],
+    "venue": "In Proceedings of NIPS,",
+    "year": 2016
+  }, {
+    "title": "Propagation algorithms for variational bayesian learning",
+    "authors": ["Ghahramani", "Zoubin", "Beal", "Matthew"],
+    "venue": "In Proceedings of NIPS,",
+    "year": 2001
+  }, {
+    "title": "Z-Forcing: Training Stochastic Recurrent Networks",
+    "authors": ["Goyal", "Anirudh", "Sordoni", "Alessandro", "Cote", "Marc-Alexandre", "Ke", "Nan Rosemary", "Bengio", "Yoshua"],
+    "venue": "In Proceedings of NIPS,",
+    "year": 2017
+  }, {
+    "title": "Nonparametric Variational Auto-encoders for Hierarchical Representation Learning",
+    "authors": ["Goyal", "Prasoon", "Hu", "Zhiting", "Liang", "Xiaodan", "Wang", "Chenyu", "Xing", "Eric"],
+    "venue": "In Proceedings of ICCV,",
+    "year": 2017
+  }, {
+    "title": "DRAW: A Recurrent Neural Network for Image Generation",
+    "authors": ["Gregor", "Karol", "Danihelka", "Ivo", "Graves", "Alex", "Rezende", "Danilo Jimenez", "Wierstra", "Daan"],
+    "venue": "In Proceedings of ICML,",
+    "year": 2015
+  }, {
+    "title": "Towards Conceptual Compression",
+    "authors": ["Gregor", "Karol", "Besse", "Frederic", "Rezende", "Danilo Jimenez", "Danihelka", "Ivo", "Wierstra", "Daan"],
+    "venue": "In Proceedings of NIPS,",
+    "year": 2016
+  }, {
+    "title": "PixelVAE: A Latent Variable Model for Natural Images",
+    "authors": ["Gulrajani", "Ishaan", "Kumar", "Kundan", "Ahmed", "Faruk", "Taiga", "Adrien Ali", "Visin", "Francesco", "Vazquez", "David", "Courville", "Aaron"],
+    "venue": "In Proceedings of ICLR,",
+    "year": 2017
+  }, {
+    "title": "Generating Sentences by Editing Prototypes",
+    "authors": ["Guu", "Kelvin", "Hashimoto", "Tatsunori B", "Oren", "Yonatan", "Liang", "Percy"],
+    "year": 2017
+  }, {
+    "title": "Deep residual learning for image recognition",
+    "authors": ["He", "Kaiming", "Zhang", "Xiangyu", "Ren", "Shaoqing", "Sun", "Jian"],
+    "venue": "In Proceedings of CVPR,",
+    "year": 2016
+  }, {
+    "title": "Iterative Refinement of the Approximate Posterior for Directed Belief Networks",
+    "authors": ["Hjelm", "R Devon", "Cho", "Kyunghyun", "Chung", "Junyoung", "Salakhutdinov", "Russ", "Calhoun", "Vince", "Jojic", "Nebojsa"],
+    "venue": "In Proceedings of NIPS,",
+    "year": 2016
+  }, {
+    "title": "Stochastic Variational Inference",
+    "authors": ["Hoffman", "Matthew D", "Blei", "David M", "Wang", "Chong", "Paisley", "John"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2013
+  }, {
+    "title": "Multilayer Feedforward Networks are Universal Approximators",
+    "authors": ["Hornik", "Kur", "Stinchcombe", "Maxwell", "White", "Halber"],
+    "venue": "Neural Networks,",
+    "year": 1989
+  }, {
+    "title": "Toward Controlled Generation of Text",
+    "authors": ["Hu", "Zhiting", "Yang", "Zichao", "Liang", "Xiaodan", "Salakhutdinov", "Ruslan", "Xing", "Eric P"],
+    "venue": "In Proceedings of ICML,",
+    "year": 2017
+  }, {
+    "title": "Decoupled Neural Interfaces using Synthetic Gradients",
+    "authors": ["Jaderberg", "Max", "Czarnecki", "Wojciech Marian", "Osindero", "Simon", "Vinyals", "Oriol", "Graves", "Alex", "Silver", "David", "Kavukcuoglu", "Koray"],
+    "venue": "In Proceedings of ICML,",
+    "year": 2017
+  }, {
+    "title": "Composing Graphical Models with Neural Networks for Structured Representations and Fast Inference",
+    "authors": ["Johnson", "Matthew", "Duvenaud", "David K", "Wiltschko", "Alex", "Adams", "Ryan P", "Datta", "Sandeep R"],
+    "venue": "In Proceedings of NIPS,",
+    "year": 2016
+  }, {
+    "title": "Introduction to Variational Methods for Graphical Models",
+    "authors": ["Jordan", "Michael", "Ghahramani", "Zoubin", "Jaakkola", "Tommi", "Saul", "Lawrence"],
+    "venue": "Machine Learning,",
+    "year": 1999
+  }, {
+    "title": "Structured Attention Networks",
+    "authors": ["Kim", "Yoon", "Denton", "Carl", "Hoang", "Luong", "Rush", "Alexander M"],
+    "venue": "In Proceedings of ICLR,",
+    "year": 2017
+  }, {
+    "title": "Auto-Encoding Variational Bayes",
+    "authors": ["Kingma", "Diederik P", "Welling", "Max"],
+    "venue": "In Proceedings of ICLR,",
+    "year": 2014
+  }, {
+    "title": "Improving Variational Inference with Autoregressive Flow",
+    "authors": ["Kingma", "Diederik P", "Salimans", "Tim", "Welling", "Max"],
+    "venue": "In Proceedings of ICLR Workshop,",
+    "year": 2016
+  }, {
+    "title": "Structured Inference Networks for Nonlinear State Space Models",
+    "authors": ["Krishnan", "Rahul G", "Shalit", "Uri", "Sontag", "David"],
+    "venue": "In Proceedings of AAAI,",
+    "year": 2017
+  }, {
+    "title": "On the Challenges of Learning with Inference Networks on Sparse, High-dimensional Data",
+    "authors": ["Krishnan", "Rahul G", "Liang", "Dawen", "Hoffman", "Matthew"],
+    "venue": "In Proceedings of AISTATS,",
+    "year": 2018
+  }, {
+    "title": "Human-level Concept Learning through Probabilistic Program Induction",
+    "authors": ["Lake", "Brendan M", "Salakhutdinov", "Ruslan", "Tenenbaum", "Joshua B"],
+    "venue": "Science, 350:1332–1338,",
+    "year": 2015
+  }, {
+    "title": "Automatic Learning Rate Maximization by On-line Estimation of the Hessians Eigenvectors",
+    "authors": ["LeCun", "Yann", "Simard", "Patrice", "Pearlmutter", "Barak"],
+    "venue": "In Proceedings of NIPS,",
+    "year": 1993
+  }, {
+    "title": "Gradient-based Hyperparameter Optimization through Reversible Learning",
+    "authors": ["Maclaurin", "Dougal", "Duvenaud", "David", "Adams", "Ryan P"],
+    "venue": "In Proceedings of ICML,",
+    "year": 2015
+  }, {
+    "title": "Iterative Amortized Inference",
+    "authors": ["Marino", "Joseph", "Yue", "Yisong", "Mandt", "Stephan"],
+    "venue": "In Proceedings of ICML,",
+    "year": 2018
+  }, {
+    "title": "Unrolled Generative Adversarial Networks",
+    "authors": ["Metz", "Luke", "Poole", "Ben", "Pfau", "David", "Sohl-Dickstein", "Jascha"],
+    "venue": "In Proceedings of ICLR,",
+    "year": 2017
+  }, {
+    "title": "Neural Variational Inference for Text Processing",
+    "authors": ["Miao", "Yishu", "Yu", "Lei", "Blunsom", "Phil"],
+    "venue": "In Proceedings of ICML,",
+    "year": 2016
+  }, {
+    "title": "Discovering Discrete Latent Topics with Neural Variational Inference",
+    "authors": ["Miao", "Yishu", "Grefenstette", "Edward", "Blunsom", "Phil"],
+    "venue": "In Proceedings of ICML,",
+    "year": 2017
+  }, {
+    "title": "Neural Variational Inference and Learning in Belief Networks",
+    "authors": ["Mnih", "Andryi", "Gregor", "Karol"],
+    "venue": "In Proceedings of ICML,",
+    "year": 2014
+  }, {
+    "title": "Sequence to Better Sequence: Continuous Revision of Combinatorial Structures",
+    "authors": ["Mueller", "Jonas", "Gifford", "David", "Jaakkola", "Tommi"],
+    "venue": "In Proceedings of ICML,",
+    "year": 2017
+  }, {
+    "title": "Fast exact multiplication by the hessian",
+    "authors": ["Pearlmutter", "Barak A"],
+    "venue": "Neural Computation,",
+    "year": 1994
+  }, {
+    "title": "VAE Learning via Stein Variational Gradient Descent",
+    "authors": ["Pu", "Yunchen", "Gan", "Zhe", "Henao", "Ricardo", "Li", "Chunyuan", "Han", "Shaobo", "Carin", "Lawrence"],
+    "venue": "In Proceedings of NIPS,",
+    "year": 2017
+  }, {
+    "title": "Hierarchical Variational Models",
+    "authors": ["Ranganath", "Rajesh", "Tran", "Dustin", "Blei", "David M"],
+    "venue": "In Proceedings of ICML,",
+    "year": 2016
+  }, {
+    "title": "Variational Inference with Normalizing Flows",
+    "authors": ["Rezende", "Danilo J", "Mohamed", "Shakir"],
+    "venue": "In Proceedings of ICML,",
+    "year": 2015
+  }, {
+    "title": "Stochastic Backpropagation and Approximate Inference in Deep Generative Models",
+    "authors": ["Rezende", "Danilo Jimenez", "Mohamed", "Shakir", "Wierstra", "Daan"],
+    "venue": "In Proceedings of ICML,",
+    "year": 2014
+  }, {
+    "title": "Discrete Variational Autoencoders",
+    "authors": ["Rolfe", "Jason Tyler"],
+    "venue": "In Proceedings of ICLR,",
+    "year": 2017
+  }, {
+    "title": "Importance Sampled Stochastic Optimization for Variational Inference",
+    "authors": ["Sakaya", "Joseph", "Klami", "Arto"],
+    "venue": "In Proceedings of UAI,",
+    "year": 2017
+  }, {
+    "title": "Efficient Learning of Deep Boltzmann Machines",
+    "authors": ["Salakhutdinov", "Ruslan", "Larochelle", "Hugo"],
+    "venue": "In Proceedings of AISTATS,",
+    "year": 2010
+  }, {
+    "title": "Markov Chain Monte Carlo and Variational Inference: Bridging the Gap",
+    "authors": ["Salimans", "Tim", "Kingma", "Diederik", "Welling", "Max"],
+    "venue": "In Proceedings of ICML,",
+    "year": 2015
+  }, {
+    "title": "Minimizing Finite Sums with the Stochastic Average Gradient",
+    "authors": ["Schmidt", "Mark", "Roux", "Nicolas Le", "Bach", "Francis"],
+    "year": 2013
+  }, {
+    "title": "A Hybrid Convolutional Variational Autoencoder for Text Generation",
+    "authors": ["Semeniuta", "Stanislau", "Severyn", "Aliaksei", "Barth", "Erhardt"],
+    "venue": "In Proceedings of EMNLP,",
+    "year": 2017
+  }, {
+    "title": "A Hierarchical Latent Variable Encoder-Decoder Model for Generating Dialogues",
+    "authors": ["Serban", "Iulian Vlad", "Sordoni", "Alessandro", "Ryan Lowe", "Laurent Charlin", "Pineau", "Joelle", "Courville", "Aaron", "Bengio", "Yoshua"],
+    "venue": "In Proceedings of AAAI,",
+    "year": 2017
+  }, {
+    "title": "Ladder Variational Autoencoders",
+    "authors": ["Sønderby", "Casper Kaae", "Raiko", "Tapani", "Maaløe", "Lars", "Søren Kaae", "Winther", "Ole"],
+    "venue": "In Proceedings of NIPS,",
+    "year": 2016
+  }, {
+    "title": "Empirical Risk Minimization of Graphical Model Parameters Given Approximate Inference, Decoding, and Model Structure",
+    "authors": ["Stoyanov", "Veselin", "Ropson", "Alexander", "Eisner", "Jason"],
+    "venue": "In Proceedings of AISTATS,",
+    "year": 2011
+  }, {
+    "title": "VAE with a VampPrior",
+    "authors": ["Tomczak", "Jakub M", "Welling", "Max"],
+    "venue": "In Proceedings of AISTATS,",
+    "year": 2018
+  }, {
+    "title": "The Variational Gaussian Process",
+    "authors": ["Tran", "Dustin", "Ranganath", "Rajesh", "Blei", "David M"],
+    "venue": "In Proceedings of ICLR,",
+    "year": 2016
+  }, {
+    "title": "Conditional Image Generation with PixelCNN Decoders",
+    "authors": ["van den Oord", "Aaron", "Kalchbrenner", "Nal", "Vinyals", "Oriol", "Espeholt", "Lasse", "Graves", "Alex", "Kavukcuoglu", "Koray"],
+    "venue": "In Proceedings of NIPS,",
+    "year": 2016
+  }, {
+    "title": "Introduction to Variational Methods for Graphical Models",
+    "authors": ["Wainwright", "Martin J", "Jordan", "Michael I"],
+    "venue": "Foundations and Trends in Machine Learning,",
+    "year": 2008
+  }, {
+    "title": "Improved Variational Autoencoders for Text Modeling using Dilated Convolutions",
+    "authors": ["Yang", "Zichao", "Hu", "Zhiting", "Salakhutdinov", "Ruslan", "BergKirkpatrick", "Taylor"],
+    "venue": "In Proceedings of ICML,",
+    "year": 2017
+  }, {
+    "title": "Towards Deeper Understanding of Variational Autoencoding Models",
+    "authors": ["Zhao", "Shengjia", "Song", "Jiaming", "Ermon", "Stefano"],
+    "venue": "In Proceedings of ICML,",
+    "year": 2017
+  }],
+  "id": "SP:8df417ef66d34613dab5c7f9aa6df619df3ce74f",
+  "authors": [{
+    "name": "Yoon Kim",
+    "affiliations": []
+  }, {
+    "name": "Sam Wiseman",
+    "affiliations": []
+  }, {
+    "name": "Andrew C. Miller",
+    "affiliations": []
+  }, {
+    "name": "David Sontag",
+    "affiliations": []
+  }, {
+    "name": "Alexander M. Rush",
+    "affiliations": []
+  }],
+  "abstractText": "Amortized variational inference (AVI) replaces instance-specific local inference with a global inference network. While AVI has enabled efficient training of deep generative models such as variational autoencoders (VAE), recent empirical work suggests that inference networks can produce suboptimal variational parameters. We propose a hybrid approach, to use AVI to initialize the variational parameters and run stochastic variational inference (SVI) to refine them. Crucially, the local SVI procedure is itself differentiable, so the inference network and generative model can be trained end-to-end with gradient-based optimization. This semi-amortized approach enables the use of rich generative models without experiencing the posterior-collapse phenomenon common in training VAEs for problems like text generation. Experiments show this approach outperforms strong autoregressive and variational baselines on standard text and image datasets.",
+  "title": "Semi-Amortized Variational Autoencoders"
+}

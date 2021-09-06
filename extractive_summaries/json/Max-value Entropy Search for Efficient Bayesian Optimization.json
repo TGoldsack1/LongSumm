@@ -1,0 +1,202 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Bayesian optimization (BO) has become a popular and effective way for black-box optimization of nonconvex, expensive functions in robotics, machine learning, computer vision, and many other areas of science and engineering (Brochu et al., 2009; Calandra et al., 2014; Krause & Ong, 2011; Lizotte et al., 2007; Snoek et al., 2012; Thornton et al., 2013; Wang et al., 2017). In BO, a prior is posed on the (unknown) objective function, and the uncertainty given by the associated posterior is the basis for an acquisition function that guides the selection of the next point to query the function. The selection of queries and hence the acquisition function is critical for the success of the method.\nDifferent BO techniques differ in this acquisition function.\n1Computer Science and Artificial Intelligence Laboratory, Massachusetts Institute of Technology, Massachusetts, USA. Correspondence to: Zi Wang <ziw@csail.mit.edu>, Stefanie Jegelka <stefje@csail.mit.edu>.\nProceedings of the 34 th International Conference on Machine Learning, Sydney, Australia, PMLR 70, 2017. Copyright 2017 by the author(s).\nAmong the most popular ones range the Gaussian process upper confidence bound (GP-UCB) (Auer, 2002; Srinivas et al., 2010), probability of improvement (PI) (Kushner, 1964), and expected improvement (EI) (Moc̆kus, 1974). Particularly successful recent additions are entropy search (ES) (Hennig & Schuler, 2012) and predictive entropy search (PES) (Hernández-Lobato et al., 2014), which aim to maximize the mutual information between the queried points and the location of the global optimum.\nES and PES are effective in the sense that they are queryefficient and identify a good point within competitively few iterations, but determining the next query point involves very expensive computations. As a result, these methods are most useful if the black-box function requires a lot of effort to evaluate, and are relatively slow otherwise. Moreover, they rely on estimating the entropy of the arg max of the function. In high dimensions, this estimation demands a large number of samples from the input space, which can quickly become inefficient.\nWe propose a twist to the viewpoint of ES and PES that retains the information-theoretic motivation and empirically successful query-efficiency of those methods, but at a much reduced computational cost. The key insight is to replace the uncertainty about the arg max with the uncertainty about the maximum function value. As a result, we refer to our new method as Max-value Entropy Search (MES). As opposed to the arg max, the maximum function value lives in a one-dimensional space, which greatly facilitates the estimation of the mutual information via sampling. We explore two strategies to make the entropy estimation efficient: an approximation by a Gumbel distribution, and a Monte Carlo approach that uses random features.\nOur contributions are as follows: (1) MES, a variant of the entropy search methods, which enjoys efficient computation and simple implementation; (2) an intuitive analysis which establishes the first connection between ES/PES and the previously proposed criteria GP-UCB, PI and EST (Wang et al., 2016), where the bridge is formed by MES; (3) a regret bound for a variant of MES, which, to our knowledge, is the first regret bound established for any variant of the entropy search methods; (4) an extension of MES to the high dimensional settings via additive Gaussian processes; and (5) empirical evaluations which demon-\nstrate that MES identifies good points as quickly or better than ES/PES, but is much more efficient and robust in estimating the mutual information, and therefore much faster than its input-space counterparts.\nAfter acceptance of this work, we learned that Hoffman & Ghahramani (2015) independently arrived at the acquisition function in Eq. (5). Yet, our approximation (Eq. (6)) is different, and hence the actual acquisition function we evaluate and analyze is different."
+  }, {
+    "heading": "2. Background",
+    "text": "Our goal is to maximize a black-box function f : X → R where X ⊂ Rd and X is compact. At time step t, we select point xt and observe a possibly noisy function evaluation yt = f(xt) + t, where t ∼ N (0, σ2) are i.i.d. Gaussian variables. We use Gaussian processes (Rasmussen & Williams, 2006) to build a probabilistic model of the blackbox function to be optimized. For high dimensional cases, we use a variant of the additive Gaussian process (Duvenaud et al., 2011; Kandasamy et al., 2015). For completeness, we here introduce some basics of GP and add-GP."
+  }, {
+    "heading": "2.1. Gaussian Processes",
+    "text": "Gaussian processes (GPs) are distributions over functions, and popular priors for Bayesian nonparametric regression. In a GP, any finite set of function values has a multivariate Gaussian distribution. A Gaussian process GP (µ, k) is fully specified by a mean function µ(x) and covariance (kernel) function k(x,x′). Let f be a function sampled from GP (µ, k). Given the observations Dt = {(xτ , yτ )}tτ=1, we obtain the posterior mean µt(x) = kt(x) T(Kt+σ 2I)−1yt and posterior covariance kt(x,x ′) = k(x,x′)−kt(x)T(Kt+σ2I)−1kt(x′) of the function via the kernel matrix Kt = [k(xi,xj)]xi,xj∈Dt and kt(x) = [k(xi,x)]xi∈Dt (Rasmussen & Williams, 2006). The posterior variance is σ2t (x) = kt(x,x)."
+  }, {
+    "heading": "2.2. Additive Gaussian Processes",
+    "text": "Additive Gaussian processes (add-GP) were proposed in (Duvenaud et al., 2011), and analyzed in the BO setting in (Kandasamy et al., 2015). Following the latter, we assume that the function f is a sum of independent functions sampled from Gaussian processes that are active on disjoint sets Am of input dimensions. Precisely, f(x) = ∑M m=1 f\n(m)(xAm), with Ai ∩ Aj = ∅ for all i 6= j, | ∪Mi=1 Ai| = d, and f (m) ∼ GP (µ(m), k(m)), for all m ≤ M (M ≤ d < ∞). As a result of this decomposition, the function f is distributed according to GP ( ∑M m=1 µ (m), ∑M m=1 k\n(m)). Given a set of noisy observations Dt = {(xτ , yτ )}tτ=1 where yτ ∼ N (f(xτ ), σ2), the posterior mean and\ncovariance of the function component f (m) can be inferred as µ(m)t (x) = k (m) t (x) T(Kt + σ 2I)−1yt and k(m)t (x,x ′) = k(m)(x,x′) − k(m)t (x)T(Kt + σ2I)−1k (m) t (x ′), where k(m)t (x) = [k (m)(xi,x)]xi∈Dt\nandKt = [∑M m=1 k (m)(xi,xj) ] xi,xj∈Dt . For simplicity, we use the shorthand k(m)(x,x′) = k(m)(xAm ,x′Am)."
+  }, {
+    "heading": "2.3. Evaluation Criteria",
+    "text": "We use two types of evaluation criteria for BO, simple regret and inference regret. In each iteration, we choose to evaluate one input xt to “learn” where the arg max of the function is. The simple regret rT = maxx∈X f(x) − maxt∈[1,T ] f(xt) measures the value of the best queried point so far. After all queries, we may infer an arg max of the function, which is usually chosen as x̃T = arg maxx∈X µT (x) (Hennig & Schuler, 2012; Hernández-Lobato et al., 2014). We denote the inference regret as RT = maxx∈X f(x) − f(x̃T ) which characterizes how satisfying our inference of the arg max is."
+  }, {
+    "heading": "3. Max-value Entropy Search",
+    "text": "Entropy search methods use an information-theoretic perspective to select where to evaluate. They find a query point that maximizes the information about the location x∗ = arg maxx∈X f(x) whose value y∗ = f(x∗) achieves the global maximum of the function f . Using the negative differential entropy of p(x∗|Dt) to characterize the uncertainty about x∗, ES and PES use the acquisition functions\nαt(x) = I({x, y};x∗ | Dt) (1) = H (p(x∗ | Dt))− E [H(p(x∗ | Dt ∪ {x, y}))] (2) = H(p(y | Dt,x))− E [H(p(y | Dt,x,x∗))] . (3)\nES uses formulation (2), in which the expectation is over p(y|Dt,x), while PES uses the equivalent, symmetric formulation (3), where the expectation is over p(x∗|Dt). Unfortunately, both p(x∗|Dt) and its entropy is analytically intractable and have to be approximated via expensive computations. Moreover, the optimum may not be unique, adding further complexity to this distribution.\nWe follow the same information-theoretic idea but propose a much cheaper and more robust objective to compute. Instead of measuring the information about the argmax x∗, we use the information about the maximum value y∗ = f(x∗). Our acquisition function is the gain in mutual information between the maximum y∗ and the next point we query, which can be approximated analytically by evaluating the entropy of the predictive distribution:\nαt(x) = I({x, y}; y∗ | Dt) (4) = H(p(y | Dt,x))− E[H(p(y | Dt,x, y∗))] (5)\n≈ 1 K ∑ y∗∈Y∗ [ γy∗(x)ψ(γy∗(x)) 2Ψ(γy∗(x)) − log(Ψ(γy∗(x))) ] (6)\nwhere ψ is the probability density function and Ψ the cumulative density function of a normal distribution, and γy∗(x) = y∗−µt(x) σt(x)\n. The expectation in Eq. (5) is over p(y∗|Dn), which is approximated using Monte Carlo estimation by sampling a set of K function maxima. Notice that the probability in the first term p(y|Dt,x) is a Gaussian distribution with mean µt(x) and variance kt(x,x). The probability in the second term p(y|Dn,x, y∗) is a truncated Gaussian distribution: given y∗, the distribution of y needs to satisfy y < y∗. Importantly, while ES and PES rely on the expensive, d-dimensional distribution p(x∗|Dt), here, we use the one-dimensional p(y∗|Dn), which is computationally much easier.\nIt may not be immediately intuitive that the value should bear sufficient information for a good search strategy. Yet, the empirical results in Section 5 will demonstrate that this strategy is typically at least as good as ES/PES. From a formal perspective, Wang et al. (2016) showed how an estimate of the maximum value implies a good search strategy (EST). Indeed, Lemma 3.1 will make the relation between EST and a simpler, degenerate version of MES explicit.\nHence, it remains to determine how to sample y∗. We propose two strategies: (1) sampling from an approximation via a Gumbel distribution; and (2) sampling functions from the posterior Gaussian distribution and maximizing the functions to obtain samples of y∗. We present the MES algorithm in Alg. 1."
+  }, {
+    "heading": "3.1. Gumbel Sampling",
+    "text": "The marginal distribution of f(x) for any x is a onedimensional Gaussian, and hence the distribution of y∗ may be viewed as the maximum of an infinite collection of dependent Gaussian random variables. Since this distribution is difficult to compute, we make two simplifications. First, we replace the continuous set X by a discrete (finite), dense subset X̂ of representative points. If we select X̂ to be an - cover of X and the function f is Lipschitz continuous with constant L, then we obtain a valid upper bound on f(X) by adding L to any upper bound on f(X̂).\nSecond, we use a “mean field” approximation and treat the function values at the points in X̂ as independent. This approximation tends to over-estimate the maximum; this follows from Slepian’s lemma if k(x, x′) ≥ 0. Such upper bounds still lead to optimization strategies with vanishing regret, whereas lower bounds may not (Wang et al., 2016).\nWe sample from the approximation p̂(y∗|Dn) via its cumulative distribution function (CDF) P̂r[y∗ < z] =∏\nx∈X̂ Ψ(γz(x)). That means we sample r uniformly from\nAlgorithm 1 Max-value Entropy Search (MES) 1: function MES (f,D0) 2: for t = 1, · · · , T do 3: αt−1(·)←APPROX-MI (Dt−1) 4: xt ← arg maxx∈X αt−1(x) 5: yt ← f(xt) + t, t ∼ N (0, σ2) 6: Dt ← Dt−1 ∪ {xt, yt} 7: end for 8: end function\n9: function Approx-MI (Dt) 10: if Sample with Gumbel then 11: approximate Pr[ŷ∗ < y] with G(a, b) 12: sample a K-length vector r ∼ Unif([0, 1]) 13: y∗ ← a− b log(− log r) 14: else 15: for i = 1, · · · ,K do 16: sample f̃ ∼ GP (µt, kt | Dt) 17: y∗(i) ← maxx∈X f̃(x) 18: end for 19: y∗ ← [y∗(i)]Ki=1 20: end if 21: return αt(·) in Eq. (6) 22: end function\n[0, 1] and find z such that Pr[y∗ < z] = r. A binary search for z to accuracy δ requires O(log 1δ ) queries to the CDF, and each query takes O(|X̂|) ≈ O(nd) time, so we obtain an overall time of O(M |X̂| log 1δ ) for drawing M samples.\nTo sample more efficiently, we propose a O(M + |X̂| log 1δ )-time strategy, by approximating the CDF by a Gumbel distribution: P̂r[y∗ < z] ≈ G(a, b) = e−e − z−a\nb . This choice is motivated by the Fisher-Tippett-Gnedenko theorem (Fisher, 1930), which states that the maximum of a set of i.i.d. Gaussian variables is asymptotically described by a Gumbel distribution (see the appendix for further details). This does not in general extend to non-i.i.d. Gaussian variables, but we nevertheless observe that in practice, this approach yields a good and fast approximation.\nWe sample from the Gumbel distribution via the Gumbel quantile function: we sample r uniformly from [0, 1], and let the sample be y = G−1(a, b) = a − b log(− log r). We set the appropriate Gumbel distribution parameters a and b by percentile matching and solve the two-variable linear equations a − b log(− log r1) = y1 and a − b log(− log r2) = y2, where Pr[y∗ < y1] = r1 and Pr[y∗ < y2] = r2. In practice, we use r1 = 0.25 and r2 = 0.75 so that the scale of the approximated Gumbel distribution is proportional to the interquartile range of the CDF P̂r[y∗ < z]."
+  }, {
+    "heading": "3.2. Sampling y∗ via Posterior Functions",
+    "text": "For an alternative sampling strategy we follow (HernándezLobato et al., 2014): we draw functions from the posterior GP and then maximize each of the sampled functions. Given the observations Dt = {(xτ , yτ )tτ=1}, we can approximate the posterior Gaussian process using a 1-hiddenlayer neural network f̃(x) = aTtφ(x) where φ(x) ∈ RD is a vector of feature functions (Neal, 1996; Rahimi et al., 2007) and the Gaussian weight at ∈ RD is distributed according to a multivariate Gaussian N (νt,Σt).\nComputing φ(x). By Bochner’s theorem (Rudin, 2011), the Fourier transform k̂ of a continuous and translation-invariant kernel k is guaranteed to be a probability distribution. Hence we can write the kernel of the GP to be k(x,x′) = Eω∼k̂(ω)[e iωT(x−x′)] = Ec∼U [0,2π]Ek̂[2 cos(ω Tx + c) cos(ωTx′ + c)] and approximate the expectation by k(x,x′) ≈ φT(x)φ(x′) where φi(x) = √ 2 D cos(ω T i x + ci), ωi ∼ κ̂(ω), and ci ∼ U [0, 2π] for i = 1, . . . , D.\nComputing νt,Σt. By writing the GP as a random linear combination of feature functions aTt φ(x), we are defining the mean and covariance of the GP to be µt(x) = νTφ(x) and k(x,x′) = φ(x)TΣtφ(x′). Let Z = [z1, · · · , zt] ∈ RD×t, where zτ := φ(xτ ) ∈ RD. The GP posterior mean and covariance in Section 2.1 become µt(x) = z TZ(ZTZ + σ2I)−1yt and kt(x,x ′) = zTz′ − zTZ(ZTZ + σ2I)−1ZTz′. Because Z(ZTZ + σ2I)−1 = (ZZT+σ2I)−1Z, we can simplify the above equations and obtain νt = σ−2ΣtZtyt and Σt = (ZZ Tσ−2 + I)−1.\nTo sample a function from this random 1-hidden-layer neural network, we sample ã from N (νt,Σt) and construct the sampled function f̃ = ãTφ(x). Then we optimize f̃ with respect to its input to get a sample of the maximum of the function maxx∈X f̃(x)."
+  }, {
+    "heading": "3.3. Relation to Other BO Methods",
+    "text": "As a side effect, our new acquisition function draws connections between ES/PES and other popular BO methods. The connection between MES and ES/PES follows from the information-theoretic viewpoint; the following lemma makes the connections to other methods explicit. Lemma 3.1. The following methods are equivalent:\n1. MES, where we only use a single sample y∗ for αt(x); 2. EST with m = y∗; 3. GP-UCB with β 1 2 = minx∈X\ny∗−µt(x) σt(x) ;\n4. PI with θ = y∗.\nThis equivalence no longer holds if we useM > 1 samples of y∗ in MES.\nProof. The equivalence among 2,3,4 is stated in Lemma 2.1 in (Wang et al., 2016). What remains to be shown is the equivalence between 1 and 2. When using a single y∗ in MES, the next point to evaluate is chosen by maximizing αt(x) = γy∗(x)\nψ(γy∗ (x)) 2Ψ(γy∗ (x)) − log(Ψ(γy∗(x))) and γy∗ = y∗−µt(x) σt(x)\n. For EST with m = y∗, the next point to evaluate is chosen by minimizing γy∗(x). Let us define a function g(u) = u ψ(u)2Ψ(u) − log(Ψ(u)). Clearly, αt(x) = g(γy∗(x)). Because g(u) is a monotonically decreasing function, maximizing g(γy∗(x)) is equivalent to minimizing γy∗(x). Hence 1 and 2 are equivalent."
+  }, {
+    "heading": "3.4. Regret Bound",
+    "text": "The connection with EST directly leads to a bound on the simple regret of MES, when using only one sample of y∗. We prove Theorem 3.2 in the appendix.\nTheorem 3.2. Let F be the cumulative probability distribution for the maximum of any function f sampled from GP (µ, k) over the compact search space X ⊂ Rd, where k(x,x′) ≤ 1,∀x,x′ ∈ X. Let f∗ = maxx∈X f(x) and w = F (f∗) ∈ (0, 1), and assume the observation noise is iidN (0, σ). If in each iteration t, the query point is chosen as xt = arg maxx∈X γyt∗(x) ψ(γyt∗ (x))\n2Ψ(γyt∗ (x))− log(Ψ(γyt∗(x))),\nwhere γyt∗(x) = yt∗−µt(x) σt(x) and yt∗ is drawn from F , then with probability at least 1 − δ, in T ′ = ∑T i=1 logw δ 2πi number of iterations, the simple regret satisfies\nrT ′ ≤ √ CρT T (νt∗ + ζT ) (7)\nwhere C = 2/ log(1 + σ−2) and ζT = (2 log(πTδ )) 1 2 ; π satisfies ∑T i=1 π −1 i ≤ 1 and πt > 0, and t∗ = arg maxt νt with νt , minx∈X,yt∗>f∗ γyt∗(x), and ρT is the maximum information gain of at most T selected points."
+  }, {
+    "heading": "3.5. Model Adaptation",
+    "text": "In practice we do not know the hyper-parameters of the GP, so we must adapt our GP model as we observe more data. A standard way to learn the GP hyper-parameters is to optimize the marginal data likelihood with respect to the hyperparameters. As a full Bayesian treatment, we can also draw samples of the hyper-parameters using slice sampling (Vanhatalo et al., 2013), and then marginalize out the hyperparameters in our acquisition function in Eq. (6). Namely, if we use E to denote the set of sampled settings for the GP hyper-parameters, our acquisition function becomes αt(x) = ∑ η∈E ∑ y∗∈Y∗ [ γηy∗(x)ψ(γ η y∗(x)) 2Ψ(γηy∗(x)) − log(Ψ(γηy∗(x))) ] ,\nwhere γηy∗(x) = y∗−µηt (x) σηt (x)\nand the posterior inference on the mean function µηt and σ η t depends on the GP hyperparameter setting η. Similar approaches have been used in (Hernández-Lobato et al., 2014; Snoek et al., 2012)."
+  }, {
+    "heading": "4. High Dimensional MES with Add-GP",
+    "text": "The high-dimensional input setting has been a challenge for many BO methods. We extend MES to this setting via additive Gaussian processes (Add-GP). In the past, AddGP has been used and analyzed for GP-UCB (Kandasamy et al., 2015), which assumed the high dimensional blackbox function is a summation of several disjoint lower dimensional functions. Utilizing this special additive structure, we overcome the statistical problem of having insufficient data to recover a complex function, and the difficulty of optimizing acquisition functions in high dimensions.\nSince the function components f (m) are independent, we can maximize the mutual information between the input in the active dimensions Am and maximum of f (m) for each component separately. Hence, we have a separate acquisition function for each component, where y(m) is the evaluation of f (m):\nα (m) t (x) = I({xAm , y(m)}; y (m) ∗ | Dt) (8)\n= H(p(y(m) | Dt,xAm))\n− E[H(p(y(m) | Dt,xAm , y(m)∗ ))] (9)\n≈ ∑ y (m) ∗ γ(m)y∗ (x) ψ(γ (m) y∗ (x)) 2Ψ(γ (m) y∗ (x)) − log(Ψ(γ(m)y∗ (x))) (10)\nwhere γ(m)y∗ (x) = y(m)∗ −µ (m) t (x)\nσ (m) t (x)\n. Analogously to the non-\nadditive case, we sample y(m)∗ , separately for each function component. We select the final xt by choosing a sub-vector x\n(m) t ∈ arg maxx(m)∈Am α (m) t (x (m)) and concatenating the components.\nSampling y(m)∗ with a Gumbel distribution. The Gumbel sampling from Section 3.1 directly extends to sampling y(m)∗ , approximately. We simply need to sample from the component-wise CDF P̂r[y(m)∗ < z] =∏\nx∈X̂ Ψ(γ (m) y (x))), and use the same Gumbel approxi-\nmation.\nSampling y(m)∗ via posterior functions. The additive structure removes some connections on the input-to-hidden layer of our 1-hidden-layer neural network approximation f̃(x) = aTtφ(x). Namely, for each feature function φ there exists a unique group m such that φ is only active on xAm ,\nand φ(x) = √\n2 D cos(ω TxAm + c) where R|Am| 3 ω ∼\nκ̂(m)(ω) and c ∼ U [0, 2π]. Similar to the non-additive case, we may draw a posterior sample at ∼ N (νt,Σt) where νt = σ−2ΣtZtyt and Σt = (ZZ\nTσ−2 + I)−1. Let Bm = {i : φi(x) is active on xAm}. The posterior sample for the function component f (m) is f̃ (m)(x) = (aBmt )\nTφBm(xAm). Then we can maximize f̃ (m) to obtain a sample for y(m)∗ .\nThe algorithm for the additive max-value entropy search method (add-MES) is shown in Algorithm 2. The function APPROX-MI does the pre-computation for approximating the mutual information in a similar way as in Algorithm 1, except that it only acts on the active dimensions in them-th group.\nAlgorithm 2 Additive Max-value Entropy Search 1: function Add-MES (f,D0) 2: for t = 1, · · · , T do 3: for m = 1, · · · ,M do 4: α(m)t−1(·)←APPROX-MI (Dt−1) 5: xAmt ← arg maxxAm∈XAm α (m) t−1(x)\n6: end for 7: yt ← f(xt) + t, t ∼ N (0, σ2) 8: Dt ← Dt−1 ∪ {xt, yt} 9: end for\n10: end function"
+  }, {
+    "heading": "5. Experiments",
+    "text": "In this section, we probe the empirical performance of MES and add-MES on a variety of tasks. Here, MES-G denotes MES with y∗ sampled from the approximate Gumbel distribution, and MES-R denotes MES with y∗ computed by maximizing a sampled function represented by random features. Following (Hennig & Schuler, 2012; HernándezLobato et al., 2014), we adopt the zero mean function and non-isotropic squared exponential kernel as the prior for the GP. We compare to methods from the entropy search family, i.e., ES and PES, and to other popular Bayesian optimization methods including GP-UCB (denoted by UCB), PI, EI and EST. The parameter for GP-UCB was set according to Theorem 2 in (Srinivas et al., 2010); the parameter for PI was set to be the observation noise σ. For the functions with unknown GP hyper-parameters, every 10 iterations, we learn the GP hyper-parameters using the same approach as was used by PES (Hernández-Lobato et al., 2014). For the high dimensional tasks, we follow (Kandasamy et al., 2015) and sample the additive structure/GP parameters with the highest data likelihood when they are unknown. We evaluate performance according to the simple regret and inference regret as defined in Section 2.3. We used the open source Matlab implementation of PES, ES and EST (Hennig & Schuler, 2012; Hernández-Lobato\n50 100 150 200\net al., 2014; Wang et al., 2016). Our Matlab code and test functions are available at https://github.com/ zi-w/Max-value-Entropy-Search/."
+  }, {
+    "heading": "5.1. Synthetic Functions",
+    "text": "We begin with a comparison on synthetic functions sampled from a 3-dimensional GP, to probe our conjecture that MES is much more robust to the number of y∗ sampled to estimate the acquisition function than PES is to the number of x∗ samples. For PES, we sample 100 (PES 100), 10 (PES 10) and 1 (PES 1) argmaxes for the acquisition function. Similarly, we sample 100, 10, 1 y∗ values for MES-R and MES-G. We average the results on 100 functions sampled from the same Gaussian kernel with scale parameter 5.0 and bandwidth parameter 0.0625, and observation noise N (0, 0.012).\nFigure 1 shows the simple and inference regrets. For both regret measures, PES is very sensitive to the the number of x∗ sampled for the acquisition function: 100 samples lead to much better results than 10 or 1. In contrast, both MES-G and MES-R perform competitively even with 1 or 10 samples. Overall, MES-G is slightly better than MESR, and both MES methods performed better than other ES methods. MES methods performed better than all other methods with respect to simple regret. For inference regret, MES methods performed similarly to EST, and much better than all other methods including PES and ES.\nIn Table 1, we show the runtime of selecting the next input per iteration1 using GP-UCB, PI, EI, EST, ES, PES, MES-R and MES-G on the synthetic data with fixed GP hyper-parameters. For PES and MES-R, every x∗ or y∗ requires running an optimization sub-procedure, so their running time grows noticeably with the number of samples. MES-G avoids this optimization, and competes with the fastest methods EI and UCB.\nIn the following experiments, we set the number of x∗ sampled for PES to be 200, and the number of y∗ sampled for MES-R and MES-G to be 100 unless otherwise mentioned."
+  }, {
+    "heading": "5.2. Optimization Test Functions",
+    "text": "We test on three challenging optimization test functions: the 2-dimensional eggholder function, the 10-dimensional Shekel function and the 10-dimensional Michalewicz function. All of these functions have many local optima. We randomly sample 1000 points to learn a good GP hyperparameter setting, and then run the BO methods with the same hyper-parameters. The first observation is the same for all methods. We repeat the experiments 10 times. The averaged simple regret is shown in the appendix, and the inference regret is shown in Table 2. On the 2-d eggholder function, PES was able to achieve better function values faster than all other methods, which verified the good performance of PES when sufficiently many x∗ are sampled. However, for higher-dimensional test functions, the 10-d Shekel and 10-d Michalewicz function, MES methods performed much better than PES and ES, and MES-G performed better than all other methods."
+  }, {
+    "heading": "5.3. Tuning Hyper-parameters for Neural Networks",
+    "text": "Next, we experiment with Levenberg-Marquardt optimization for training a 1-hidden-layer neural network. The 4 parameters we tune with BO are the number of neurons, the damping factor µ, the µ-decrease factor, and the µ-increase factor. We test regression on the Boston housing dataset\n1All the timing experiments were run exclusively on an Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GHz. The function evaluation time is excluded.\nand classification on the breast cancer dataset (Bache & Lichman, 2013). The experiments are repeated 20 times, and the neural network’s weight initialization and all other parameters are set to be the same to ensure a fair comparison. Both of the datasets were randomly split into train/validation/test sets. We initialize the observation set to have 10 random function evaluations which were set to be the same across all the methods. The averaged simple regret for the regression L2-loss on the validation set of the Boston housing dataset is shown in Fig. 2(a), and the classification accuracy on the validation set of the breast cancer dataset is shown in Fig. 2(b). For the classification problem on the breast cancer dataset, MES-G, PES and UCB achieved a similar simple regret. On the Boston housing dataset, MES methods achieved a lower simple regret. We also show the inference regrets for both datasets in Table 3."
+  }, {
+    "heading": "5.4. Active Learning for Robot Pushing",
+    "text": "We use BO to do active learning for the pre-image learning problem for pushing (Kaelbling & Lozano-Pérez, 2017). The function we optimize takes as input the pushing action of the robot, and outputs the distance of the pushed object to the goal location. We use BO to minimize the function in\norder to find a good pre-image for pushing the object to the designated goal location. The first function we tested has a 3-dimensional input: robot location (rx, ry) and pushing duration tr. We initialize the observation size to be one, the same across all methods. The second function has a 4-dimensional input: robot location and angle (rx, ry, rθ), and pushing duration tr. We initialize the observation to be 50 random points and set them the same for all the methods. We select 20 random goal locations for each function to test if BO can learn where to push for these locations. We show the simple regret in Fig. 4 and the inference regret in Table 4. MES methods performed on a par with or better than their competitors."
+  }, {
+    "heading": "5.5. High Dimensional BO with Add-MES",
+    "text": "In this section, we test our add-MES algorithm on high dimensional black-box function optimization problems. First we compare add-MES and add-GP-UCB (Kandasamy et al., 2015) on a set of synthetic additive functions with known additive structure and GP hyper-parameters. Each function component of the synthetic additive function is active on at most three input dimensions, and is sampled from a GP with zero mean and Gaussian kernel (bandwidth = 0.1 and scale = 5). For the parameter of addGP-UCB, we follow (Kandasamy et al., 2015) and set β\n(m) t = |Am| log 2t/5. We set the number of y (m) ∗ sampled for each function component in add-MES-R and addMES-G to be 1. We repeat each experiment for 50 times\nfor each dimension setting. The results for simple regret are shown in Fig. 3. Add-MES methods perform much better than add-GP-UCB in terms of simple regret. Interestingly, add-MES-G works better in lower dimensional cases where d = 10, 20, 30, while add-MES-R outperforms both add-MES-G and add-GP-UCB for higher dimensions where d = 50, 100. In general, MES-G tends to overestimate the maximum of the function because of the independence assumption, and MES-R tends to underestimate the maximum of the function because of the imperfect global optimization of the posterior function samples. We conjecture that MES-R is better for settings where exploitation is preferred over exploration (e.g., not too many local optima), and MES-G works better if exploration is preferred.\nTo further verify the performance of add-MES in high dimensional problems, we test on two real-world high dimensional experiments. One is a function that returns the distance between a goal location and two objects being pushed\nby a robot which has 14 parameters2. The other function returns the walking speed of a planar bipedal robot, with 25 parameters to tune (Westervelt et al., 2007). In Fig. 5, we show the simple regrets achieved by add-GP-UCB and addMES. Add-MES methods performed competitively compared to add-GP-UCB on both tasks."
+  }, {
+    "heading": "6. Conclusion",
+    "text": "We proposed a new information-theoretic approach, maxvalue entropy search (MES), for optimizing expensive black-box functions. MES is competitive with or better than previous entropy search methods, but at a much lower computational cost. Via additive GPs, MES is adaptable to high-dimensional settings. We theoretically connected MES to other popular Bayesian optimization methods including entropy search, GP-UCB, PI, and EST, and showed a bound on the simple regret for a variant of MES. Empirically, MES performs well on a variety of tasks.\n2We implemented the function in (Catto, 2011)."
+  }, {
+    "heading": "Acknowledgements",
+    "text": "We thank Prof. Leslie Pack Kaelbling and Prof. Tomás Lozano-Pérez for discussions on active learning and Dr. William Huber for his solution to “Extreme Value Theory - Show: Normal to Gumbel” at stats. stackexchange.com, which leads to our Gumbel approximation in Section 3.1. We gratefully acknowledge support from NSF CAREER award 1553284, NSF grants 1420927 and 1523767, from ONR grant N00014-14-10486, and from ARO grant W911NF1410433. We thank MIT Supercloud and the Lincoln Laboratory Supercomputing Center for providing computational resources. Any opinions, findings, and conclusions or recommendations expressed in this material are those of the authors and do not necessarily reflect the views of our sponsors."
+  }],
+  "year": 2017,
+  "references": [{
+    "title": "Using confidence bounds for exploitation-exploration tradeoffs",
+    "authors": ["Auer", "Peter"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2002
+  }, {
+    "title": "A tutorial on Bayesian optimization of expensive cost functions, with application to active user modeling and hierarchical reinforcement learning",
+    "authors": ["Brochu", "Eric", "Cora", "Vlad M", "De Freitas", "Nando"],
+    "venue": "Technical Report TR-2009-023,",
+    "year": 2009
+  }, {
+    "title": "An experimental comparison of Bayesian optimization for bipedal locomotion",
+    "authors": ["Calandra", "Roberto", "Seyfarth", "André", "Peters", "Jan", "Deisenroth", "Marc Peter"],
+    "venue": "In International Conference on Robotics and Automation (ICRA),",
+    "year": 2014
+  }, {
+    "title": "Box2D, a 2D physics engine for games",
+    "authors": ["Catto", "Erin"],
+    "venue": "http: //box2d.org,",
+    "year": 2011
+  }, {
+    "title": "Additive Gaussian processes",
+    "authors": ["Duvenaud", "David K", "Nickisch", "Hannes", "Rasmussen", "Carl E"],
+    "venue": "In Advances in Neural Information Processing Systems (NIPS),",
+    "year": 2011
+  }, {
+    "title": "The genetical theory of natural selection: a complete variorum edition",
+    "authors": ["Fisher", "Ronald Aylmer"],
+    "year": 1930
+  }, {
+    "title": "Entropy search for information-efficient global optimization",
+    "authors": ["Hennig", "Philipp", "Schuler", "Christian J"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2012
+  }, {
+    "title": "Predictive entropy search for efficient global optimization of black-box functions",
+    "authors": ["Hernández-Lobato", "José Miguel", "Hoffman", "Matthew W", "Ghahramani", "Zoubin"],
+    "venue": "In Advances in Neural Information Processing Systems (NIPS),",
+    "year": 2014
+  }, {
+    "title": "Output-space predictive entropy search for flexible global optimization",
+    "authors": ["Hoffman", "Matthew W", "Ghahramani", "Zoubin"],
+    "venue": "In NIPS workshop on Bayesian Optimization,",
+    "year": 2015
+  }, {
+    "title": "Learning composable models of primitive actions",
+    "authors": ["Kaelbling", "Leslie Pack", "Lozano-Pérez", "Tomás"],
+    "venue": "In International Conference on Robotics and Automation (ICRA),",
+    "year": 2017
+  }, {
+    "title": "High dimensional Bayesian optimisation and bandits via additive models",
+    "authors": ["Kandasamy", "Kirthevasan", "Schneider", "Jeff", "Poczos", "Barnabas"],
+    "venue": "In International Conference on Machine Learning (ICML),",
+    "year": 2015
+  }, {
+    "title": "Contextual Gaussian process bandit optimization",
+    "authors": ["Krause", "Andreas", "Ong", "Cheng S"],
+    "venue": "In Advances in Neural Information Processing Systems (NIPS),",
+    "year": 2011
+  }, {
+    "title": "A new method of locating the maximum point of an arbitrary multipeak curve in the presence of noise",
+    "authors": ["Kushner", "Harold J"],
+    "venue": "Journal of Fluids Engineering,",
+    "year": 1964
+  }, {
+    "title": "Automatic gait optimization with Gaussian process regression",
+    "authors": ["Lizotte", "Daniel J", "Wang", "Tao", "Bowling", "Michael H", "Schuurmans", "Dale"],
+    "venue": "In International Conference on Artificial Intelligence (IJCAI),",
+    "year": 2007
+  }, {
+    "title": "On Bayesian methods for seeking the extremum",
+    "authors": ["J. Moc̆kus"],
+    "venue": "In Optimization Techniques IFIP Technical Conference,",
+    "year": 1974
+  }, {
+    "title": "Bayesian Learning for Neural networks",
+    "authors": ["R.M. Neal"],
+    "venue": "Lecture Notes in Statistics 118. Springer,",
+    "year": 1996
+  }, {
+    "title": "Random features for largescale kernel machines",
+    "authors": ["Rahimi", "Ali", "Recht", "Benjamin"],
+    "venue": "In Advances in Neural Information Processing Systems (NIPS),",
+    "year": 2007
+  }, {
+    "title": "Gaussian processes for machine learning",
+    "authors": ["Rasmussen", "Carl Edward", "Williams", "Christopher KI"],
+    "year": 2006
+  }, {
+    "title": "Fourier analysis on groups",
+    "authors": ["Rudin", "Walter"],
+    "year": 2011
+  }, {
+    "title": "Practical Bayesian optimization of machine learning algorithms",
+    "authors": ["Snoek", "Jasper", "Larochelle", "Hugo", "Adams", "Ryan P"],
+    "venue": "In Advances in Neural Information Processing Systems (NIPS),",
+    "year": 2012
+  }, {
+    "title": "Gaussian process optimization in the bandit setting: no regret and experimental design",
+    "authors": ["Srinivas", "Niranjan", "Krause", "Andreas", "Kakade", "Sham M", "Seeger", "Matthias"],
+    "venue": "In International Conference on Machine Learning (ICML),",
+    "year": 2010
+  }, {
+    "title": "Auto-WEKA: combined selection and hyperparameter optimization of classification algorithms",
+    "authors": ["Thornton", "Chris", "Hutter", "Frank", "Hoos", "Holger H", "LeytonBrown", "Kevin"],
+    "venue": "In ACM SIGKDD Conference on Knowledge Discovery and Data Mining (KDD),",
+    "year": 2013
+  }, {
+    "title": "Gpstuff: Bayesian modeling with gaussian processes",
+    "authors": ["Vanhatalo", "Jarno", "Riihimäki", "Jaakko", "Hartikainen", "Jouni", "Jylänki", "Pasi", "Tolvanen", "Ville", "Vehtari", "Aki"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2013
+  }, {
+    "title": "Optimization as estimation with Gaussian processes in bandit settings",
+    "authors": ["Wang", "Zi", "Zhou", "Bolei", "Jegelka", "Stefanie"],
+    "venue": "In International Conference on Artificial Intelligence and Statistics (AISTATS),",
+    "year": 2016
+  }, {
+    "title": "Focused model-learning and planning for nonGaussian continuous state-action systems",
+    "authors": ["Wang", "Zi", "Jegelka", "Stefanie", "Kaelbling", "Leslie Pack", "LozanoPérez", "Tomás"],
+    "venue": "In International Conference on Robotics and Automation (ICRA),",
+    "year": 2017
+  }, {
+    "title": "Feedback control of dynamic bipedal robot locomotion, volume 28",
+    "authors": ["Westervelt", "Eric R", "Grizzle", "Jessy W", "Chevallereau", "Christine", "Choi", "Jun Ho", "Morris", "Benjamin"],
+    "venue": "CRC press,",
+    "year": 2007
+  }],
+  "id": "SP:7608eac3df45b8f8bc151b4e64faba182549070c",
+  "authors": [{
+    "name": "Zi Wang",
+    "affiliations": []
+  }, {
+    "name": "Stefanie Jegelka",
+    "affiliations": []
+  }],
+  "abstractText": "Entropy Search (ES) and Predictive Entropy Search (PES) are popular and empirically successful Bayesian Optimization techniques. Both rely on a compelling information-theoretic motivation, and maximize the information gained about the arg max of the unknown function; yet, both are plagued by the expensive computation for estimating entropies. We propose a new criterion, Max-value Entropy Search (MES), that instead uses the information about the maximum function value. We show relations of MES to other Bayesian optimization methods, and establish a regret bound. We observe that MES maintains or improves the good empirical performance of ES/PES, while tremendously lightening the computational burden. In particular, MES is much more robust to the number of samples used for computing the entropy, and hence more efficient for higher dimensional problems.",
+  "title": "Max-value Entropy Search for Efficient Bayesian Optimization"
+}

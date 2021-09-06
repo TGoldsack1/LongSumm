@@ -1,0 +1,267 @@
+{
+  "sections": [{
+    "text": "Proceedings of NAACL-HLT 2018, pages 16–24 New Orleans, Louisiana, June 1 - 6, 2018. c©2017 Association for Computational Linguistics"
+  }, {
+    "heading": "1 Introduction",
+    "text": "Natural language understanding (NLU) is a core component of intelligent personal digital assistants (IPDAs) such as Amazon Alexa, Google Assistant, Apple Siri, and Microsoft Cortana (Sarikaya, 2017). A well-established approach in current real-time systems is to classify an utterance into a domain, followed by domain-specific intent classification and slot sequence tagging (Tur and de Mori, 2011). A domain is typically defined in terms of a specific application or a functionality such as weather, calendar and music, which narrows down the scope of NLU for a given utterance. A domain can also be defined as a collection of relevant intents; assuming an utterance belongs to the calendar domain, possible intents could be to create a meeting or cancel one, and possible extracted slots could be people names, meeting title and date from the utterance. Traditional IPDAs cover only tens of domains that share a common schema. The schema is designed to separate out the domains in an effort to minimize language ambiguity. A\nshared schema, while addressing domain ambiguity, becomes a bottleneck as new domains and intents are added to cover new scenarios. Redefining the domain, intent and slot boundaries requires relabeling of the underlying data, which is very costly and time-consuming. On the other hand, when thousands of domains evolve independently without a shared schema, finding the most relevant domain to handle an utterance among thousands of overlapping domains emerges as a key challenge.\nThe difficulty of solving this problem at scale has led to stopgap solutions, such as requiring an utterance to explicitly mention a domain name and restricting the expression to be in a predefined form as in “Ask ALLRECIPES, how can I bake an apple pie?” However, such solutions lead to an unintuitive and unnatural way of conversing and create interaction friction for the end users. For the example utterance, a more natural way of saying it is simply, “How can I bake an apple pie?” but the most relevant domain to handle it now becomes ambiguous. There could be a number of candidate domains and even multiple overlapping recipe-related domains that could handle it.\nIn this paper, we propose efficient and scalable shortlisting-reranking neural models in two steps for effective large-scale domain classification in IPDAs. The first step uses light-weight BiLSTM models that leverage only the character and wordlevel information to efficiently find the k-best list of most likely domains. The second step uses rich contextual information later in the pipeline and applies another BiLSTM model to a list-wise ranking task to further rerank the k-best domains to find the most relevant one. We show the effectiveness of our approach for large-scale domain classification with an extensive set of experiments on 1,500 IPDA domains.\n16"
+  }, {
+    "heading": "2 Related Work",
+    "text": "Reranking approaches attempt to improve upon an initial ranking by considering additional contextual information. Initial model outputs are trimmed down to a subset of most likely candidates, and each candidate is combined with additional features to form a hypothesis to be re-scored. Reranking has been applied to various natural language processing tasks, including machine translation (Shen et al., 2004), parsing (Collins and Koo, 2005), sentence boundary detection (Roark et al., 2006), named entity recognition (Nguyen et al., 2010), and supertagging (Chen et al., 2002).\nIn the context of NLU or SLU systems, Morbini et al. (2012) showed a reranking approach using k-best lists from multiple automatic speech recognition (ASR) engines to improve response category classification for virtual museum guides. Basili et al. (2013) showed that reranking multiple ASR candidates by analyzing their syntactic properties can improve spoken command understanding in human-robot interaction, but with more focus on ASR improvement. Xu and Sarikaya (2014) showed that multi-turn contextual information and recurrent neural networks can improve domain classification in a multi-domain and multiturn NLU system. There have been many other pieces of prior work on improving NLU systems with pre-training (Kim et al., 2015b; Celikyilmaz et al., 2016; Kim et al., 2017e), multi-task learning (Zhang and Wang, 2016; Liu and Lane, 2016; Kim et al., 2017b), transfer learning (El-Kahky et al., 2014; Kim et al., 2015a,c; Chen et al., 2016a; Yang et al., 2017), domain adaptation (Kim et al., 2016; Jaech et al., 2016; Liu and Lane, 2017; Kim et al., 2017d,c) and contextual signals (Bhargava et al., 2013; Chen et al., 2016b; Hori et al., 2016; Kim et al., 2017a).\nTo our knowledge, the work by Robichaud et al. (2014); Crook et al. (2015); Khan et al. (2015) is most closely related to this paper. Their approach is to first run a complete pass of all 3 NLU models of binary domain classification, multi-class intent classification, and sequence tagging of slots across all domains. Then, a hypothesis is formed per domain using the semantic information provided by the domain-intent-slot outputs as well as many other contextual and cross-hypothesis features such as the presence of a slot tagging type in any other hypotheses. Reranking the hypothe-\nses with Gradient Boosted Decision Trees (Friedman, 2001; Burges et al., 2011) has been shown to improve domain classification performance compared to using only domain classifiers without reranking.\nTheir approach however suffers from the following two limitations. First, it requires running all domain-intent-slot models in parallel across all domains. Their work considers only 8 or 9 distinct domains, and the approach has serious practical scaling issues when the number of domains scales to thousands. Second, contextual information, especially cross-hypothesis features, that is crucial for reranking is manually designed at the feature level with a sparse representation.\nOur work in this paper addresses both of these limitations with a scalable and efficient two-step shortlisting-reranking approach, which has a neural ranking model capturing cross-hypothesis features automatically. To our knowledge, this work is the first in the literature on large-scale domain classification for a real IPDA production system with a scale of thousands of domains. Our LSTMbased list-wise ranking approach also makes a novel contribution to the existing literature in the context of IPDA and NLU systems. In this work, we limit our scope to first-turn utterances and leave multi-turn conversations for future work."
+  }, {
+    "heading": "3 Shortlisting-Reranking Architecture",
+    "text": "Our shortlisting-reranking models process an incoming utterance as follows. (1) Shortlister performs a naive, fast ranking of all domains to find the k-best list using only the character and wordlevel information. The goal here is to achieve high domain recall with maximal efficiency and minimal information and latency. (2) For each domain in the k-best list, we prepare a hypothesis per domain with additional contextual information, including domain-intent-slot semantic analysis, user preferences, and domain index of popularity and quality. (3) A second ranker called Hypotheses Reranker (HypRank) performs a list-wise ranking of the k hypotheses to improve on the initial naive ranking and find the best hypothesis, thus domain, to handle the utterance.\nFigure 1 illustrates the steps with an example utterance, “play michael jackson.” Based on character and word features, shortlister returns the kbest list in the order of CLASSIC MUSIC, POP MUSIC, and VIDEO domains. CLASSIC MUSIC outputs PlayTune intent, but without\nany slots, low domain popularity, and no usage history for the user, its ranking is adjusted to be last. POP MUSIC outputs PlayMusic intent and Singer slot for “michael jackson”, and with frequent user usage history, it is determined to be the best domain to handle the utterance.\nIn our architecture, key focus is on efficiency and scalability. Running full domain-intent-slot semantic analysis for thousands of domains imposes a significant computational burden in terms of memory footprint, latency and number of machines, and it is impractical in real-time systems. For the same reason, this work only uses contextual information in the reranking stage, and the utility of including it in the shortlisting stage is left for future work."
+  }, {
+    "heading": "4 Shortlister",
+    "text": "Shortlister consists of three layers: an orthography-sensitive character and word embedding layer, a BiLSTM layer that makes a vector representation for the words in a given utterance, and an output layer for domain classification. Figure 2 shows the overall shortlister architecture.\nEmbedding layer In order to capture characterlevel patterns, we construct an orthographysensitive word embedding layer (Ling et al., 2015; Ballesteros et al., 2015). Let C,W , and ⊕ denote the set of characters, the set of words, and the vector concatenation operator, respectively. We represent an LSTM as a mapping φ : Rd × Rd′ → Rd′ that takes an input vector x and a state vector h to output a new state vector h′ = φ(x, h)1. The model parameters associated with this layer are:\nChar embedding: ec ∈ R25 for each c ∈ C Char LSTMs: φCf , φ C b : R25 × R25 → R25\nWord embedding: ew ∈ R100 for each w ∈ W\nLet (w1, . . . , wm) denote a word sequence where word wi ∈ W has character wi(j) ∈ C at position j. This layer computes an orthographysensitive word representation vi ∈ R150 as:2\nfCj = φ C f ( ewi(j), f C j−1 )\n∀j = 1 . . . |wi| bCj = φ C b ( ewi(j), b C j+1 ) ∀j = |wi| . . . 1 vi = f C |wi| ⊕ b C 1 ⊕ ewi\n1We omit cell variable notations for simple LSTM formulations.\n2We randomly initialize state vectors such as fC0 and bC|wi|+1.\nBiLSTM layer We utilize a BiLSTM to encode the word vector sequence (v1, . . . , vm). The BiLSTM outputs are generated as:\nfWi = φ W f ( vi, f W i−1 )\n∀i = 1 . . .m bWi = φ W b ( vi, b W i+1 ) ∀i = m. . . 1\nwhere φWf , φ W f : R150 × R100 → R100 are the forward LSTM and the backward LSTM, respectively. An utterance representation h ∈ R200 is induced by concatenating the outputs of the both LSTMs as:\nh = fWm ⊕ bW1 Output layer We map the word LSTM output h to a n-dimensional output vector with a linear transformation. Then, we take a softmax function either over the entire domains (softmaxa) or over two classes (in-domain or out-of-domain) for each domain (softmaxb). softmaxa is used to set the sum of the confidence scores over the entire domains to be 1. We can obtain the outputs as:\no = softmax (W · h+ b) where W and b are parameters for a linear transformation.\nFor training, we use cross-entropy loss, which is formulated as follows:\nLa = − n∑\ni=1\nli log oi (1)\nwhere l is a n-dimensional one-hot vector whose element corresponding to the position of the ground-truth hypothesis is set to 1. softmaxb is used to set the confidence score for each domain to be between 0 and 1. While softmaxa tends to highlight only the groundtruth domain while suppressing all the rest, softmaxb is designed to produce a more balanced confidence score per domain independent of other domains. When using softmaxb, we obtain a 2- dimensional output vector for each domain as follows:\noi = softmax ( W i · h+ bi )\nwhere W i is a 2 by 200 matrix and bi is a 2-dimensional vector; oi1 and o i 2 denote the indomain probability and the out-of-domain probability, respectively. The loss function is formulated as follows:\nLb = − n∑\ni=1\n{ li log o i 1 +\n1− li n− 1 log o i 2\n} (2)\nwhere we divide the second term by n− 1 so that oi1 and o i 2 are balanced in terms of the ratio of the training examples for a domain to those for other domains."
+  }, {
+    "heading": "5 Hypotheses Reranker (HypRank)",
+    "text": "Hypotheses Reranker (HypRank) comprises of two components: hypothesis representation and a BiLSTM model for reranking a list of hypotheses. We use the term reranking since we improve upon the initial ranking from Shortlister’s k-best list. In our problem context, a hypothesis is formed per domain with additional semantic and contextual information, and selecting the highest-scored hypothesis means selecting the domain represented in that hypothesis for final domain classification.\nHypRank, illustrated in Figure 3, is a list-wise ranking approach in that it considers the entire list of hypotheses before giving a reranking score for each hypothesis. While previous work manually\n…\nHypothesis1 Hypothesis2 Hypothesisk\n…\nLSTM%&\nLSTM'&\nFF\nLSTM%&\nLSTM'&\nFF\nLSTM%&\nLSTM'&\nFF\nFigure 3: The architecture of our neural Hypotheses Reranker model that takes in k hypotheses with rich contextual information for more refined ranking.\nencoded cross-hypothesis information at the feature level (Robichaud et al., 2014; Crook et al., 2015; Khan et al., 2015), our approach is to let a BiLSTM layer automatically capture that information and learn appropriate representations at the model level. In addition to giving detail of useful contextual signals for IPDAs, we also introduce the use of pre-trained domain, intent and slot embeddings in this section."
+  }, {
+    "heading": "5.1 Hypothesis Representation",
+    "text": "A hypothesis is formed for each domain with the following three categories of contextual information: NLU interpretation, user preferences, and domain index.\nNLU interpretation Each domain has three corresponding NLU models for binary domain classification, multi-class intent classification, and sequence tagging for slots. From the domain-intentslot semantic analysis, we use the confidence score from the shortlister, the intent classification confidence, Viterbi path score of the slot sequence from a slot tagger, and the average confidence score of\nthe tagged slots3. To pre-train domain embeddings, we use a word-level BiLSTM with each utterance as a sequence of word embedding vector ∈ R100 in the input layer. The BiLSTM outputs, each a vector ∈ R25, are concatenated and projected to an output vector for all domains in the output layer. The learned projection weight matrix is extracted as domain embeddings. The output vector dimension used was ∈ R1500 for the large-scale setting and ∈ R20 for the traditional small-scale setting in our experiments (Section 6.1). For intent and slot embeddings, we take the same process with the only difference in the output vector with the dimension ∈ R6991 for all unique intents across all domains and with the dimension ∈ R2845 for all unique slots.\nOnce pre-trained, the domain or intent embeddings are used simply as a lookup table per domain or per intent. For slot embeddings, there can be more than one slot per utterance, and in case of multiple tagged slots, we sum up each slot embedding vector to combine the information. In summary, these are the three domain-intent-slots embeddings we used: ed ∈ R50 for a domain vector, ei ∈ R50 for an intent vector, and es ∈ R50 for a vector of slots. User Preferences User-specific signals are designed to capture each user’s behavioral history or preferences. In particular, we encode whether a user has specific domains enabled in his/her IPDA setting and whether he/she triggered certain domains within 7, 14 or 30 days in the past. Domain Index From this category, we encode domain popularity and quality as rated by the user population. For example, if the utterance “I need a ride to work” can be equally handled by TAXI A domain or TAXI B domain but the user has never used any, the signals in this category could give a boost to TAXI A domain due to its higher popularity."
+  }, {
+    "heading": "5.2 HypRank Model",
+    "text": "The proposed model is trained to rerank the domain hypotheses formed from Shortlister results. Let (p1, . . . , pk) be the sequence of k input hypothesis vectors that are sorted in decreasing order of Shortlister scores.\nWe utilize a BiLSTM layer for transforming the input sequence to the BiLSTM output sequence\n3We use off-the-shelf intent classifiers and slot taggers achieving 98% and 96% accuracies on average, respectively.\n(h1, . . . , hk) as follows:\nf ri = φ r f ( pi, f r i−1 ) bri = φ r b ( pi, b r i+1 ) hi = f r i ⊕ bri ∀i ∈ {1, . . . , k} ,\nwhere φrf and φ r b are the forward LSTM and the backward LSTM, respectively. Since the BiLSTM utilizes both the previous and the next sub-sequences as the context, each of the BiLSTM outputs is computed considering cross-hypothesis information.\nFor the i-th hypothesis, we either sum or concatenate the input vector and the BiLSTM output to utilize both of them as an intermediate representation as gi = di⊕hi. Then, we use a feed-forward neural network with a single hidden layer to transform g to a k-dimensional vector p as follows:\npi =W2 ·σ (W1 · gi + b1)+b2 ∀i ∈ {1, . . . , k} ,\nwhere σ indicates scaled exponential linear unit (SeLU) for normalized activation outputs (Klambauer et al., 2017); the outputs of all the hypotheses are generated by using the same parameter set {W1, b1,W2, b2} for consistency regardless of the hypothesis order.\nFinally, we obtain a k-dimensional output vector o by taking a softmax function:\no = softmax (p) .\nargmaxi{o1, .., ok} is the index of the predicted hypothesis after the reranking. Cross entropy is used for training as follows:\nLr = − k∑\ni=1\nli log oi, (3)\nwhere l is a k-dimensional ground-truth one-hot vector."
+  }, {
+    "heading": "6 Experiments",
+    "text": "This section gives detail of our experimental setup, followed by results and discussion."
+  }, {
+    "heading": "6.1 Experimental Setup",
+    "text": "We evaluated our shortlisting-reranking approach in two different settings of traditional small-scale IPDA and large-scale IPDA for comparison: Traditional IPDA For this setting, we simulated the traditional small-scale IPDA with only 20 domains that are commonly present in any IPDAs. Since these domains are built-in, which are carefully designed to be non-overlapping and of high quality, the signals from user preferences and domain index become irrelevant compared to the large-scale setting. The dataset comprises of more than 4M labeled utterances in text evenly distributed across 20+ domains. Large-Scale IPDA This setting is a large-scale IPDA with 1,500 domains as shown in Table 1 that could be overlapping with a varying level of quality. For instance, there could be multiple domains to get a recipe, and a high quality domain could have more recipes with more capabilities such as making recommendations compared to a low quality one. The dataset comprises of more than 6M utterances having strict invocation patterns. For instance, we extract “get me a ride” as a preprocessed sample belonging to TAXI skill for the original utterance, “Ask {TAXI} to {get me a ride}.” Shortlister For Shortlister, we show the results of using 2 different softmax functions of softmaxa (smxa) and softmaxb (smxb) as described in Section 4. The results are shown in k-best classification accuracies, where the 5-best accuracy means the percentage of test samples that have the ground-truth domain included in the top 5 domains returned by Shortlister. Hypotheses Reranker We also evaluate different variations of the reranking model for comparison.\n• SL: Shortlister 1-best result, which is our baseline without using a reranking model.\n• LR: LR point-wise: A binary logistic regression model with the hypothesis vector as features (see Section 5.1). We run it for each hypothesis made from Shortlister’s k-best list and select the highest-scoring one, hence the\nTraditional IPDA Large-Scale IPDA smxa smxb smxa smxb\n1-best 95.58 95.56 81.38 81.49 3-best 98.45 98.43 92.53 92.81 5-best 98.81 98.77 95.77 95.93"
+  }, {
+    "heading": "6.2 Methodology",
+    "text": "Table 2 shows the distribution of the training, development and test sets for each setting of traditional and large-scale IPDAs. Note that we ensure\nno overlap between the Shortlister and HypRank training sets so that HypRank is not overly tuned on Shortlister results. For the NLU models, the intent and slot models are trained on roughly 70% of the available training data.\nIn our experiments, all the models were implemented using Dynet (Neubig et al., 2017) and were trained with Adam (Kingma and Ba, 2015). We used the initial learning rate of 4 ×10−4 and left all the other hyper-parameters as suggested in Kingma and Ba (2015). We also used variational dropout (Gal and Ghahramani, 2016) for regularization."
+  }, {
+    "heading": "6.3 Results and Discussion",
+    "text": "Table 3 summarizes the k-best classification accuracy results for our Shortlister. With only 20 domains in the traditional IPDA setting, the accuracy is over 95% even when we take 1-best or top domain returned from Shortlister. The accuracy approaches 99% when we consider Shortlister correct if the ground-truth domain is present in the top 5 domains. The results suggest that the character and word-level information by itself, coupled with BiLSTMs, can already show significant discriminative power for our task.\nWith a scale of 1,500 domains, the results indicate that just using the top domain returned from Shortlister is not enough to have comparable performance shown in the traditional IPDA setting. However, the performance catches up to close to 96% as we include more domains in the k-best list, and although not shown here, it starts to level off at 5-best list. The k-best results from Shortlister set an upper bound for HypRank performance. We note that it could be possible to include more contextual information at the shortlisting stage to bring Shortlister’s performance up with some trade-offs in terms of real-time systems,\nwhich we leave for future work. In addition, using smxb shows a tendency of slightly better performance compared to using smxa, which takes a softmax over all domains and tends to emphasize only the top domain while suppressing all others even when there are many overlapping and very similar domains.\nThe classification performance after the reranking stage with HypRank using Shortlister’s 5-best results is summarized in Table 4. SL shows the results of taking the top domain from Shortlister without any reranking step, and UPPER shows the performance upper bound of HypRank set by the shortlisting stage. In general, the pair-wise approach is shown to be better than the point-wise approaches, with the best performance coming from the list-wise ones. Looking at the lowest accuracy from LSTMO, it suggests that the raw hypothesis vectors themselves are important features that should be combined with the cross-hypothesis contextual features from the LSTM outputs for best results. Adding manual cross-hypothesis features to the automatic ones from the LSTM outputs do not improve the performance.\nThe performance trend is very similar for smxa and smxb, but there is a gap between them in the large-scale setting. An explanation for this is similar to that for Shortlister results that smxa emphasizes only the top domain while suppressing all the rest, which might not be suitable in a large-scale setting with many overlapping domains. For both traditional and large-scale settings, the best accuracy is shown with the list-wise model of LSTMC ."
+  }, {
+    "heading": "7 Conclusion",
+    "text": "We have described an efficient and scalable shortlisting-reranking neural models for largescale domain classification. The models first efficiently prune all domains to only a small number of k candidates using minimal information and subsequently rerank them using additional contextual information that could be more expensive in terms of computing resources. We have shown the effectiveness of our approach with 1,500 domains in a real IPDA system and evaluated using different variations of the shortlisting model and our novel reranking models, in terms of pointwise, pair-wise, and list-wise ranking approaches."
+  }, {
+    "heading": "Acknowledgments",
+    "text": "We thank Sunghyun Park and Sungjin Lee for helpful discussion and feedback."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Improved transition-based parsing by modeling characters instead of words with LSTMs",
+    "authors": ["Miguel Ballesteros", "Chris Dyer", "Noah A. Smith."],
+    "venue": "Proceedings of the 2015 Conference on Empirical Methods in Natural Language Processing",
+    "year": 2015
+  }, {
+    "title": "Kernel-based discriminative re-ranking for spoken command understanding in HRI",
+    "authors": ["Roberto Basili", "Emanuele Bastianelli", "Giuseppe Castellucci", "Daniele Nardi", "Vittorio Perera"],
+    "year": 2013
+  }, {
+    "title": "Easy contextual intent prediction and slot detection",
+    "authors": ["A. Bhargava", "Asli elikyilmaz", "Dilek Z. Hakkani-Tur", "Ruhi Sarikaya."],
+    "venue": "IEEE International Conference on Acoustics, Speech and Signal Processing pages 8337–8341.",
+    "year": 2013
+  }, {
+    "title": "Learning to Rank Using an Ensemble of LambdaGradient Models",
+    "authors": ["Christopher J C Burges", "Krysta M Svore", "Paul N. Bennett", "Andrzej Pastusiak", "Qiang Wu."],
+    "venue": "Journal of Machine Learning Research (JMLR) 14:25–35.",
+    "year": 2011
+  }, {
+    "title": "A new pre-training method for training deep learning models with application to spoken language understanding",
+    "authors": ["Asli Celikyilmaz", "Ruhi Sarikaya", "Dilek Hakkani-Tür", "Xiaohu Liu", "Nikhil Ramesh", "Gökhan Tür."],
+    "venue": "Interspeech. pages 3255–3259.",
+    "year": 2016
+  }, {
+    "title": "Reranking an n-gram supertagger",
+    "authors": ["John Chen", "Srinivas Bangalore", "Michael Collins", "Owen Rambow."],
+    "venue": "Proceedings of the Sixth International Workshop on Tree Adjoining Grammar and Related Frameworks (TAG+ 6). pages 259–268.",
+    "year": 2002
+  }, {
+    "title": "Zero-shot learning of intent embeddings for expansion by convolutional deep structured semantic models",
+    "authors": ["Yun-Nung Chen", "Dilek Hakkani-Tür", "Xiaodong He."],
+    "venue": "Acoustics, Speech and Signal Processing (ICASSP), 2016 IEEE Interna-",
+    "year": 2016
+  }, {
+    "title": "End-to-end memory networks with knowledge carryover for multi-turn spoken language understanding",
+    "authors": ["Yun-Nung Chen", "Dilek Hakkani-Tür", "Gokhan Tur", "Jianfeng Gao", "Li Deng."],
+    "venue": "Interspeech.",
+    "year": 2016
+  }, {
+    "title": "Discriminative reranking for natural language parsing",
+    "authors": ["Michael Collins", "Terry Koo."],
+    "venue": "Computational Linguistics 31(1):25–70.",
+    "year": 2005
+  }, {
+    "title": "Multi-language hypotheses ranking and domain tracking for open domain",
+    "authors": ["Paul A Crook", "Jean-Philippe Martin", "Ruhi Sarikaya."],
+    "venue": "Interspeech.",
+    "year": 2015
+  }, {
+    "title": "Extending domain coverage of language understanding systems via intent transfer between domains using knowledge graphs and search query click",
+    "authors": ["Ali El-Kahky", "Xiaohu Liu", "Ruhi Sarikaya", "Gokhan Tur", "Dilek Hakkani-Tur", "Larry Heck"],
+    "year": 2014
+  }, {
+    "title": "Greedy function approximation: A gradient boosting machine",
+    "authors": ["Jerome H. Friedman"],
+    "year": 2001
+  }, {
+    "title": "A theoretically grounded application of dropout in recurrent neural networks",
+    "authors": ["Yarin Gal", "Zoubin Ghahramani."],
+    "venue": "Advances in Neural Information Processing Systems 29 (NIPS). pages 1019–1027.",
+    "year": 2016
+  }, {
+    "title": "Deep residual learning for image recognition",
+    "authors": ["Kaiming He", "Xiang Zhang", "Shaoqing Ren", "Jian Sun."],
+    "venue": "IEEE Conference on Computer Vision and Pattern Recognition (CVPR). pages 770–778.",
+    "year": 2016
+  }, {
+    "title": "Context-sensitive and roledependent spoken language understanding using bidirectional and attention lstms",
+    "authors": ["Chiori Hori", "Takaaki Hori", "Shinji Watanabe", "John R Hershey."],
+    "venue": "Interspeech pages 3236–3240.",
+    "year": 2016
+  }, {
+    "title": "Domain adaptation of recurrent neural networks for natural language understanding",
+    "authors": ["Aaron Jaech", "Larry Heck", "Mari Ostendorf."],
+    "venue": "Interspeech.",
+    "year": 2016
+  }, {
+    "title": "Hypotheses ranking and state tracking for a multi-domain dialog system using multiple ASR alternates",
+    "authors": ["Omar Zia Khan", "Jean-Philippe Robichaud", "Paul A. Crook", "Ruhi Sarikaya."],
+    "venue": "Interspeech.",
+    "year": 2015
+  }, {
+    "title": "Weakly supervised slot tagging with partially labeled sequences from web search click logs",
+    "authors": ["Young-Bum Kim", "Minwoo Jeong", "Karl Stratos", "Ruhi Sarikaya."],
+    "venue": "Proceedings of the 2015 Conference of the North American Chapter of the Asso-",
+    "year": 2015
+  }, {
+    "title": "Speaker-sensitive dual memory networks for multi-turn slot tagging",
+    "authors": ["Young-Bum Kim", "Sungjin Lee", "Ruhi Sarikaya."],
+    "venue": "Automatic Speech Recognition and Understanding Workshop (ASRU), 2017 IEEE. IEEE, pages 547–553.",
+    "year": 2017
+  }, {
+    "title": "Onenet: Joint domain, intent, slot prediction for spoken language understanding",
+    "authors": ["Young-Bum Kim", "Sungjin Lee", "Karl Stratos."],
+    "venue": "Automatic Speech Recognition and Understanding Workshop (ASRU), 2017 IEEE. IEEE, pages 547–553.",
+    "year": 2017
+  }, {
+    "title": "Adversarial adaptation of synthetic or stale data",
+    "authors": ["Young-Bum Kim", "Karl Stratos", "Dongchan Kim."],
+    "venue": "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics. Association for Computational Linguistics, pages",
+    "year": 2017
+  }, {
+    "title": "Domain attention with an ensemble of experts",
+    "authors": ["Young-Bum Kim", "Karl Stratos", "Dongchan Kim."],
+    "venue": "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics. volume 1, pages 643–653.",
+    "year": 2017
+  }, {
+    "title": "Pre-training of hidden-unit crfs",
+    "authors": ["Young-Bum Kim", "Karl Stratos", "Ruhi Sarikaya."],
+    "venue": "Proceedings of the 53rd Annual Meeting of the Association for Computational Linguistics and the 7th International Joint Conference on Natural Language Pro-",
+    "year": 2015
+  }, {
+    "title": "Frustratingly easy neural domain adaptation",
+    "authors": ["Young-Bum Kim", "Karl Stratos", "Ruhi Sarikaya."],
+    "venue": "Proceedings of COLING 2016, the 26th International Conference on Computational Linguistics: Technical Papers. pages 387–396.",
+    "year": 2016
+  }, {
+    "title": "A framework for pre-training hidden-unit conditional random fields and its extension to long short term memory networks",
+    "authors": ["Young-Bum Kim", "Karl Stratos", "Ruhi Sarikaya."],
+    "venue": "Computer Speech & Language 46:311–326.",
+    "year": 2017
+  }, {
+    "title": "New transfer learning techniques for disparate label sets",
+    "authors": ["Young-Bum Kim", "Karl Stratos", "Ruhi Sarikaya", "Minwoo Jeong."],
+    "venue": "Proceedings of the 53rd Annual Meeting of the Association for Computational Linguistics and the 7th International Joint",
+    "year": 2015
+  }, {
+    "title": "ADAM: A method for stochastic optimization",
+    "authors": ["Diederik Kingma", "Jimmy Ba."],
+    "venue": "International Conference on Learning Representations (ICLR).",
+    "year": 2015
+  }, {
+    "title": "Self-normalizing neural networks",
+    "authors": ["Günter Klambauer", "Thomas Unterthiner", "Andreas Mayr", "Sepp Hochreiter."],
+    "venue": "Advances in Neural Information Processing Systems 30 (NIPS). pages 972–981.",
+    "year": 2017
+  }, {
+    "title": "Finding function in form: Compositional character models for open vocabulary word representation",
+    "authors": ["Wang Ling", "Chris Dyer", "Alan W Black", "Isabel Trancoso", "Ramon Fermandez", "Silvio Amir", "Luis Marujo", "Tiago Luis."],
+    "venue": "Proceedings of the 2015",
+    "year": 2015
+  }, {
+    "title": "Attention-based recurrent neural network models for joint intent detection and slot filling",
+    "authors": ["Bing Liu", "Ian Lane."],
+    "venue": "Interspeech. pages 685–689.",
+    "year": 2016
+  }, {
+    "title": "Multi-domain adversarial learning for slot filling in spoken language understanding",
+    "authors": ["Bing Liu", "Ian Lane."],
+    "venue": "NIPS Workshop on Conversational AI.",
+    "year": 2017
+  }, {
+    "title": "A reranking approach for recognition and classification of speech input in conversational dialogue systems",
+    "authors": ["F. Morbini", "K. Audhkhasi", "R. Artstein", "M. Van Segbroeck", "K. Sagae", "P. Georgiou", "D.R. Traum", "S. Narayanan."],
+    "venue": "IEEE Spoken Lan-",
+    "year": 2012
+  }, {
+    "title": "Dynet: The dynamic neural network toolkit",
+    "authors": ["Graham Neubig", "Chris Dyer", "Yoav Goldberg", "Austin Matthews", "Waleed Ammar", "Antonios Anastasopoulos", "Miguel Ballesteros", "David Chiang", "Daniel Clothiaux", "Trevor Cohn"],
+    "year": 2017
+  }, {
+    "title": "Kernel-based reranking for named-entity extraction",
+    "authors": ["Truc-Vien T Nguyen", "Alessandro Moschitti", "Giuseppe Riccardi."],
+    "venue": "Proceedings of the 23rd International Conference on Computational Linguistics: Posters. Association for Computational",
+    "year": 2010
+  }, {
+    "title": "Reranking for sentence boundary detection",
+    "authors": ["Brian Roark", "Yang Liu", "Mary Harper", "Robin Stewart", "Matthew Lease", "Matthew Snover", "Izhak Shafran", "Bonnie Dorr", "John Hale", "Anna Krasnyanskaya"],
+    "year": 2006
+  }, {
+    "title": "Hypotheses ranking for robust domain classification and tracking in dialogue systems",
+    "authors": ["Jean-Philippe Robichaud", "Paul A. Crook", "Puyang Xu", "Omar Zia Khan", "Ruhi Sarikaya."],
+    "venue": "Interspeech. pages 145–149.",
+    "year": 2014
+  }, {
+    "title": "The technology behind personal digital assistants: An overview of the system architecture and key components",
+    "authors": ["Ruhi Sarikaya."],
+    "venue": "IEEE Signal Processing Magazine 34(1):67–81.",
+    "year": 2017
+  }, {
+    "title": "Discriminative reranking for machine translation",
+    "authors": ["Libin Shen", "Anoop Sarkar", "Franz Josef Och."],
+    "venue": "Proceedings of the Human Language Technology Conference of the North American Chapter of the Association for Computational Linguistics: HLT-",
+    "year": 2004
+  }, {
+    "title": "Spoken Language Understanding: Systems for Extracting Semantic Information from Speech",
+    "authors": ["Gokhan Tur", "Renato de Mori."],
+    "venue": "New York, NY: John Wiley and Sons.",
+    "year": 2011
+  }, {
+    "title": "Contextual domain classification in spoken language understanding systems using recurrent neural network",
+    "authors": ["Puyang Xu", "Ruhi Sarikaya."],
+    "venue": "IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP). pages 136–140.",
+    "year": 2014
+  }, {
+    "title": "Transfer learning for sequence tagging with hierarchical recurrent networks",
+    "authors": ["Zhilin Yang", "Ruslan Salakhutdinov", "William W Cohen."],
+    "venue": "International Conference on Learning Representation (ICLR) .",
+    "year": 2017
+  }, {
+    "title": "A joint model of intent determination and slot filling for spoken language understanding",
+    "authors": ["Xiaodong Zhang", "Houfeng Wang."],
+    "venue": "International Joint Conference on Artificial Intelligence (IJCAI). pages 2993–2999.",
+    "year": 2016
+  }],
+  "id": "SP:e1b41d6e0de093452f1c0424675d936970e60271",
+  "authors": [{
+    "name": "Young-Bum Kim",
+    "affiliations": []
+  }, {
+    "name": "Dongchan Kim",
+    "affiliations": []
+  }, {
+    "name": "Joo-Kyung Kim",
+    "affiliations": []
+  }, {
+    "name": "Ruhi Sarikaya",
+    "affiliations": []
+  }],
+  "abstractText": "Intelligent personal digital assistants (IPDAs), a popular real-life application with spoken language understanding capabilities, can cover potentially thousands of overlapping domains for natural language understanding, and the task of finding the best domain to handle an utterance becomes a challenging problem on a large scale. In this paper, we propose a set of efficient and scalable neural shortlistingreranking models for large-scale domain classification in IPDAs. The shortlisting stage focuses on efficiently trimming all domains down to a list of k-best candidate domains, and the reranking stage performs a list-wise reranking of the initial k-best domains with additional contextual information. We show the effectiveness of our approach with extensive experiments on 1,500 IPDA domains.",
+  "title": "A Scalable Neural Shortlisting-Reranking Approach for Large-Scale Domain Classification in Natural Language Understanding"
+}

@@ -1,0 +1,271 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Recurrent neural networks (RNNs) are powerful models of sequential data (Robinson & Fallside, 1987; Werbos, 1988; Williams, 1989; Elman, 1990; Pearlmutter, 1995). RNNs have achieved state-of-the-art results on many tasks, including language modeling (Mikolov & Zweig, 2012; Yang et al., 2017), text generation (Graves, 2013), image generation (Gregor et al., 2015), speech recognition (Graves et al., 2013; Chiu et al., 2017), and machine translation (Sutskever et al., 2014; Wu et al., 2016).\nThe main idea behind an RNN is to posit a sequence of recursively defined hidden states, and then to model each obser-\n1Columbia University 2New York University 3Princeton University. Correspondence to: Adji B. Dieng <abd2141@columbia.edu>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\nvation conditional on its state. The key element of an RNN is its transition function. The transition function determines how each hidden state is a function of the previous observation and previous hidden state; it defines the underlying recursion. There are many flavors of RNNs—examples include the Elman Recurrent Neural Network (ERNN) (Elman, 1990), the Long-Short Term Memory (LSTM) (Hochreiter & Schmidhuber, 1997), and the Gated Recurrent Unit (GRU) (Cho et al., 2014). Each flavor amounts to a different way of designing and parameterizing the transition function.\nWe fit an RNN by maximizing the likelihood of the observations with respect to its parameters, those of the transition function and of the observation likelihood. But RNNs are very flexible and they overfit; regularization is crucial. Researchers have explored many approaches to regularizing RNNs, such as Tikhonov regularization (Bishop, 1995), dropout and its variants (Srivastava et al., 2014; Zaremba et al., 2014; Gal & Ghahramani, 2016; Wan et al., 2013), and zoneout (Krueger et al., 2016). (See the related work section below for more discussion.)\nIn this paper, we develop Noisin, an effective new way to regularize an RNN. The idea is to inject random noise into its transition function and then to fit its parameters to maximize the corresponding marginal likelihood of the observations. We can easily apply Noisin to any flavor of RNN and we can use many types of noise.\nFigure 1 demonstrates how an RNN can overfit and how Noisin can help. The plot involves a language modeling task where the RNN models a sequence of words. The horizontal axis is epochs of training; the vertical axis is perplexity, which is an assessment of model fitness (lower numbers are better). The figure shows how the model fits to both the training set and the validation set. As training proceeds, the vanilla RNN improves its fitness to the training set but performance on the validation set degrades—it overfits. The performance of the RNN with Noisin continues to improve in both the training set and the validation set.\nNoisin regularizes the RNN by smoothing its loss, averaging over local neighborhoods of the transition function. Further, Noisin requires that the noise-injected transition function be unbiased. This means that, on average, it preserves the transition function of the original RNN.\nWith this requirement, we show that Noisin provides explicit regularization, i.e., it is equivalent to fitting the usual RNN loss plus a penalty function of its parameters. We can characterize the penalty as a function of the variance of the noise. Intuitively, it penalizes the components of the model that are sensitive to noise; this induces robustness to how future data may be different from the observations.\nWe examine Noisin with the LSTM and the LSTM with dropout, which we call the dropout-LSTM, and we explore several types of distributions. We study performance with two benchmark datasets on a language modeling task. Noisin improves over the LSTM by as much as 37.3% on the Penn Treebank dataset and 39.0% on the Wikitext-2 dataset; it improves over the dropout-LSTM by as much as 12.2% on the Penn Treebank and 9.4% on Wikitext-2.\nRelated work. Many techniques have been developed to address overfitting in RNNs. The most traditional regularization technique is weight decay (L1 and L2). However, Pascanu et al. (2013) showed that such simple regularizers prevent the RNNs from learning long-range dependencies.\nAnother technique for regularizing RNNs is to normalize the hidden states or the observations (Ioffe & Szegedy, 2015; Ba et al., 2016; Cooijmans et al., 2016). Though powerful, this class of approaches can be expensive.\nOther types of regularization, including what we study in this paper, involve auxiliary noise variables. The most successful noise-based regularizer for neural networks is dropout (Srivastava et al., 2014; Wager et al., 2013; Noh\net al., 2017). Dropout has been adapted to RNNs by only pruning their input and output matrices (Zaremba et al., 2014) or by putting judiciously chosen priors on all the weights and applying variational methods (Gal & Ghahramani, 2016). Still other noise-based regularization prunes the network by dropping updates to the hidden units of the RNN (Krueger et al., 2016; Semeniuta et al., 2016). More recently Merity et al. (2017) extended these techniques.\nInvolving noise variables in RNNs has been used in contexts other than regularization. For example Jim et al. (1996) analyze the impact of noise on convergence and long-term dependencies. Other work introduces auxiliary latent variables that enable RNNs to capture the high variability of complex sequential data such as music, audio, and text (Bayer & Osendorfer, 2014; Chung et al., 2015; Fraccaro et al., 2016; Goyal et al., 2017)."
+  }, {
+    "heading": "2. Recurrent Neural Networks",
+    "text": "Consider a sequence of observations, x1:T = (x1, ...,xT ). An RNN factorizes its joint distribution according to the chain rule of probability,\np(x1:T ) = TY\nt=1\np(xt|x1:t 1). (1)\nTo capture dependencies, the RNN expresses each conditional probability as a function of a low-dimensional recurrent hidden state,\nht = fW (xt 1,ht 1) and p(xt|x1:t 1) = p(xt|ht).\nThe likelihood p(xt|ht) can be of any form. We focus on the exponential family\np(xt|ht) = ⌫(xt) exp (V >ht) >xt A(V >ht) , (2)\nwhere ⌫(·) is the base measure, V >ht is the natural parameter—a linear function of the hidden state ht—and A(V >ht) is the log-normalizer. The matrix V is called the prediction or output matrix of the RNN.\nThe hidden state ht at time t is a parametric function fW (ht 1,xt 1) of the previous hidden state ht 1 and the previous observation xt 1; the parameters W are shared across all time steps. The function fW is the transition function of the RNN, it defines a recurrence relation for the hidden states and renders ht a function of all the past observations x1:t 1; these properties match the chain rule decomposition in Eq. 1.\nThe particular form of fW determines the RNN. Researchers have designed many flavors, including the LSTM and the GRU (Hochreiter & Schmidhuber, 1997; Cho et al., 2014).\nIn this paper we will study the LSTM. However, the methods we develop can be applied to all types of RNNs.\nLong-Short Term Memory. We now describe the LSTM, a variant of RNN that we study in Section 5. The LSTM is built from the simpler ERNN (Elman, 1990). In an ERNN, the transition function is\nfW (xt 1,ht 1) = s(W > x xt 1 +W > h ht 1),\nwhere we dropped an intercept term to avoid cluttered notation. Here, Wh is called the recurrent weight matrix and Wx is called the embedding matrix or input matrix. The function s(·) is called an activation or squashing function, which stabilizes the transition dynamics by bounding the hidden state. Typical choices for the squashing function include the sigmoid and the hyperbolic tangent.\nThe LSTM was designed to avoid optimization issues, such as vanishing (or exploding) gradients. Its transition function composes four ERNNs, three with sigmoid activations and one with a tanh activation:\nft = (W > x1xt 1 +W > h1ht 1) (3) it = (W > x2xt 1 +W > h2ht 1) (4) ot = (W > x4xt 1 +W > h4ht 1) (5)\nct = ft ct 1 + it tanh(W>x3xt 1 +W>h3ht 1) (6) ht = ot tanh(ct). (7)\nThe idea is that the memory cell ct captures long-term dependencies (Hochreiter & Schmidhuber, 1997).\nHowever, LSTMs have a high model complexity and, consequently, they easily memorize data. Regularization is crucial. In the next section, we develop a new regularization method for RNNs called Noisin."
+  }, {
+    "heading": "3. Noise-Injected RNNs",
+    "text": "Noisin is built from noise-injected recurrent neural network (RNN)s. These are RNNs whose hidden states are computed using auxiliary noise variables. There are several advantages to injecting noise into the hidden states of RNNs. For example it prevents the dimensions of the hidden states from\nco-adapting and forces individual units to capture useful features.\nWe define noise-injected RNNs as any RNN following the generative process\n✏1:T ⇠ '(·;µ, ) (8) zt = gW (xt 1, zt 1, ✏t) (9)\np(xt |x1:t 1) = p(xt | zt), (10)\nwhere the likelihood p(xt | zt) is an exponential family as in Eq. 2. The noise variables ✏1:T are drawn from a distribution '(·;µ, ) with mean µ and scale . For example, '(·;µ, ) can be a zero-mean Gaussian with variance 2. We will study many types of noise distributions.\nThe noisy hidden state zt is a parametric function gW of the previous observation xt 1, the previous noisy hidden state zt 1, and the noise ✏t. Therefore conditional on the noise ✏1:T , the transition function gW defines a recurrence relation on z1:T .\nThe function gW determines the noise-injected RNN. In this paper, we propose functions gW that meet the criterion described below.\nUnbiased noise injection. Injecting noise at each time step limits the amount of information carried by hidden states. In limiting their capacity, noise injection is some form of regularization. In Section 4 we show that noise injection under exponential family likelihoods corresponds to explicit regularization under some unbiasedness condition.\nWe define two flavors of unbiasedness: strong unbiasedness and weak unbiasedness. Let zt(✏1:t) denote the unrolled recurrence at time t; it is a random variable via the noise ✏1:t. Under the strong unbiasedness condition, the transition function gW must satisfy the relationship\nEp(zt(✏1:t) | zt 1) [zt(✏1:t)] = ht (11)\nwhere ht is the hidden state of the underlying RNN. This is satisfied by injecting the noise at the last layer of the RNN. Weak unbiasedness imposes a looser constraint. Under weak unbiasedness, gW must satisfy\nEp(zt(✏1:t) | zt 1) [zt(✏1:t)] = fW (xt 1, zt 1) (12)\nwhere fW is the transition function of the underlying RNN. What weak unbiasedness means is that the noise should be injected in such a way that driving the noise to zero leads to the original RNN. Two possible choices for gW that meet this condition are the following\ngW (xt 1, zt 1, ✏t) = fW (xt 1, zt 1) + ✏t (13) gW (xt 1, zt 1, ✏t) = fW (xt 1, zt 1) ✏t. (14)\nIn Eq. 13 the noise has mean zero whereas in Eq. 14 it has mean one. These choices of gW correspond to additive noise and multiplicative noise respectively. Note fW can be any RNN including the RNN with dropout or the stochastic RNNs (Bayer & Osendorfer, 2014; Chung et al., 2015; Fraccaro et al., 2016; Goyal et al., 2017). For example to implement unbiased noise injection with multiplicative noise for the Long-Short Term Memory (LSTM) the only change from the original LSTM is to replace Eq. 7 with\nzt = ot tanh(ct) ✏t.\nSuch noise-injected hidden states can be stacked to build a multi-layered noise-injected LSTM that meet the weak unbiasedness condition.\nDropout. We now consider dropout from the perspective of unbiasedness. Consider the LSTM as described in Section 2. Applying dropout to it corresponds to injecting Bernoulli-distributed noise as follows\nft = (W > x1xt 1 ✏ xf t +W> h1ht 1 ✏ hf t )\nit = (W > x2xt 1 ✏xit +W>h2ht 1 ✏hit ) ot = (W > x4xt 1 ✏xot +W>h4ht 1 ✏hot )\nct = ft ct 1+ it tanh(W>x3xt 1 ✏xct +W>h3ht 1 ✏hct )\nzdropout t = ot tanh(ct).\nThis general form of dropout encapsulates existing dropout variants. For example when the noise variables ✏hf t , ✏hi t , ✏ho t , ✏hc t are set to one we recover the variant of dropout in Zaremba et al. (2014).\nBecause of the nonlinearities dropout does not meet the unbiasedness desideratum Eq. 12 where ht is the hidden state of the LSTM as described in Section 2. Here at each time step t, ✏t denotes the set of noise variables ✏xft , ✏xit , ✏xot , ✏xct and ✏hf\nt , ✏hi t , ✏ho t , ✏hc t .\nDropout is therefore biased and does not preserve the underlying RNN. However, dropout has been widely successfully used in practice and has many nice properties. For example it regularizes by acting like an ensemble method (Goodfellow et al., 2016). We study the dropout-LSTM in Section 5 as a variant of RNN that can benefit from the method Noisin proposed in this paper.\nAlgorithm 1 Noisin with multiplicative noise. Input: Data x1:T , initial hidden state z0, noise distribution '(·; 1, ), and learning rate ⇢. Output: learned parameters W ⇤ and V ⇤. Initialize parameters W and V for iteration iter = 1, 2, . . . , do\nfor time step t = 1, . . . , T do Sample noise ✏t ⇠ '(✏t; 1, ) Compute state zt = fW (zt 1,xt 1) ✏t\nend for Compute loss eL as in Eq. 17 Update W : W ⇢ ·rW eL Update V : V ⇢ ·rV eL Change learning rate ⇢ according to some schedule.\nend for\nUnbiased noise-injection with Noisin. Deterministic RNNs are learned using truncated backpropagation through time with the maximum likelihood objective—the log likelihood of the data. Backpropagation through time builds gradients by unrolling the RNN into a feed-forward neural network and applies backpropagation (Rumelhart et al., 1988). The RNN is then optimized using gradient descent or stochastic gradient descent (Robbins & Monro, 1951).\nNoisin applies the same procedure to the expected loglikelihood under the injected noise,\nL = Ep(✏1:T ) [log p(x1:T |z1:T (✏1:T ))] . (15)\nIn more detail this is\nL = TX\nt=1\nEp(✏1:t)\nh log p(xt|zt(✏1:t)) i (16)\nNotice this objective is a Jensen bound on the marginal log-likelihood of the data,\nL  logEp(✏1:T ) [p(x1:T |z1:T (✏1:T ))] = log p(x1:T ).\nThe expectations in the objective of Eq. 16 are intractable due to the nonlinearities in the model and the form of the noise distribution. We approximate the objective using Monte Carlo;\nbL = 1 K\nKX\nk=1\nTX\nt=1\nh log p(xt|zt(✏(k)1:t )) i .\nWhen using one sample (K = 1), the training procedure is just as easy as for the underlying RNN. The loss in this case, under the exponential family likelihood, becomes\neL = TX\nt=1\n⇥ (V >zt(✏1:t)) >xt A(V >zt(✏1:t)) ⇤ + c,\n(17)\nwhere c = P T\nt=1 log ⌫(xt) is a constant that does not depend on the parameters. Algorithm 1 summarizes the procedure for multiplicative noise. The only change from traditional RNN training is when updating the hidden state in lines 4 and 5.\nControling the noise level. Noisin is amenable to any RNN and any noise distribution. As with all regularization techniques, Noisin comes with a free parameter that determines the amount of regularization: the spread of the noise.\nCertain noise distributions have bounded variance; for example the Bernoulli and the Beta distributions. This limits the amount of regularization one can afford. To circumvent this bounded variance issue, we rescale the noise to have unbounded variance. Table 2 shows the expression of the variance of the original noise and its scaled version for several distributions. It is the scaled noise that is used in Noisin."
+  }, {
+    "heading": "4. Unbiased Regularization for RNNs",
+    "text": "In Section 3, we introduced the concept of unbiasedness in the context of RNNs as a desideratum for noise injection to preserve the underlying RNN. In this section we prove unbiasedness leads to an explicit regularizer that forces the hidden states to be robust to noise."
+  }, {
+    "heading": "4.1. Unbiased noise injection is explicit regularization",
+    "text": "A valid regularizer is one that adds a nonnegative term to the risk. This section shows that unbiased noise injection with exponential family likelihoods leads to valid regularizers.\nConsider the loss in Eq. 17 for an exponential family likelihood. The exponential family provides a general notation for the types of data encountered in practice: binary, count, real-valued, and categorical. Table 1 shows the expression of A for these types of data. The log normalizer A(V >zt) has many useful properties. For example it is convex and infinitely differentiable.\nAssume without loss of generality that we observe one sequence x1:T . Consider the empirical risk function for the noise-injected RNN. It is defined as\nR = TX\nt=1\nEp(✏1:t)\n(V >zt) >xt A(V >zt) + c.\nWith little algebra we can decompose this risk into the sum of two terms\nR = R(det) + TX\nt=1\nEp(✏1:t) {Et} (18)\nwhere R(det) is the empirical risk for the underlying RNN and Et is\nEt = A(V >zt) A(V >ht) V >zt V >ht > xt.\nBecause the second term in Eq. 18 is not always guaranteed to be non-negative, noise-injection is not explicit regularization in general. However, under the strong unbiasedness condition, this term corresponds to a valid regularization term and simplifies to\nReg = 1 2\nTX\nt=1\ntr Ep(✏1:t)Cov(B >zt | zt 1(✏1:t 1)) ,\nwhere the matrix B = V p r2A(V >ht) is the prediction matrix of the underlying RNN rescaled by the square root of r2A(V >ht)—the Hessian of the log-normalizer of the likelihood. This Hessian is also the Fisher information matrix of the RNN. We provide a detailed proof in Section 7.\nNoisin requires that we minimize the objective of the underlying RNN while also minimizing Reg. Minimizing Reg induces robustness—it is equivalent to penalizing hidden units that are too sensitive to noise."
+  }, {
+    "heading": "4.2. Connections",
+    "text": "In this section, we intuit that Noisin has ties to ensemble methods and empirical Bayes.\nThe ensemble method perspective. Noisin can be interpreted as an ensemble method. The objective in Eq. 16 corresponds to averaging the predictions of infinitely many RNNs at each time step in the sequence. This is known as an ensemble method and has a regularization effect (Poggio et al., 2002). However ensemble methods are costly as they require training all the sub-models in the ensemble. With Noisin, at each time step in the sequence, one of the infinitely many RNNs is trained and because of parameter sharing, the RNN being trained at the next time step will use better settings of the weights. This makes training the whole model efficient. (See Algorithm 1.)\nThe empirical Bayes perspective. Consider a noiseinjected RNN. We write its joint distribution as\np(x1:T , z1:T ) = TY\nt=1\np(xt|zt;V )p(zt|zt 1,xt 1;W )\nHere p(xt|zt;V ) denotes the likelihood and p(zt|zt 1,xt 1;W ) is the prior over the noisy hidden states; it is parameterized by the weights W . From the perspective of Bayesian inference this is an unknown prior. When we optimize the objective in Eq. 16, we are learning the weights W . This is equivalent to learning the prior over the noisy hidden states and is known as empirical Bayes\n(Robbins, 1964). It consists in getting point estimates of prior parameters in a hierarchical model and using those point estimates to define the prior."
+  }, {
+    "heading": "5. Empirical Study",
+    "text": "We presented Noisin, a method that relies on unbiased noise injection to regularize any RNN. Noisin is simple and can be integrated with any existing RNN-based model. In this section, we focus on applying Noisin to the LSTM and the dropout-LSTM. We use language modeling as a testbed. Regularization is crucial in language modeling because the input and prediction matrices scale linearly with the size of the vocabulary. This results in networks with very high capacity.\nWe used Noisin under two noise regimes: additive noise and multiplicative noise. We found that additive noise uniformly performs worse than multiplicative noise for the LSTM. We therefore report results only on multiplicative noise.\nWe used Noisin with several noise distributions: Gaussian, Logistic, Laplace, Gamma, Bernoulli, Gumbel, Beta, and -Square. We found that overall the only property that matters with these distributions is the variance. The variance determines the amount of regularization for Noisin. It is the parameter in Algorithm 1. We outlined in Section 4 how to set the noise level for a given distribution so as to benefit from unbounded variance.\nWe also found that these distributions, when used with Noisin on the LSTM perform better than the dropout LSTM on the Penn Treebank.\nAnother interesting finding is that Noisin when applied to the dropout-LSTM performs better than the original dropoutLSTM.\nNext we describe the two benchmark datasets used: Penn Treebank and Wikitext-2. We then provide details on the\nexperimental settings for reproducibility. We finally present the results in Table 3 and Table 4.\nPenn Treebank. The Penn Treebank portion of the Wall Street Journal (Marcus et al., 1993) is a long standing benchmark dataset for language modeling. We use the standard split, where sections 0 to 20 (930K tokens) are used for training, sections 21 to 22 (74K tokens) for validation, and sections 23 to 24 (82K tokens) for testing (Mikolov et al., 2010). We use a vocabulary of size 10K that includes the special token unk for rare words and the end of sentence indicator eos.\nWikitext-2. The Wikitext-2 dataset (Merity et al., 2016) has been recently introduced as an alternative to the Penn Treebank dataset. It is sourced from Wikipedia articles and is approximately twice the size of the Penn Treebank dataset. We use a vocabulary size of 30K and no further preprocessing steps.\nExperimental settings. To assess the capabilities of Noisin as a regularizer on its own, we used the basic settings for RNN training (Zaremba et al., 2014). We did not use weight decay or pointers (Merity et al., 2016).\nWe considered two settings in our experiments: a mediumsized network and a large network. The medium-sized network has 2 layers with 650 hidden units each. This results in a model complexity of 13 million parameters. The large network has 2 layers with 1500 hidden units each. This leads to a model complexity of 51 million parameters.\nFor each setting, we set the dimension of the word embeddings to match the number of hidden units in each layer. Following initialization guidelines in the literature, we initialize all embedding weights uniformly in the interval [ 0.1, 0.1]. All other weights were initialized uniformly between [ 1p\nH , 1p H ] where H is the number of hidden units\nin a layer. All the biases were initialized to 0. We fixed the seed to 1111 for reproducibility.\nWe train the models using truncated backpropagation through time with average stochastic gradient descent\n(Polyak & Juditsky, 1992) for a maximum of 200 epochs. The LSTM was unrolled for 35 steps. We used a batch size\nof 80 for both datasets. To avoid the problem of exploding gradients we clip the gradients to a maximum norm of 0.25. We used an initial learning rate of 30 for all experiments. This is divided by a factor of 1.2 if the perplexity on the validation set deteriorates.\nFor the dropout-LSTM, the values used for dropout on the input, recurrent, and output layers were 0.5, 0.4, 0.5 respectively.\nThe models were implemented in PyTorch. The source code is available upon request.\nResults on the Penn Treebank. The results on the Penn Treebank are illustrated in Table 3. The best results for the non-regularized LSTM correspond to a small network. This is because larger networks overfit and require regularization. In general Noisin improves any given RNN including dropout-LSTM. For example Noisin with multiplicative Bernoulli noise performs better than dropout RNN for both medium and large settings. Noisin improves the performance of the dropout-LSTM by as much as 12.2% on this dataset.\nResults on the Wikitext-2 dataset. Results on the Wikitext2 dataset are presented in Table 4. We observe the same trend as for the Penn Treebank dataset: Noisin improves the underlying LSTM and dropout-LSTM. For the dropoutLSTM, it improves its generalization capabilities by as much as 9% on this dataset."
+  }, {
+    "heading": "6. Discussion",
+    "text": "We proposed Noisin, a simple method for regularizing RNNs. Noisin injects noise into the hidden states such that the underlying RNN is preserved. Noisin maximizes a lower bound of the log marginal likelihood of the data— the expected log-likelihood under the injected noise. We showed that Noisin is an explicit regularizer that imposes a robustness constraint on the hidden units of the RNN. On a language modeling benchmark Noisin improves the generalization capabilities of both the LSTM and the dropoutLSTM."
+  }, {
+    "heading": "7. Detailed Derivations",
+    "text": "We derive in full detail the risk of Noisin and show that it can be written as the sum of the risk of the original RNN and a regularization term.\nAssume without loss of generality that we observe one sequence x1:T . The risk of a noise-injected RNN is\nR = TX\nt=1\nEp(✏1:t) log p(xt|zt(✏1:t)).\nExpand this in more detail and write zt in lieu of zt(✏1:t) to\navoid cluttering of notation. Then\nR = TX\nt=1\nlog ⌫(xt) Ep(✏1:t) ⇥ z> t V xt A(V >zt) ⇤ .\nThe risk for the underlying RNN—R(det)—is similar when we replace zt with ht,\nR(det) = TX\nt=1\nlog ⌫(xt) ⇥ h> t V xt A(V >ht) ⇤ .\nTherefore we can express the risk of Noisin as a function of the risk of the underlying RNN,\nR = R(det) + TX\nt=1\nEp(✏1:t 1) ⇥ Ep(✏t | ✏1:t 1) (E1) ⇤\nE1 = A(V >zt) A(V >ht) V >zt V >ht > xt.\nUnder the strong unbiasedness condition, Ep(✏t | ✏1:t 1) [E1) = Ep(✏t | ✏1:t 1) ⇥ A(V >zt) A(V >ht) ⇤ .\nUsing the convexity property of the log-normalizer of exponential families and Jensen’s inequality,\nEp(✏t | ✏1:t 1) (E1) A(V > Ep(✏t | ✏1:t 1)(zt)) A(V >ht).\nUsing the strong unbiasedness condition a second time we conclude Ep(✏t | ✏1:t 1) (E1) 0. Therefore\nReg = TX\nt=1\nEp(✏1:t 1) ⇥ Ep(✏t | ✏1:t 1) (E1) ⇤ 0\nis a valid regularizer. A second-order Taylor expansion of A(V >zt) around A(V >ht) and the strong unbiasedness condition yield\nReg = 1 2\nTX\nt=1\ntr Ep(✏1:t 1) ⇥ Cov(B>zt | zt 1(✏1:t 1)) ⇤ ,\nwhere the matrix B = V p r2A(V >ht) is the original prediction matrix V rescaled by the square root of the Hessian of the log-normalizer, the inverse Fisher information matrix of the underlying RNN. This regularization term forces the hidden units to be robust to noise. Under weak unbiasedness, the proof holds under the assumption that the true data generating distribution is an RNN."
+  }, {
+    "heading": "Acknowledgements",
+    "text": "We thank the Princeton Institute for Computational Science and Engineering (PICSciE), the Office of Information Technology’s High Performance Computing Center and Visualization Laboratory at Princeton University for the computational resources. This work was supported by ONR N00014-15-1-2209, ONR 133691-5102004, NIH 5100481- 5500001084, NSF CCF-1740833, the Alfred P. Sloan Foundation, the John Simon Guggenheim Foundation, Facebook, Amazon, and IBM."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Learning stochastic recurrent networks",
+    "authors": ["J. Bayer", "C. Osendorfer"],
+    "venue": "arXiv preprint arXiv:1411.7610,",
+    "year": 2014
+  }, {
+    "title": "Training with noise is equivalent to tikhonov regularization",
+    "authors": ["C.M. Bishop"],
+    "venue": "Neural Computation,",
+    "year": 1995
+  }, {
+    "title": "State-of-the-art speech recognition with sequence-to-sequence models",
+    "authors": ["Chiu", "C.-C", "T.N. Sainath", "Y. Wu", "R. Prabhavalkar", "P. Nguyen", "Z. Chen", "A. Kannan", "R.J. Weiss", "K. Rao", "K Gonina"],
+    "venue": "arXiv preprint arXiv:1712.01769,",
+    "year": 2017
+  }, {
+    "title": "Learning phrase representations using rnn encoder-decoder for statistical machine translation",
+    "authors": ["K. Cho", "B. Van Merriënboer", "C. Gulcehre", "D. Bahdanau", "F. Bougares", "H. Schwenk", "Y. Bengio"],
+    "venue": "arXiv preprint arXiv:1406.1078,",
+    "year": 2014
+  }, {
+    "title": "A recurrent latent variable model for sequential data",
+    "authors": ["J. Chung", "K. Kastner", "L. Dinh", "K. Goel", "A.C. Courville", "Y. Bengio"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2015
+  }, {
+    "title": "Recurrent batch normalization",
+    "authors": ["T. Cooijmans", "N. Ballas", "C. Laurent", "Ç. Gülçehre", "A. Courville"],
+    "venue": "arXiv preprint arXiv:1603.09025,",
+    "year": 2016
+  }, {
+    "title": "Finding structure in time",
+    "authors": ["J.L. Elman"],
+    "venue": "Cognitive Science,",
+    "year": 1990
+  }, {
+    "title": "Sequential neural models with stochastic layers",
+    "authors": ["M. Fraccaro", "S.K. Sønderby", "U. Paquet", "O. Winther"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2016
+  }, {
+    "title": "A theoretically grounded application of dropout in recurrent neural networks",
+    "authors": ["Y. Gal", "Z. Ghahramani"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2016
+  }, {
+    "title": "Z-forcing: Training stochastic recurrent networks",
+    "authors": ["A. Goyal", "A. Sordoni", "Côté", "M.-A", "N. Ke", "Y. Bengio"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2017
+  }, {
+    "title": "Improving neural language models with a continuous cache",
+    "authors": ["E. Grave", "A. Joulin", "N. Usunier"],
+    "venue": "arXiv preprint arXiv:1612.04426,",
+    "year": 2016
+  }, {
+    "title": "Generating sequences with recurrent neural networks",
+    "authors": ["A. Graves"],
+    "venue": "arXiv preprint arXiv:1308.0850,",
+    "year": 2013
+  }, {
+    "title": "Draw: A recurrent neural network for image generation",
+    "authors": ["K. Gregor", "I. Danihelka", "A. Graves", "D.J. Rezende", "D. Wierstra"],
+    "venue": "arXiv preprint arXiv:1502.04623,",
+    "year": 2015
+  }, {
+    "title": "Long short-term memory",
+    "authors": ["S. Hochreiter", "J. Schmidhuber"],
+    "venue": "Neural Computation,",
+    "year": 1997
+  }, {
+    "title": "Tying word vectors and word classifiers: A loss framework for language modeling",
+    "authors": ["H. Inan", "K. Khosravi", "R. Socher"],
+    "venue": "arXiv preprint arXiv:1611.01462,",
+    "year": 2016
+  }, {
+    "title": "Batch normalization: Accelerating deep network training by reducing internal covariate shift",
+    "authors": ["S. Ioffe", "C. Szegedy"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2015
+  }, {
+    "title": "An analysis of noise in recurrent neural networks: convergence and generalization",
+    "authors": ["Jim", "K.-C", "C.L. Giles", "B.G. Horne"],
+    "venue": "IEEE Transactions on Neural Networks,",
+    "year": 1996
+  }, {
+    "title": "Dynamic evaluation of neural sequence models",
+    "authors": ["B. Krause", "E. Kahembwe", "I. Murray", "S. Renals"],
+    "venue": "arXiv preprint arXiv:1709.07432,",
+    "year": 2017
+  }, {
+    "title": "Zoneout: Regularizing rnns by randomly preserving hidden activations",
+    "authors": ["D. Krueger", "T. Maharaj", "J. Kramár", "M. Pezeshki", "N. Ballas", "N.R. Ke", "A. Goyal", "Y. Bengio", "H. Larochelle", "A Courville"],
+    "venue": "arXiv preprint arXiv:1606.01305,",
+    "year": 2016
+  }, {
+    "title": "Building a large annotated corpus of english: The penn treebank",
+    "authors": ["M.P. Marcus", "M.A. Marcinkiewicz", "B. Santorini"],
+    "venue": "Computational Linguistics,",
+    "year": 1993
+  }, {
+    "title": "On the state of the art of evaluation in neural language models",
+    "authors": ["G. Melis", "C. Dyer", "P. Blunsom"],
+    "venue": "arXiv preprint arXiv:1707.05589,",
+    "year": 2017
+  }, {
+    "title": "Pointer sentinel mixture models",
+    "authors": ["S. Merity", "C. Xiong", "J. Bradbury", "R. Socher"],
+    "venue": "arXiv preprint arXiv:1609.07843,",
+    "year": 2016
+  }, {
+    "title": "Regularizing and optimizing lstm language models",
+    "authors": ["S. Merity", "N.S. Keskar", "R. Socher"],
+    "venue": "arXiv preprint arXiv:1708.02182,",
+    "year": 2017
+  }, {
+    "title": "Context dependent recurrent neural network language model",
+    "authors": ["T. Mikolov", "G. Zweig"],
+    "venue": "SLT, 12:234–239,",
+    "year": 2012
+  }, {
+    "title": "Recurrent neural network based language model",
+    "authors": ["T. Mikolov", "M. Karafiát", "L. Burget", "J. Cernockỳ", "S. Khudanpur"],
+    "venue": "In Interspeech,",
+    "year": 2010
+  }, {
+    "title": "Regularizing deep neural networks by noise: Its interpretation and optimization",
+    "authors": ["H. Noh", "T. You", "J. Mun", "B. Han"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2017
+  }, {
+    "title": "On the difficulty of training recurrent neural networks",
+    "authors": ["R. Pascanu", "T. Mikolov", "Y. Bengio"],
+    "venue": "International Conference on Machine Learning,",
+    "year": 2013
+  }, {
+    "title": "Gradient calculations for dynamic recurrent neural networks: A survey",
+    "authors": ["B.A. Pearlmutter"],
+    "venue": "IEEE Transactions on Neural Networks,",
+    "year": 1995
+  }, {
+    "title": "Bagging regularizes",
+    "authors": ["T. Poggio", "R. Rifkin", "S. Mukherjee", "A. Rakhlin"],
+    "venue": "Technical report, Massachusetts Institute of Technology,",
+    "year": 2002
+  }, {
+    "title": "Acceleration of stochastic approximation by averaging",
+    "authors": ["B.T. Polyak", "A.B. Juditsky"],
+    "venue": "SIAM Journal on Control and Optimization,",
+    "year": 1992
+  }, {
+    "title": "The empirical bayes approach to statistical decision problems",
+    "authors": ["H. Robbins"],
+    "venue": "The Annals of Mathematical Statistics,",
+    "year": 1964
+  }, {
+    "title": "A stochastic approximation method",
+    "authors": ["H. Robbins", "S. Monro"],
+    "venue": "The Annals of Mathematical Statistics,",
+    "year": 1951
+  }, {
+    "title": "The utility driven dynamic error propagation network",
+    "authors": ["A. Robinson", "F. Fallside"],
+    "venue": "University of Cambridge Department of Engineering,",
+    "year": 1987
+  }, {
+    "title": "Learning representations by back-propagating errors",
+    "authors": ["D.E. Rumelhart", "G.E. Hinton", "Williams", "R. J"],
+    "venue": "Cognitive Modeling,",
+    "year": 1988
+  }, {
+    "title": "Recurrent dropout without memory loss",
+    "authors": ["S. Semeniuta", "A. Severyn", "E. Barth"],
+    "venue": "arXiv preprint arXiv:1603.05118,",
+    "year": 2016
+  }, {
+    "title": "Dropout: a simple way to prevent neural networks from overfitting",
+    "authors": ["N. Srivastava", "G.E. Hinton", "A. Krizhevsky", "I. Sutskever", "R. Salakhutdinov"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 1929
+  }, {
+    "title": "Sequence to sequence learning with neural networks",
+    "authors": ["I. Sutskever", "O. Vinyals", "Q.V. Le"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2014
+  }, {
+    "title": "Dropout training as adaptive regularization",
+    "authors": ["S. Wager", "S. Wang", "P.S. Liang"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2013
+  }, {
+    "title": "Regularization of neural networks using dropconnect",
+    "authors": ["L. Wan", "M. Zeiler", "S. Zhang", "Y.L. Cun", "R. Fergus"],
+    "venue": "In Proceedings of the 30th International Conference on Machine Learning",
+    "year": 2013
+  }, {
+    "title": "Generalization of backpropagation with application to a recurrent gas market model",
+    "authors": ["P.J. Werbos"],
+    "venue": "Neural Networks,",
+    "year": 1988
+  }, {
+    "title": "Complexity of exact gradient computation algorithms for recurrent neural networks",
+    "authors": ["R.J. Williams"],
+    "venue": "Technical report, Technical Report Technical Report NU-CCS-89-27,",
+    "year": 1989
+  }, {
+    "title": "Google’s neural machine translation system: Bridging the gap between human and machine translation",
+    "authors": ["Y. Wu", "M. Schuster", "Z. Chen", "Q.V. Le", "M. Norouzi", "W. Macherey", "M. Krikun", "Y. Cao", "Q. Gao", "K Macherey"],
+    "venue": "arXiv preprint arXiv:1609.08144,",
+    "year": 2016
+  }, {
+    "title": "Breaking the softmax bottleneck: A high-rank RNN language model",
+    "authors": ["Z. Yang", "Z. Dai", "R. Salakhutdinov", "W.W. Cohen"],
+    "venue": "arXiv preprint arXiv:1711.03953,",
+    "year": 2017
+  }, {
+    "title": "Recurrent neural network regularization",
+    "authors": ["W. Zaremba", "I. Sutskever", "O. Vinyals"],
+    "venue": "arXiv preprint arXiv:1409.2329,",
+    "year": 2014
+  }],
+  "id": "SP:9f5e73799a8be1ec5bf5533b39b41a39a6e0468b",
+  "authors": [{
+    "name": "Adji B. Dieng",
+    "affiliations": []
+  }, {
+    "name": "Rajesh Ranganath",
+    "affiliations": []
+  }, {
+    "name": "Jaan Altosaar",
+    "affiliations": []
+  }, {
+    "name": "David M. Blei",
+    "affiliations": []
+  }],
+  "abstractText": "Recurrent neural networks (RNNs) are powerful models of sequential data. They have been successfully used in domains such as text and speech. However, RNNs are susceptible to overfitting; regularization is important. In this paper we develop Noisin, a new method for regularizing RNNs. Noisin injects random noise into the hidden states of the RNN and then maximizes the corresponding marginal likelihood of the data. We show how Noisin applies to any RNN and we study many different types of noise. Noisin is unbiased—it preserves the underlying RNN on average. We characterize how Noisin regularizes its RNN both theoretically and empirically. On language modeling benchmarks, Noisin improves over dropout by as much as 12.2% on the Penn Treebank and 9.4% on the Wikitext-2 dataset. We also compared the state-of-the-art language model of Yang et al. 2017, both with and without Noisin. On the Penn Treebank, the method with Noisin more quickly reaches stateof-the-art performance.",
+  "title": "Noisin: Unbiased Regularization for Recurrent Neural Networks"
+}

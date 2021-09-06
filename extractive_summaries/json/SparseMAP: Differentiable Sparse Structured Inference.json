@@ -1,0 +1,345 @@
+{
+  "sections": [{
+    "text": "combinatorial number of structures. To tackle it, we introduce SparseMAP: a new method for sparse structured inference, and its natural loss function. SparseMAP automatically selects only a few global structures: it is situated between MAP inference, which picks a single structure, and marginal inference, which assigns nonzero probability to all structures, including implausible ones. SparseMAP can be computed using only calls to a MAP oracle, making it applicable to problems with intractable marginal inference, e.g., linear assignment. Sparsity makes gradient backpropagation efficient regardless of the structure, enabling us to augment deep neural networks with generic and sparse structured hidden layers. Experiments in dependency parsing and natural language inference reveal competitive accuracy, improved interpretability, and the ability to capture natural language ambiguities, which is attractive for pipeline systems."
+  }, {
+    "heading": "1. Introduction",
+    "text": "Structured prediction involves the manipulation of discrete, combinatorial structures, e.g., trees and alignments (Bakır et al., 2007; Smith, 2011; Nowozin et al., 2014). Such structures arise naturally as machine learning outputs, and as intermediate representations in deep pipelines. However, the set of possible structures is typically prohibitively large. As such, inference is a core challenge, often sidestepped by greedy search, factorization assumptions, or continuous relaxations (Belanger & McCallum, 2016).\n1Cornell University, Ithaca, NY 2Unbabel & Instituto de Telecomunicações, Lisbon, Portugal 3NTT Communication Science Laboratories, Kyoto, Japan. Correspondence to: Vlad Niculae <vlad@vene.ro>, André F. T. Martins <andre.martins@unbabel.com>, Mathieu Blondel <mathieu@mblondel.org>, Claire Cardie <cardie@cs.cornell.edu>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\n△\nargmax (1, 0, 0)\nsoftmax (.5, .3, .2)\nsparsemax (.6, .4, 0)\nM\nMAP\n⋆\nMarginal ⋆\nSparseMAP ⋆\nFigure 1. Left: in the unstructured case, softmax and sparsemax can be interpreted as regularized, differentiable argmax approximations; softmax returns dense solutions while sparsemax favors sparse ones. Right: in this work, we extend this view to structured inference, which consists of optimizing over a polytope M, the convex hull of all possible structures (depicted: the arborescence polytope, whose vertices are trees). We introduce SparseMAP as a structured extension of sparsemax: it is situated in between MAP inference, which yields a single structure, and marginal inference, which returns a dense combination of structures.\nIn this paper, we propose an appealing alternative: a new inference strategy, dubbed SparseMAP, which encourages sparsity in the structured representations. Namely, we seek solutions explicitly expressed as a combination of a small, enumerable set of global structures. Our framework departs from the two most common inference strategies in structured prediction: maximum a posteriori (MAP) inference, which returns the highest-scoring structure, and marginal inference, which yields a dense probability distribution over structures. Neither of these strategies is fully satisfactory: for latent structure models, marginal inference is appealing, since it can represent uncertainty and, unlike MAP inference, it is continuous and differentiable, hence amenable for use in structured hidden layers in neural networks (Kim et al., 2017). It has, however, several limitations. First, there are useful problems for which MAP is tractable, but marginal inference is not, e.g., linear assignment (Valiant, 1979; Taskar, 2004). Even when marginal inference is available, case-bycase derivation of the backward pass is needed, sometimes producing fairly complicated algorithms, e.g., second-order expectation semirings (Li & Eisner, 2009). Finally, marginal inference is dense: it assigns nonzero probabilities to all structures and cannot completely rule out irrelevant ones. This can be statistically and computationally wasteful, as well as qualitatively harder to interpret.\nIn this work, we make the following contributions:\n1. We propose SparseMAP: a new framework for sparse\nstructured inference (§3.1). The main idea is illustrated in Figure 1. SparseMAP is a twofold generalization: first, as a structured extension of the sparsemax transformation (Martins & Astudillo, 2016); second, as a continuous yet sparse relaxation of MAP inference. MAP yields a single structure and marginal inference yields a dense distribution over all structures. In contrast, the SparseMAP solutions are sparse combinations of a small number of often-overlapping structures.\n2. We show how to compute SparseMAP effectively, re-\nquiring only a MAP solver as a subroutine (§3.2), by exploiting the problem’s sparsity and quadratic curvature. Noticeably, the MAP oracle can be any arbitrary solver, e.g., the Hungarian algorithm for linear assignment, which permits tackling problems for which marginal inference is intractable.\n3. We derive expressions for gradient backpropagation\nthrough SparseMAP inference, which, unlike MAP, is differentiable almost everywhere (§3.3). The backward pass is fully general (applicable to any type of structure), and it is efficient, thanks to the sparsity of the solutions and to reusing quantities computed in the forward pass.\n4. We introduce a novel SparseMAP loss for structured pre-\ndiction, placing it into a family of loss functions which generalizes the CRF and structured SVM losses (§4). Inheriting the desirable properties of SparseMAP inference, the SparseMAP loss and its gradients can be computed efficiently, provided access to MAP inference.\nOur experiments demonstrate that SparseMAP is useful both for predicting structured outputs, as well as for learning latent structured representations. On dependency parsing (§5.1), structured output networks trained with the SparseMAP loss yield more accurate models with sparse, interpretable predictions, adapting to the ambiguity (or lack thereof) of test examples. On natural language inference (§5.2), we learn latent structured alignments, obtaining good predictive performance, as well as useful natural visualizations concentrated on a small number of structures.1\nNotation. Given vectors a ∈ Rm, b ∈ Rn, [a; b] ∈ R\nm+n denotes their concatenation; given matrices A ∈ R\nm×k,B ∈ Rn×k, we denote their row-wise stacking as [A;B] ∈ R(m+n)×k. We denote the columns of a matrix A by aj ; by extension, a slice of columns of A is denoted AI for a set of indices I. We denote the canonical simplex by △d := {y ∈ Rd : y 0, ∑d\ni=1 yi = 1}, and the indicator function of a predicate p as I[p] = {1 if p, 0 otherwise }.\n1 General-purpose dynet and pytorch implementations available at https://github.com/vene/sparsemap."
+  }, {
+    "heading": "2. Preliminaries",
+    "text": ""
+  }, {
+    "heading": "2.1. Regularized Max Operators: Softmax, Sparsemax",
+    "text": "As a basis for the more complex structured case, we first consider the simple problem of selecting the largest value in a vector θ ∈ Rd. We denote the vector mapping\nargmax(θ) := argmax y∈△d\nθ⊤y.\nWhen there are no ties, argmax has a unique solution ei peaking at the index i of the highest value of θ. When there are ties, argmax is set-valued. Even assuming no ties, argmax is piecewise constant, and thus is ill-suited for direct use within neural networks, e.g., in an attention mechanism. Instead, it is common to use softmax, a continuous and differentiable approximation to argmax, which can be seen as an entropy-regularized argmax\nsoftmax(θ) := argmax y∈△d\nθ⊤y+H(y) = expθ\n∑d i=1 exp θi\n(1)\nwhere H(y) = − ∑\ni yi ln yi, i.e. the negative Shannon entropy. Since exp · > 0 strictly, softmax outputs are dense.\nBy replacing the entropic penalty with a squared ℓ2 norm, Martins & Astudillo (2016) introduced a sparse alternative to softmax, called sparsemax, given by\nsparsemax(θ) := argmax y∈△d\nθ⊤y − 1\n2 ‖y‖\n2 2\n= argmin y∈△d\n‖y − θ‖ 2 2 .\n(2)\nBoth softmax and sparsemax are continuous and differentiable almost everywhere; however, sparsemax encourages sparsity in its outputs. This is because it corresponds to an Euclidean projection onto the simplex, which is likely to hit its boundary as the magnitude of θ increases. Both mechanisms, as well as variants with different penalties (Niculae & Blondel, 2017), have been successfully used in attention mechanisms, for mapping a score vector θ to a d-dimensional normalized discrete probability distribution over a small set of choices. The relationship between argmax, softmax, and sparsemax, illustrated in Figure 1, sits at the foundation of SparseMAP."
+  }, {
+    "heading": "2.2. Structured Inference",
+    "text": "In structured prediction, the space of possible outputs is typically very large: for instance, all possible labelings of a length-n sequence, spanning trees over n nodes, or oneto-one alignments between two sets. We may still write optimization problems such as maxDs=1 θs, but it is impractical to enumerate all of the D possible structures and, in turn, to specify the scores for each structure in θ.\nInstead, structured problems are often parametrized through structured log-potentials (scores) θ := A⊤η, where A ∈ R k×D is a matrix that specifies the structure of the problem, and η ∈ Rk is lower-dimensional parameter vector, i.e., k ≪ D. For example, in a factor graph (Kschischang et al., 2001) with variables U and factors F , θ is given by\nθs := ∑\ni∈U\nηU,i(si) + ∑\nf∈F\nηF,f (sf ),\nwhere ηU and ηF are unary and higher-order log-potentials, and si and sf are local configurations at variable and factor nodes. This can be written in matrix notation as θ = M⊤ηU+N\n⊤ηF for suitable matrices {M ,N}, fitting the assumption above with A = [M ;N ] and η = [ηU ;ηF ].\nWe can then rewrite the MAP inference problem, which seeks the highest-scoring structure, as a k-dimensional problem, by introducing variables [u;v] ∈ Rk to denote configurations at variable and factor nodes:2\nMAPA(η) := argmax u:=My\ny∈△D\nθ⊤y\n= argmax u: [u;v]∈MA\nη⊤Uu+ η ⊤ F v,\n(3)\nwhereMA := {[u;v] : u = My, v = Ny, y ∈ △ D} is the marginal polytope (Wainwright & Jordan, 2008), with one vertex for each possible structure (Figure 1). However, as previously said, since it is equivalent to a D-dimensional argmax, MAP is piecewise constant and discontinuous.\nNegative entropy regularization over y, on the other hand, yields marginal inference,\nMarginalA(η) := argmax u:=My\ny∈△D\nθ⊤y +H(y)\n= argmax u: [u;v]∈MA\nη⊤Uu+ η ⊤ F v +HA(u,v).\n(4)\nMarginal inference is differentiable, but may be more difficult to compute; the entropy HA(u,v) = H(y) itself lacks a closed form (Wainwright & Jordan, 2008, §4.1.2). Gradient backpropagation is available only to specialized problem instances, e.g. those solvable by dynamic programming (Li & Eisner, 2009). The entropic term regularizes y toward more uniform distributions, resulting in strictly dense solutions, just like in the case of softmax (Equation 1).\nInteresting types of structures, which we use in the experiments described in Section 5, include the following.\n2We use the notation argmax u: [u;v]∈M to convey that the maximization is over both u and v, but only u is returned. Separating the variables as [u;v] loses no generality and allows us to isolate the unary posteriors u as the return value of interest.\nSequence tagging. Consider a sequence of n items, each assigned one out of a possible m tags. In this case, a global structure s is a joint assignment of tags (t1, · · · , tn). The matrix M is nm-by-mn–dimensional, with columns ms ∈ {0, 1}nm := [et1 , ..., etn ] indicating which tag is assigned to each variable in the global structure s. N is nm2-bymn–dimensional, with ns encoding the transitions between consecutive tags, i.e., ns(i, a, b) := I[ti−1 = a & ti = b]. The Viterbi algorithm provides MAP inference and forwardbackward provides marginal inference (Rabiner, 1989).\nNon-projective dependency parsing. Consider a sentence of length n. Here, a structure s is a dependency tree: a rooted spanning tree over the n2 possible arcs (for example, the arcs above the sentences in Figure 3). Each column ms ∈ {0, 1} n2 encodes a tree by assigning a 1 to its arcs. N is empty,MA is known as the arborescence polytope (Martins et al., 2009). MAP inference may be performed by maximal arborescence algorithms (Chu & Liu, 1965; Edmonds, 1967; McDonald et al., 2005), and the MatrixTree theorem (Kirchhoff, 1847) provides a way to perform marginal inference (Koo et al., 2007; Smith & Smith, 2007).\nLinear assignment. Consider a one-to-one matching (linear assignment) between two sets of n nodes. A global structure s is a n-permutation, and a column ms ∈ {0, 1} n2 can be seen as a flattening of the corresponding permutation matrix. Again, N is empty. MA is the Birkhoff polytope (Birkhoff, 1946), and MAP inference can be performed by, e.g., the Hungarian algorithm (Kuhn, 1955) or the Jonker-Volgenant algorithm (Jonker & Volgenant, 1987). Noticeably, marginal inference is known to be #P-complete (Valiant, 1979; Taskar, 2004, Section 3.5). This makes it an open problem how to use matchings as latent variables."
+  }, {
+    "heading": "3. SparseMAP",
+    "text": "Armed with the parallel between structured inference and regularized max operators described in §2, we are now ready to introduce SparseMAP, a novel inference optimization problem which returns sparse solutions."
+  }, {
+    "heading": "3.1. Definition",
+    "text": "We introduce SparseMAP by regularizing the MAP inference problem in Equation 3 with a squared ℓ2 penalty on the returned posteriors, i.e., 12 ‖u‖ 2 2. Denoting, as above, θ := A⊤η, the result is a quadratic optimization problem,\nSparseMAPA(η) := argmax u:=My\ny∈△D\nθ⊤y − 1\n2 ‖My‖\n2 2\n= argmax u: [u,v]∈MA\nη⊤Uu+ η ⊤ F v −\n1 2 ‖u‖ 2 2 .\n(5)\nThe quadratic penalty replaces the entropic penalty from marginal inference (Equation 4), which pushes the solutions to the strict interior of the marginal polytope. In consequence, SparseMAP favors sparse solutions from the faces of the marginal polytope MA, as illustrated in Figure 1. For the structured prediction problems mentioned in Section 2.2, SparseMAP would be able to return, for example, a sparse combination of sequence labelings, parse trees, or matchings. Moreover, the strongly convex regularization on u ensures that SparseMAP has a unique solution and is differentiable almost everywhere, as we will see.\n3.2. Solving SparseMAP\nWe now tackle the optimization problem in Equation 5. Although SparseMAP is a QP over a polytope, even describing it in standard form is infeasible, since enumerating the exponentially-large set of vertices is infeasible. This prevents direct application of, e.g., the generic differentiable QP solver of Amos & Kolter (2017). We instead focus on SparseMAP solvers that involve a sequence of MAP problems as a subroutine—this makes SparseMAP widely applicable, given the availability of MAP implementations for various structures. We discuss two such methods, one based on the conditional gradient algorithm and another based on the active set method for quadratic programming. We provide a full description of both methods in Appendix A.\nConditional gradient. One family of such solvers is based on the conditional gradient (CG) algorithm (Frank & Wolfe, 1956; Lacoste-Julien & Jaggi, 2015), considered in prior work for solving approximations of the marginal inference problem (Belanger et al., 2013; Krishnan et al., 2015). Each step must solve a linearized subproblem. Denote by f the SparseMAP objective from Equation 5,\nf(u,v) := η⊤Uu+ η ⊤ F v −\n1 2 ‖u‖ 2 2 .\nThe gradients of f with respect to the two variables are\n∇uf(u ′,v′) = ηU − u ′, ∇vf(u ′,v′) = ηV .\nA linear approximation to f around a point [u′;v′] is\nf̂(u,v) := (∇uf) ⊤u+(∇vf) ⊤v = (ηU−u ′)⊤u+η⊤F v.\nMinimizing f̂ overM is exactly MAP inference with adjusted variable scores ηU − u ′. Intuitively, at each step we seek a high-scoring structure while penalizing sharing variables with already-selected structures Vanilla CG simply adds the new structure to the active set at every iteration. The pairwise and away-step variants trade off between the direction toward the new structure, and away from one of the already-selected structures. More sophisticated variants have been proposed (Garber & Meshi, 2016) which can provide sparse solutions when optimizing over a polytope.\nActive set method. Importantly, the SparseMAP problem in Equation 5 has quadratic curvature, which the general CG algorithms may not optimally leverage. For this reason, we consider the active set method for constrained QPs: a generalization of Wolfe’s min-norm point algorithm (Wolfe, 1976), also used in structured prediction for the quadratic subproblems by Martins et al. (2015). The active set algorithm, at each iteration, updates an estimate of the solution support by adding or removing one constraint to/from the active set; then it solves the Karush–Kuhn–Tucker (KKT) system of a relaxed QP restricted to the current support.\nComparison. Both algorithms enjoy global linear convergence with similar rates (Lacoste-Julien & Jaggi, 2015), but the active set algorithm also exhibits exact finite convergence—this allows it, for instance, to capture the optimal sparsity pattern (Nocedal & Wright, 1999, Ch. 16.4 & 16.5). Vinyes & Obozinski (2017) provide a more in-depth discussion of the connections between the two algorithms. We perform an empirical comparison on a dependency parsing instance with random potentials. Figure 2 shows that active set substantially outperforms all CG variants, both in terms of objective value as well as in the solution sparsity, suggesting that the quadratic curvature makes SparseMAP solvable in very few iterations to high accuracy. We therefore use the active set solver in the remainder of the paper.\n3.3. Backpropagating Gradients through SparseMAP\nIn order to use SparseMAP as a neural network layer trained with backpropagation, one must compute products of the SparseMAP Jacobian with a vector p. Computing the Jacobian of an optimization problem is an active research topic known as argmin differentiation, and is generally difficult. Fortunately, as we show next, argmin differentiation is always easy and efficient in the case of SparseMAP.\nProposition 1 Denote a SparseMAP solution by y⋆ and its support by I := {s : ys > 0}. Then, SparseMAP is\ndifferentiable almost everywhere with Jacobian\n∂u⋆\n∂η = MD(I)A⊤, where D(I) = D(I)⊤given by\nd(I)s :=\n{\n(\nI − 1 1TZ1 Z11T ) zs, s ∈ I\n0 s /∈ I ,\nZ := (MI ⊤MI) −1.\nThe proof, given in Appendix B, relies on the KKT conditions of the SparseMAP QP. Importantly, because D(I) is zero outside of the support of the solution, computing the Jacobian only requires the columns of M and A corresponding to the structures in the active set. Moreover, when using the active set algorithm discussed in §3.2, the matrix Z is readily available as a byproduct of the forward pass. The backward pass can, therefore, be computed in O(k|I|).\nOur approach for gradient computation draws its efficiency from the solution sparsity and does not depend on the type of structure considered. This is contrasted with two related lines of research. The first is “unrolling” iterative inference algorithms, for instance belief propagation (Stoyanov et al., 2011; Domke, 2013) and gradient descent (Belanger et al., 2017), where the backward pass complexity scales with the number of iterations. In the second, employed by Kim et al. (2017), when inference can be performed via dynamic programming, backpropagation can be performed using secondorder expectation semirings (Li & Eisner, 2009) or more general smoothing (Mensch & Blondel, 2018), in the same time complexity as the forward pass. Moreover, in our approach, neither the forward nor the backward passes involve logarithms, exponentiations or log-domain classes, avoiding the slowdown and stability issues normally incurred.\nIn the unstructured case, since M = I , Z is also an identity matrix, uncovering the sparsemax Jacobian (Martins & Astudillo, 2016). In general, structures are not necessarily orthogonal, but may have degrees of overlap."
+  }, {
+    "heading": "4. Structured Fenchel-Young Losses",
+    "text": "and the SparseMAP Loss\nWith the efficient algorithms derived above in hand, we switch gears to defining a SparseMAP loss function. Structured output prediction models are typically trained by minimizing a structured loss measuring the discrepancy between the desired structure (encoded, for instance, as an indicator vector y = es) and the prediction induced by the log-potentials η. We provide here a general family of structured prediction losses that will make the newly proposed SparseMAP loss arise as a very natural case. Below, we let Ω : RD → R denote a convex penalty function and denote\nby Ω△ its restriction to△ D ⊂ RD, i.e.,\nΩ△(y) :=\n{\nΩ(y), y ∈ △D; ∞, y /∈ △D.\nThe Fenchel convex conjugate of Ω△ is\nΩ⋆△(θ) := sup y∈RD θ⊤y − Ω△(y) = sup y∈△D θ⊤y − Ω(y).\nWe next introduce a family of structured prediction losses, named after the corresponding Fenchel-Young duality gap.\nDefinition 1 (Fenchel-Young losses) Given a convex penalty function Ω : RD → R, and a (k ×D)-dimensional matrix A = [M ;N ] encoding the structure of the problem, we define the following family of structured losses:\nℓΩ,A(η,y) := Ω ⋆ △(A ⊤η) + Ω△(y)− η ⊤Ay. (6)\nThis family, studied in more detail in(Blondel et al., 2018), includes the commonly-used structured losses:\n• Structured perceptron (Collins, 2002): Ω ≡ 0;\n• Structured SVM (Taskar et al., 2003; Tsochantaridis\net al., 2004): Ω ≡ ρ(·, ȳ) for a cost function ρ, where ȳ is the true output;\n• CRF (Lafferty et al., 2001): Ω ≡ −H;\n• Margin CRF (Gimpel & Smith, 2010):\nΩ ≡ −H + ρ(·, ȳ).\nThis leads to a natural way of defining SparseMAP losses, by plugging the following into Equation 6:\n• SparseMAP loss: Ω(y) = 12 ‖My‖ 2 2, • Margin SparseMAP: Ω(y) = 12 ‖My‖ 2 2 + ρ(y, ȳ).\nIt is well-known that the subgradients of structured perceptron and SVM losses consist of MAP inference, while the CRF loss gradient requires marginal inference. Similarly, the subgradients of the SparseMAP loss can be computed via SparseMAP inference, which in turn only requires MAP. The next proposition states properties of structured FenchelYoung losses, including a general connection between a loss and its corresponding inference method.\nProposition 2 Consider a convex Ω and a structured model defined by the matrix A ∈ Rk×D. Denote the inference objective fΩ(y) := η\n⊤Ay − Ω(y), and a solution y⋆ := argmax y∈△D fΩ(y). Then, the following properties hold:\n1. ℓΩ,A(η,y) ≥ 0, with equality when fΩ(y) = fΩ(y ⋆);\n2. ℓΩ,A(η,y) is convex, ∂ℓΩ,A(η,y) ∋ A(y ⋆ − y);\n3. ℓtΩ,A(η,y) = tℓΩ(η/t,y) for any t ∈ R, t > 0.\nProof is given in Appendix C. Property 1 suggests that pminimizing ℓΩ,A aligns models with the true label. Property 2 shows how to compute subgradients of ℓΩ,A provided access to the inference output [u⋆;v⋆] = Ay⋆ ∈ Rk. Combined with our efficient procedure described in Section 3.2, it makes the SparseMAP losses promising for structured prediction. Property 3 suggests that the strength of the penalty Ω can be adjusted by simply scaling η. Finally, we remark that for a strongly-convex Ω, ℓΩ,A can be seen as a smoothed perceptron loss; other smoothed losses have been explored by Shalev-Shwartz & Zhang (2016)."
+  }, {
+    "heading": "5. Experimental Results",
+    "text": "In this section, we experimentally validate SparseMAP on two natural language processing applications, illustrating the two main use cases presented: structured output prediction with the SparseMAP loss (§5.1) and structured hidden layers (§5.2). All models are implemented using the dynet library v2.0.2 (Neubig et al., 2017).\n5.1. Dependency Parsing with the SparseMAP Loss\nWe evaluate the SparseMAP losses against the commonly used CRF and structured SVM losses. The task we focus on is non-projective dependency parsing: a structured output task consisting of predicting the directed tree of grammatical dependencies between words in a sentence (Jurafsky & Martin, 2018, Ch. 14). We use annotated Universal Dependency data (Nivre et al., 2016), as used in the CoNLL 2017 shared task (Zeman et al., 2017). To isolate the effect of the loss, we use the provided gold tokenization and part-of-speech tags. We follow closely the bidirectional LSTM arc-factored parser of Kiperwasser & Goldberg (2016), using the same model configuration; the only exception is not using externally pretrained embeddings. Parameters are trained using Adam (Kingma & Ba, 2015), tuning the learning rate on the grid {.5, 1, 2, 4, 8} × 10−3, expanded by a factor of 2 if the best model is at either end.\nWe experiment with 5 languages, diverse both in terms of\nfamily and in terms of the amount of training data (ranging from 1,400 sentences for Vietnamese to 12,525 for English). Test set results (Table 1) indicate that the SparseMAP losses outperform the SVM and CRF losses on 4 out of the 5 languages considered. This suggests that SparseMAP is a good middle ground between MAP-based and marginalbased losses in terms of smoothness and gradient sparsity.\nMoreover, as illustrated in Figure 4, the SparseMAP loss encourages sparse predictions: models converge towards sparser solutions as they train, yielding very few ambiguous arcs. When confident, SparseMAP can predict a single tree. Otherwise, the small set of candidate parses returned can be easily visualized, often indicating genuine linguistic ambiguities (Figure 3). Returning a small set of parses, also sought concomittantly by Keith et al. (2018), is valuable in pipeline systems, e.g., when the parse is an input to a downstream application: error propagation is diminished in cases where the highest-scoring tree is incorrect (which is the case for the sentences in Figure 3). Unlike K-best heuristics, SparseMAP dynamically adjusts its output sparsity, which is desirable on realistic data where most instances are easy."
+  }, {
+    "heading": "5.2. Latent Structured Alignment for Natural Language Inference",
+    "text": "In this section, we demonstrate SparseMAP for inferring latent structure in large-scale deep neural networks. We focus on the task of natural language inference, defined as the classification problem of deciding, given two sentences (a premise and a hypothesis), whether the premise entails the hypothesis, contradicts it, or is neutral with respect to it.\nWe consider novel structured variants of the state-of-the-art ESIM model (Chen et al., 2017). Given a premise P of length m and a hypothesis H of length n, ESIM:\n1. Encodes P and H with an LSTM.\n2. Computes alignment scores G ∈ Rm×n; with gij the inner product between the P word i and H word j.\n3. Computes P-to-H and H-to-P alignments using row-wise,\nrespectively column-wise softmax on G.\n4. Augments P words with the weighted average of its\naligned H words, and vice-versa.\n5. Passes the result through another LSTM, then predicts.\nWe consider the following structured replacements for the independent row-wise and column-wise softmaxes (step 3):\nSequential alignment. We model the alignment of p to h as a sequence tagging instance of length m, with n possible tags corresponding to the n words of the hypothesis. Through transition scores, we enable the model to capture continuity and monotonicity of alignments: we parametrize transitioning from word t1 to t2 by binning the distance t2 − t1 into 5 groups, {−2 or less,−1, 0, 1, 2 or more}. We similarly parametrize the initial alignment using bins {1, 2 or more} and the final alignment as {−2 or less,−1}, allowing the model to express whether an alignment starts at the beginning or ends on the final word of h; formally\nηF (i, t1, t2) :=\n\n \n \nwbin(t2−t1) 0 < i < n, wstart bin(t2) i = 0, wend bin(t1) i = n.\nWe align p to h applying the same method in the other direction, with different transition scores w. Overall, sequential alignment requires learning 18 additional scalar parameters.\nMatching alignment. We now seek a symmetrical alignment in both directions simultaneously. To this end, we cast the alignment problem as finding a maximal weight bipartite matching. We recall from §2.2 that a solution can be found via the Hungarian algorithm (in contrast to marginal\ninference, which is #P-complete). When n = m, maximal matchings can be represented as permutation matrices, and when n 6= m some words remain unaligned. SparseMAP returns a weighted average of a few maximal matchings. This method requires no additional learned parameters.\nWe evaluate the two models alongside the softmax baseline on the SNLI (Bowman et al., 2015) and MultiNLI (Williams et al., 2018) datasets.3 All models are trained by SGD, with 0.9× learning rate decay at epochs when the validation accuracy is not the best seen. We tune the learning rate on the grid { 2k : k ∈ {−6,−5,−4,−3} } , extending the range if the best model is at either end. The results in Table 2 show that structured alignments are competitive with softmax in terms of accuracy, but are orders of magnitude sparser. This sparsity allows them to produce global alignment structures that are interpretable, as illustrated in Figure 5.\nInterestingly, we observe computational advantages of sparsity. Despite the overhead of GPU memory copying, both training and validation in our latent structure models take roughly the same time as with softmax and become faster as the models grow more certain. For the sake of comparison, Kim et al. (2017) report a 5× slow-down in their structured attention networks, where they use marginal inference.\n3We split the MultiNLI matched validation set into equal validation and test sets; for SNLI we use the provided split.\na\ngentleman\noverlooking\na\nneighborhood\nsituation\n.\na po lic e of fic er\nw at\nch es a\nsi tu\nat io\nn\ncl os\nel y .\na\ngentleman\noverlooking\na\nneighborhood\nsituation\n.\n(a) softmax\na\ngentleman\noverlooking\na\nneighborhood\nsituation\n.\na po lic e of fic er\nw at\nch es a\nsi tu\nat io\nn\ncl os\nel y .\na\ngentleman\noverlooking\na\nneighborhood\nsituation\n.\n(b) sequence\na\ngentleman\noverlooking\na\nneighborhood\nsituation\n.\na\npolice\nofficer\nwatches\na\nsituation\nclosely\n.\na po lic e of fic er\nw at\nch es a\nsi tu\nat io\nn\ncl os\nel y .\na\ngentleman\noverlooking\na\nneighborhood\nsituation\n.\n(c) matching\nFigure 5. Latent alignments on an example from the SNLI validation set, correctly predicted as neutral by all compared models. The premise is on the y-axis, the hypothesis on the x-axis. Top: columns sum to 1; bottom: rows sum to 1. The matching alignment mechanism yields a symmetrical alignment, and is thus shown only once. Softmax yields a dense alignment (nonzero weights are marked with a border). The structures selected by sequential alignment are overlayed as paths; the selected matchings are displayed in the top right."
+  }, {
+    "heading": "6. Related Work",
+    "text": "Structured attention networks. Kim et al. (2017) and Liu & Lapata (2018) take advantage of the tractability of marginal inference in certain structured models and derive specialized backward passes for structured attention. In contrast, our approach is modular and general: with SparseMAP, the forward pass only requires MAP inference, and the backward pass is efficiently computed based on the forward pass results. Moreover, unlike marginal inference, SparseMAP yields sparse solutions, which is an appealing property statistically, computationally, and visually.\nK-best inference. As it returns a small set of structures, SparseMAP brings to mind K-best inference, often used in pipeline NLP systems for increasing recall and handling uncertainty (Yang & Cardie, 2013). K-best inference can be approximated (or, in some cases, solved), roughly K times slower than MAP inference (Yanover & Weiss, 2004; Camerini et al., 1980; Chegireddy & Hamacher, 1987; Fromer & Globerson, 2009). The main advantages of SparseMAP are convexity, differentiablity, and modularity, as SparseMAP can be computed in terms of MAP subproblems. Moreover, it yields a distribution, unlike K-best, which does not reveal the gap between selected structures,\nLearning permutations. A popular approach for differentiable permutation learning involves mean-entropic optimal transport relaxations (Adams & Zemel, 2011; Mena et al., 2018). Unlike SparseMAP, this does not apply to general\nstructures, and solutions are not directly expressible as combinations of a few permutations.\nRegularized inference. Ravikumar et al. (2010), Meshi et al. (2015), and Martins et al. (2015) proposed ℓ2 perturbations and penalties in various related ways, with the goal of solving LP-MAP approximate inference in graphical models. In contrast, the goal of our work is sparse structured prediction, which is not considered in the aforementioned work. Nevertheless, some of the formulations in their work share properties with SparseMAP; exploring the connections further is an interesting avenue for future work."
+  }, {
+    "heading": "7. Conclusion",
+    "text": "We introduced a new framework for sparse structured inference, SparseMAP, along with a corresponding loss function. We proposed efficient ways to compute the forward and backward passes of SparseMAP. Experimental results illustrate two use cases where sparse inference is well-suited. For structured prediction, the SparseMAP loss leads to strong models that make sparse, interpretable predictions, a good fit for tasks where local ambiguities are common, like many natural language processing tasks. For structured hidden layers, we demonstrated that SparseMAP leads to strong, interpretable networks trained end-to-end. Modular by design, SparseMAP can be applied readily to any structured problem for which MAP inference is available, including combinatorial problems such as linear assignment."
+  }, {
+    "heading": "Acknowledgements",
+    "text": "We thank Tim Vieira, David Belanger, Jack Hessel, Justine Zhang, Sydney Zink, the Unbabel AI Research team, and the three anonymous reviewers for their insightful comments. This work was supported by the European Research Council (ERC StG DeepSPIN 758969) and by the Fundação para a Ciência e Tecnologia through contracts UID/EEA/50008/2013, PTDC/EEI-SII/7092/2014 (LearnBig), and CMUPERI/TIC/0046/2014 (GoLocal)."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Ranking via sinkhorn propagation",
+    "authors": ["R.P. Adams", "R.S. Zemel"],
+    "venue": "arXiv e-prints,",
+    "year": 2011
+  }, {
+    "title": "OptNet: Differentiable optimization as a layer in neural networks",
+    "authors": ["B. Amos", "J.Z. Kolter"],
+    "venue": "In ICML,",
+    "year": 2017
+  }, {
+    "title": "Predicting Structured Data",
+    "authors": ["G. Bakır", "T. Hofmann", "B. Schölkopf", "A.J. Smola", "B. Taskar", "S.V.N. Vishwanathan"],
+    "year": 2007
+  }, {
+    "title": "Structured prediction energy networks",
+    "authors": ["D. Belanger", "A. McCallum"],
+    "venue": "In ICML,",
+    "year": 2016
+  }, {
+    "title": "Marginal inference in MRFs using Frank-Wolfe",
+    "authors": ["D. Belanger", "D. Sheldon", "A. McCallum"],
+    "venue": "In NIPS Workshop on Greedy Opt., FW and Friends,",
+    "year": 2013
+  }, {
+    "title": "End-to-end learning for structured prediction energy networks",
+    "authors": ["D. Belanger", "B. Yang", "A. McCallum"],
+    "venue": "In ICML,",
+    "year": 2017
+  }, {
+    "title": "Tres observaciones sobre el algebra lineal",
+    "authors": ["G. Birkhoff"],
+    "venue": "Univ. Nac. Tucumán Rev. Ser. A,",
+    "year": 1946
+  }, {
+    "title": "Learning classifiers with Fenchel-Young losses: Generalized entropies, margins, and algorithms",
+    "authors": ["M. Blondel", "A.F. Martins", "V. Niculae"],
+    "venue": "arXiv e-prints,",
+    "year": 2018
+  }, {
+    "title": "A large annotated corpus for learning natural language inference",
+    "authors": ["S.R. Bowman", "G. Angeli", "C. Potts", "C.D. Manning"],
+    "venue": "In EMNLP,",
+    "year": 2015
+  }, {
+    "title": "Convex Optimization",
+    "authors": ["S. Boyd", "L. Vandenberghe"],
+    "year": 2004
+  }, {
+    "title": "Algorithms for finding K-best perfect matchings",
+    "authors": ["C.R. Chegireddy", "H.W. Hamacher"],
+    "venue": "Discrete Applied Mathematics,",
+    "year": 1987
+  }, {
+    "title": "Enhanced LSTM for natural language inference",
+    "authors": ["Q. Chen", "X. Zhu", "Ling", "Z.-H", "S. Wei", "H. Jiang", "D. Inkpen"],
+    "year": 2017
+  }, {
+    "title": "On the shortest arborescence of a directed graph",
+    "authors": ["Chu", "Y.-J", "Liu", "T.-H"],
+    "venue": "Science Sinica,",
+    "year": 1965
+  }, {
+    "title": "Discriminative training methods for Hidden Markov Models: Theory and experiments with perceptron algorithms",
+    "authors": ["M. Collins"],
+    "venue": "In EMNLP,",
+    "year": 2002
+  }, {
+    "title": "Learning graphical model parameters with approximate marginal inference",
+    "authors": ["J. Domke"],
+    "venue": "IEEE T. Pattern. Anal.,",
+    "year": 2013
+  }, {
+    "title": "Optimum branchings",
+    "authors": ["J. Edmonds"],
+    "venue": "J. Res. Nat. Bur. Stand.,",
+    "year": 1967
+  }, {
+    "title": "On conjugate convex functions",
+    "authors": ["W. Fenchel"],
+    "venue": "Canad. J. Math,",
+    "year": 1949
+  }, {
+    "title": "An algorithm for quadratic programming",
+    "authors": ["M. Frank", "P. Wolfe"],
+    "venue": "Nav. Res. Log.,",
+    "year": 1956
+  }, {
+    "title": "Linear-memory and decomposition-invariant linearly convergent conditional gradient algorithm for structured polytopes",
+    "authors": ["D. Garber", "O. Meshi"],
+    "venue": "In NIPS,",
+    "year": 2016
+  }, {
+    "title": "Softmax-margin CRFs: Training log-linear models with cost functions",
+    "authors": ["K. Gimpel", "N.A. Smith"],
+    "venue": "In NAACL,",
+    "year": 2010
+  }, {
+    "title": "A shortest augmenting path algorithm for dense and sparse linear assignment problems",
+    "authors": ["R. Jonker", "A. Volgenant"],
+    "year": 1987
+  }, {
+    "title": "Monte Carlo syntax marginals for exploring and using dependency parses",
+    "authors": ["K. Keith", "S.L. Blodgett", "B. O’Connor"],
+    "venue": "In NAACL,",
+    "year": 2018
+  }, {
+    "title": "Structured attention networks",
+    "authors": ["Y. Kim", "C. Denton", "L. Hoang", "A.M. Rush"],
+    "venue": "In ICLR,",
+    "year": 2017
+  }, {
+    "title": "Adam: A method for stochastic optimization",
+    "authors": ["D. Kingma", "J. Ba"],
+    "venue": "In ICLR,",
+    "year": 2015
+  }, {
+    "title": "Simple and accurate dependency parsing using bidirectional LSTM feature",
+    "authors": ["E. Kiperwasser", "Y. Goldberg"],
+    "venue": "representations. TACL,",
+    "year": 2016
+  }, {
+    "title": "Structured prediction models via the matrix-tree theorem",
+    "authors": ["T. Koo", "A. Globerson", "X. Carreras Pérez", "M. Collins"],
+    "venue": "In EMNLP,",
+    "year": 2007
+  }, {
+    "title": "Barrier Frank-Wolfe for marginal inference",
+    "authors": ["R.G. Krishnan", "S. Lacoste-Julien", "D. Sontag"],
+    "venue": "In NIPS,",
+    "year": 2015
+  }, {
+    "title": "Factor graphs and the sum-product algorithm",
+    "authors": ["F.R. Kschischang", "B.J. Frey", "Loeliger", "H.-A"],
+    "venue": "IEEE T. Inform. Theory,",
+    "year": 2001
+  }, {
+    "title": "The Hungarian method for the assignment problem",
+    "authors": ["H.W. Kuhn"],
+    "venue": "Nav. Res. Log.,",
+    "year": 1955
+  }, {
+    "title": "On the global linear convergence of Frank-Wolfe optimization variants",
+    "authors": ["S. Lacoste-Julien", "M. Jaggi"],
+    "venue": "In NIPS,",
+    "year": 2015
+  }, {
+    "title": "Conditional Random Fields: Probabilistic models for segmenting and labeling sequence data",
+    "authors": ["J.D. Lafferty", "A. McCallum", "F.C.N. Pereira"],
+    "venue": "In ICML,",
+    "year": 2001
+  }, {
+    "title": "First-and second-order expectation semirings with applications to minimum-risk training on translation forests",
+    "authors": ["Z. Li", "J. Eisner"],
+    "venue": "In EMNLP,",
+    "year": 2009
+  }, {
+    "title": "Learning structured text",
+    "authors": ["Y. Liu", "M. Lapata"],
+    "venue": "representations. TACL,",
+    "year": 2018
+  }, {
+    "title": "From softmax to sparsemax: A sparse model of attention and multi-label classification",
+    "authors": ["A.F. Martins", "R.F. Astudillo"],
+    "year": 2016
+  }, {
+    "title": "Concise integer linear programming formulations for dependency parsing",
+    "authors": ["A.F. Martins", "N.A. Smith", "E.P. Xing"],
+    "venue": "In ACL-IJCNLP,",
+    "year": 2009
+  }, {
+    "title": "AD3: Alternating directions dual decomposition for MAP inference in graphical models",
+    "authors": ["A.F. Martins", "M.A. Figueiredo", "P.M. Aguiar", "N.A. Smith", "E.P. Xing"],
+    "year": 2015
+  }, {
+    "title": "Online largemargin training of dependency parsers",
+    "authors": ["R. McDonald", "K. Crammer", "F. Pereira"],
+    "venue": "In ACL,",
+    "year": 2005
+  }, {
+    "title": "Learning latent permutations with Gumbel-Sinkhorn networks",
+    "authors": ["G. Mena", "D. Belanger", "S. Linderman", "J. Snoek"],
+    "venue": "In ICLR,",
+    "year": 2018
+  }, {
+    "title": "Differentiable dynamic programming for structured prediction and attention",
+    "authors": ["A. Mensch", "M. Blondel"],
+    "venue": "In ICML,",
+    "year": 2018
+  }, {
+    "title": "Smooth and strong: MAP inference with linear convergence",
+    "authors": ["O. Meshi", "M. Mahdavi", "A. Schwing"],
+    "venue": "In NIPS,",
+    "year": 2015
+  }, {
+    "title": "DyNet: The dynamic neural network",
+    "authors": ["G. Neubig", "C. Dyer", "Y. Goldberg", "A. Matthews", "W. Ammar", "A. Anastasopoulos", "M. Ballesteros", "D. Chiang", "D. Clothiaux", "T Cohn"],
+    "venue": "toolkit. preprint arXiv:1701.03980,",
+    "year": 2017
+  }, {
+    "title": "A regularized framework for sparse and structured neural attention",
+    "authors": ["V. Niculae", "M. Blondel"],
+    "venue": "In NIPS,",
+    "year": 2017
+  }, {
+    "title": "Universal Dependencies v1: A multilingual treebank collection",
+    "authors": ["J. Nivre", "de Marneffe", "M.-C", "F. Ginter", "Y. Goldberg", "J. Hajic", "C.D. Manning", "R.T. McDonald", "S. Petrov", "S. Pyysalo", "N Silveira"],
+    "year": 2016
+  }, {
+    "title": "Advanced Structured Prediction",
+    "authors": ["S. Nowozin", "P.V. Gehler", "J. Jancsary", "C.H. Lampert"],
+    "year": 2014
+  }, {
+    "title": "Messagepassing for graph-structured linear programs: Proximal methods and rounding schemes",
+    "authors": ["P. Ravikumar", "A. Agarwal", "M.J. Wainwright"],
+    "venue": "JMLR, 11:1043–1080,",
+    "year": 2010
+  }, {
+    "title": "Accelerated proximal stochastic dual coordinate ascent for regularized loss minimization",
+    "authors": ["S. Shalev-Shwartz", "T. Zhang"],
+    "venue": "Math. Program.,",
+    "year": 2016
+  }, {
+    "title": "Probabilistic models of nonprojective dependency trees",
+    "authors": ["D.A. Smith", "N.A. Smith"],
+    "venue": "In EMNLP,",
+    "year": 2007
+  }, {
+    "title": "Linguistic Structure Prediction. Synthesis Lectures on Human Language Technologies",
+    "authors": ["N.A. Smith"],
+    "year": 2011
+  }, {
+    "title": "Empirical risk minimization of graphical model parameters given approximate inference, decoding, and model structure",
+    "authors": ["V. Stoyanov", "A. Ropson", "J. Eisner"],
+    "venue": "In AISTATS,",
+    "year": 2011
+  }, {
+    "title": "Tokenizing, POS tagging, lemmatizing and parsing UD 2.0 with UDPipe",
+    "authors": ["M. Straka", "J. Straková"],
+    "venue": "In CoNLL Shared Task,",
+    "year": 2017
+  }, {
+    "title": "Learning Structured Prediction Models: A Large Margin Approach",
+    "authors": ["B. Taskar"],
+    "venue": "PhD thesis, Stanford University,",
+    "year": 2004
+  }, {
+    "title": "Max-Margin Markov Networks",
+    "authors": ["B. Taskar", "C. Guestrin", "D. Koller"],
+    "venue": "In NIPS,",
+    "year": 2003
+  }, {
+    "title": "Support vector machine learning for interdependent and structured output spaces",
+    "authors": ["I. Tsochantaridis", "T. Hofmann", "T. Joachims", "Y. Altun"],
+    "venue": "In ICML,",
+    "year": 2004
+  }, {
+    "title": "The complexity of computing the permanent",
+    "authors": ["L.G. Valiant"],
+    "venue": "Theor. Comput. Sci.,",
+    "year": 1979
+  }, {
+    "title": "Fast column generation for atomic norm regularization",
+    "authors": ["M. Vinyes", "G. Obozinski"],
+    "venue": "In AISTATS,",
+    "year": 2017
+  }, {
+    "title": "Graphical models, exponential families, and variational inference",
+    "authors": ["M.J. Wainwright", "M.I. Jordan"],
+    "venue": "Found. Trends Mach. Learn.,",
+    "year": 2008
+  }, {
+    "title": "A broadcoverage challenge corpus for sentence understanding through inference",
+    "authors": ["A. Williams", "N. Nangia", "S.R. Bowman"],
+    "venue": "In NAACL,",
+    "year": 2018
+  }, {
+    "title": "Finding the nearest point in a polytope",
+    "authors": ["P. Wolfe"],
+    "venue": "Mathematical Programming,",
+    "year": 1976
+  }, {
+    "title": "Joint inference for fine-grained opinion extraction",
+    "authors": ["B. Yang", "C. Cardie"],
+    "venue": "In NIPS,",
+    "year": 2013
+  }],
+  "id": "SP:9ac345b29e5c1e81cf1a7aa2fe3b98ce70b6917d",
+  "authors": [{
+    "name": "Vlad Niculae",
+    "affiliations": []
+  }, {
+    "name": "André F. T. Martins",
+    "affiliations": []
+  }, {
+    "name": "Mathieu Blondel",
+    "affiliations": []
+  }, {
+    "name": "Claire Cardie",
+    "affiliations": []
+  }],
+  "abstractText": "Structured prediction requires searching over a combinatorial number of structures. To tackle it, we introduce SparseMAP: a new method for sparse structured inference, and its natural loss function. SparseMAP automatically selects only a few global structures: it is situated between MAP inference, which picks a single structure, and marginal inference, which assigns nonzero probability to all structures, including implausible ones. SparseMAP can be computed using only calls to a MAP oracle, making it applicable to problems with intractable marginal inference, e.g., linear assignment. Sparsity makes gradient backpropagation efficient regardless of the structure, enabling us to augment deep neural networks with generic and sparse structured hidden layers. Experiments in dependency parsing and natural language inference reveal competitive accuracy, improved interpretability, and the ability to capture natural language ambiguities, which is attractive for pipeline systems.",
+  "title": "SparseMAP: Differentiable Sparse Structured Inference"
+}

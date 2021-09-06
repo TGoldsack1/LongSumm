@@ -1,0 +1,265 @@
+{
+  "sections": [{
+    "text": "While generative models such as Latent Dirichlet Allocation (LDA) have proven fruitful in topic modeling, they often require detailed assumptions and careful specification of hyperparameters. Such model complexity issues only compound when trying to generalize generative models to incorporate human input. We introduce Correlation Explanation (CorEx), an alternative approach to topic modeling that does not assume an underlying generative model, and instead learns maximally informative topics through an informationtheoretic framework. This framework naturally generalizes to hierarchical and semisupervised extensions with no additional modeling assumptions. In particular, word-level domain knowledge can be flexibly incorporated within CorEx through anchor words, allowing topic separability and representation to be promoted with minimal human intervention. Across a variety of datasets, metrics, and experiments, we demonstrate that CorEx produces topics that are comparable in quality to those produced by unsupervised and semisupervised variants of LDA."
+  }, {
+    "heading": "1 Introduction",
+    "text": "The majority of topic modeling approaches utilize probabilistic generative models, models which specify mechanisms for how documents are written in order to infer latent topics. These mechanisms may be explicitly stated, as in Latent Dirichlet Allocation (LDA) (Blei et al., 2003), or implicitly stated, as with matrix factorization techniques (Hofmann,\n1999; Ding et al., 2008; Buntine and Jakulin, 2006). The core generative mechanisms of LDA, in particular, have inspired numerous generalizations that account for additional information, such as the authorship (Rosen-Zvi et al., 2004), document labels (McAuliffe and Blei, 2008), or hierarchical structure (Griffiths et al., 2004).\nHowever, these generalizations come at the cost of increasingly elaborate and unwieldy generative assumptions. While these assumptions allow topic inference to be tractable in the face of additional metadata, they progressively constrain topics to a narrower view of what a topic can be. Such assumptions are undesirable in contexts where one wishes to minimize model complexity and learn topics without preexisting notions of how those topics originated.\nFor these reasons, we propose topic modeling by way of Correlation Explanation (CorEx),1 an information-theoretic approach to learning latent topics over documents. Unlike LDA, CorEx does not assume a particular data generating model, and instead searches for topics that are “maximally informative” about a set of documents. By learning informative topics rather than generated topics, we avoid specifying the structure and nature of topics ahead of time.\nIn addition, the lightweight framework underlying CorEx is versatile and naturally extends to hierarchical and semi-supervised variants with no additional modeling assumptions. More specifically, we\n1Open source, documented code for the CorEx topic model available at https://github.com/gregversteeg/ corex_topic.\n529\nTransactions of the Association for Computational Linguistics, vol. 5, pp. 529–542, 2017. Action Editor: Diana McCarthy. Submission batch: 7/2017 Published 12/2017.\nc©2017 Association for Computational Linguistics. Distributed under a CC-BY 4.0 license.\nmay flexibly incorporate word-level domain knowledge within the CorEx topic model. Topic models are often susceptible to portraying only dominant themes of documents. Injecting a topic model, such as CorEx, with domain knowledge can help guide it towards otherwise underrepresented topics that are of importance to the user. By incorporating relevant domain words, we might encourage our topic model to recognize a rare disease that would otherwise be missed in clinical health notes, focus more attention to topics from news articles that can guide relief workers in distributing aid more effectively, or disambiguate aspects of a complex social issue.\nOur contributions are as follows: first, we frame CorEx as a topic model and derive an efficient alteration to the CorEx algorithm to exploit sparse data, such as word counts in documents, for dramatic speedups. Second, we show how domain knowledge can be naturally integrated into CorEx through “anchor words” and the information bottleneck. Third, we demonstrate that CorEx and anchored CorEx produce topics of comparable quality to unsupervised and semi-supervised variants of LDA over several datasets and metrics. Finally, we carefully detail several anchoring strategies that highlight the versatility of anchored CorEx on a variety of tasks."
+  }, {
+    "heading": "2 Methods",
+    "text": ""
+  }, {
+    "heading": "2.1 CorEx: Correlation Explanation",
+    "text": "Here we review the fundamentals of Correlation Explanation (CorEx), and adopt the notation used by Ver Steeg and Galstyan in their original presentation of the model (2014). Let X be a discrete random variable that takes on a finite number of values, indicated with lowercase, x. Furthermore, if we have n such random variables, let XG denote a sub-collection of them, where G ⊆ {1, . . . , n}. The probability of observing XG = xG is written as p(XG = xG), which is typically abbreviated to p(xG). The entropy ofX is written asH(X) and the mutual information of two random variables X1 and X2 is given by I(X1 : X2) = H(X1) + H(X2) − H(X1, X2).\nThe total correlation, or multivariate mutual information, of a group of random variables XG is ex-\npressed as\nTC(XG) = ∑\ni∈G H(Xi)−H(XG) (1)\n= DKL ( p(xG)|| ∏\ni∈G p(xi)\n) . (2)\nWe see that Eq. 1 does not quantify “correlation” in the modern sense of the word, and so it can be helpful to conceptualize total correlation as a measure of total dependence. Indeed, Eq. 2 shows that total correlation can be expressed using the Kullback-Leibler Divergence and, therefore, it is zero if and only if the joint distribution of XG factorizes, or, in other words, there is no dependence between the random variables.\nThe total correlation can be written when conditioning on another random variable Y , TC(XG | Y ) = ∑ i∈GH(Xi | Y )−H(XG | Y ). So, we can consider the reduction in the total correlation when conditioning on Y .\nTC(XG;Y ) = TC(XG)− TC(XG | Y ) (3) = ∑\ni∈G I(Xi : Y )− I(XG : Y ) (4)\nThe quantity expressed in Eq. 3 acts as a lower bound of TC(XG) (Ver Steeg and Galstyan, 2015), as readily verified by noting that TC(XG) and TC(XG|Y ) are always non-negative. Also note, the joint distribution of XG factorizes conditional on Y if and only if TC(XG | Y ) = 0. If this is the case, then TC(XG;Y ) is maximized, and Y explains all of the dependencies in XG.\nIn the context of topic modeling, XG represents a group of word types and Y represents a topic to be learned. Since we are always interested in grouping multiple sets of words into multiple topics, we will denote the binary latent topics as Y1, . . . Ym and their corresponding groups of word types as XGj for j = 1, . . . ,m respectively. The CorEx topic model seeks to maximally explain the dependencies of words in documents through latent topics by maximizing TC(X;Y1, . . . , Ym). To do this, we maximize the following lower bound on this expression:\nmax Gj ,p(yj |xGj )\nm∑\nj=1\nTC(XGj ;Yj). (5)\nAs we describe in the following section, this objective can be efficiently approximated, despite the search occurring over an exponentially large probability space (Ver Steeg and Galstyan, 2014).\nSince each topic explains a certain portion of the overall total correlation, we may choose the number of topics by observing diminishing returns to the objective. Furthermore, since the CorEx implementation depends on a random initialization (as described shortly), one may restart the CorEx topic model several times and choose the one that explains the most total correlation.\nThe latent factors, Yj , are optimized to be informative about dependencies in the data and do not require generative modeling assumptions. Note that the discovered factors, Y , can be used as inputs to construct new latent factors, Z, and so on leading to a hierarchy of topics. Although this extension is quite natural, we focus our analysis on the first level of topic representations for easier interpretation and evaluation."
+  }, {
+    "heading": "2.2 CorEx Implementation",
+    "text": "We summarize the implementation of CorEx as presented by Ver Steeg and Galstyan (2014) in preparation for innovations introduced in the subsequent sections. The numerical optimization for CorEx begins with a random initialization of parameters and then proceeds via an iterative update scheme similar to EM. For computational tractability, we subject the optimization in Eq. 5 to the constraint that the groups, Gj , do not overlap, i.e. we enforce singlemembership of words within topics. The optimization entails a combinatorial search over groups, so instead we look for a form that is more amenable to smooth optimization. We rewrite the objective using the alternate form in Eq. 4 while introducing indicator variables αi,j which are equal to 1 if and only if word Xi appears in topic Yj (i.e. i ∈ Gj).\nmax αi,j ,p(yj |x)\nm∑\nj=1\n( n∑\ni=1\nαi,jI(Xi : Yj)− I(X : Yj) )\ns.t. αi,j = I[j = arg max j̄ I(Xi : Yj̄)].\n(6)\nNote that the constraint on non-overlapping groups now becomes a constraint on α. To make the optimization smooth we should relax the constraint so\nthat αi,j ∈ [0, 1]. To do so, we replace the second line with a softmax function. The update for α at iteration t becomes,\nαti,j = exp ( λt(I(Xi : Yj)−max\nj̄ I(Xi : Yj̄))\n) .\nNow α ∈ [0, 1] and the parameter λ controls the sharpness of the softmax function. Early in the optimization we use a small value of λ, then increase it later in the optimization to enforce a hard constraint. The objective in Eq. 6 only lower bounds total correlation in the hard max limit. The constraint on α forces competition among latent factors to explain certain words, while setting λ = 0 results in all factors learning the same thing. Holding α fixed, taking the derivative of the objective (with respect to the variables p(yj |x), and setting it equal to zero leads to a fixed point equation. We use this fixed point to define update equations at iteration t.\npt(yj) = ∑\nx̄\npt(yj |x̄)p(x̄) (7)\npt(xi|yj) = ∑\nx̄\npt(yj |x̄)p(x̄)I[x̄i = xi]/pt(yj)\nlog pt+1(yj |x`) = (8)\nlog pt(yj)+ n∑\ni=1\nαti,j log pt(x\n` i | yj)\np(x`i) − logZj(x`)\nThe first two lines just define the marginals in terms of the optimization parameter, pt(yj |x). We take p(x) to be the empirical distribution defined by some observed samples, x`, ` = 1, . . . , N . The third line updates pt(yj |x`), the probabilistic labels for each latent factor, Yj , for a given sample, x`. Note that an easily calculated constant, Zj(x`), appears to ensure the normalization of pt(yj |x`) for each sample. We iterate through these updates until convergence.\nAfter convergence, we use the mutual information terms I(Xi : Yj) to rank which words are most informative for each factor. The objective is a sum of terms for each latent factor and this allows us to rank the contribution of each factor toward our lower bound on the total correlation. The expected log of the normalization constant, often called the free energy, E[logZj(x)], plays an important role since its expectation provides a free estimate of the i-th term in the objective (Ver Steeg and Galstyan, 2015), as\ncan be seen by taking the expectation of Eq. 8 at convergence and comparing it to Eq. 6. Because our sample estimate of the objective is just the mean of contributions from individual sample points, x`, we refer to logZj(x`) as the pointwise total correlation explained by factor j for sample `. Pointwise TC can be used to localize which samples are particularly informative about specific latent factors."
+  }, {
+    "heading": "2.3 Sparsity Optimization",
+    "text": ""
+  }, {
+    "heading": "2.3.1 Derivation",
+    "text": "To alter the CorEx optimization procedure to exploit sparsity in the data, we now assume that all variables, xi, yj , are binary and x is a binary vector where X`i = 1 if word i occurs in document ` and X`i = 0 otherwise. Since all variables are binary, the marginal distribution, p(xi|yj), is just a two by two table of probabilities and can be estimated efficiently. The time-consuming part of training is the subsequent update of the document labels in Eq. 8 for each document `. The computation of the log likelihood ratio for all n words over all documents is not efficient, as most words do not appear in a given document. We rewrite the logarithm in the interior of the sum.\nlog pt(x\n` i | yj)\np(x`i) = log pt(Xi = 0 | yj) p(Xi = 0) + (9)\nxli log\n( pt(X ` i = 1 | yj)p(Xi = 0)\npt(Xi = 0 | yj)p(X`i = 1)\n)\nNote, when the word does not appear in the document, only the leading term of Eq. 9 will be nonzero. However, when the word does appear, everything but logP (X`i = 1 | yj)/p(X`i = 1) cancels out. So, we have taken advantage of the fact that the CorEx topic model binarizes documents to assume by default that a word does not appear in the document, and then correct the contribution to the update if the word does appear.\nThus, when substituting back into Eq. 8, the sum becomes a matrix multiplication between a matrix with dimensions of the number of variables by the number of documents and entries x`i that is assumed to be sparse and a dense matrix with dimensions of the number of variables by the number of latent factors. Given n variables, N samples, and ρ nonzero entries in the data matrix, the\nasymptotic scaling for CorEx goes from O(Nn) to O(n)+O(N)+O(ρ) exploiting sparsity. Latent tree modeling approaches are quadratic in n or worse, so we expect CorEx’s computational advantage to increase for larger datasets."
+  }, {
+    "heading": "2.3.2 Optimization Evaluation",
+    "text": "We perform experiments comparing the running time of CorEx before and after implementing the improvements which exploit sparsity. We also compare with Scikit-Learn’s simple batch implementation of LDA using the variational Bayes algorithm (Hoffman et al., 2013). Experiments were performed on a four core, Intel i5 chip running at 4 GHz with 32 GB RAM. We show run time when varying the data size in terms of the number of word types and the number of documents. We used 50 topics for all runs and set the number of iterations for each run to 10 iterations for LDA and 50 iterations for CorEx. Results are shown in Figure 1. We see that CorEx exploiting sparsity is orders of magnitude faster than the\nnaive version and is generally comparable to LDA as the number of documents scales. The slope on the log-log plot suggests a linear dependence of running time on the dataset size, as expected."
+  }, {
+    "heading": "2.4 Anchor Words via the Bottleneck",
+    "text": "The information bottleneck formulates a trade-off between compressing data X into a representation Y , and preserving the information in X that is relevant to Z (typically labels in a supervised learning task) (Tishby et al., 1999; Friedman et al., 2001). More formally, the information bottleneck is expressed as\nmax p(y|x)\nβI(Z : Y )− I(X : Y ), (10)\nwhere β is a parameter controlling the trade-off between compressing X and preserving information about the relevance variable, Z.\nTo see the connection with CorEx, we compare the CorEx objective as written in Eq. 6 with the bottleneck in Eq. 10. We see that we have exactly the same compression term for each latent factor, I(X : Yj), but the relevance variables now correspond to Z ≡ Xi. If we want to learn representations that are more relevant to specific keywords, we can simply anchor a word type Xi to topic Yj , by constraining our optimization so that αi,j = βi,j , where βi,j ≥ 1 controls the anchor strength. Otherwise, the updates on α remain the same. This schema is a natural extension of the CorEx optimization and it is flexible, allowing for multiple word types to be anchored to one topic, for one word type to be anchored to multiple topics, or for any combination of these semi-supervised anchoring strategies."
+  }, {
+    "heading": "3 Related Work",
+    "text": "With respect to integrating domain knowledge into topic models, we draw inspiration from Arora et al. (2012), who used anchor words in the context of non-negative matrix factorization. Using an assumption of separability, these anchor words act as high precision markers of particular topics and, thus, help discern the topics from one another. Although the original algorithm proposed by Arora et al. (2012), and subsequent improvements to their approach, find these anchor words automatically\n(Arora et al., 2013; Lee and Mimno, 2014), recent adaptations allow manual insertion of anchor words and other metadata (Nguyen et al., 2014; Nguyen et al., 2015). Our work is similar to the latter, where we treat anchor words as fuzzy logic markers and embed them into the topic model in a semi-supervised fashion. In this sense, our work is closest to Halpern et al. (2014; 2015), who have also made use of domain expertise and semi-supervised anchored words in devising topic models.\nThere is an adjacent line of work that has focused on incorporating word-level information into LDAbased models. Jagarlamudi et al. (2012) proposed SeededLDA, a model that seeds words into given topics and guides, but does not force, these topics towards these integrated words. Andrzejewski and Zhu (2009) presented a model that makes use of “zlabels,” words that are known to pertain to specific topics and that are restricted to appearing in some subset of all the possible topics. Although the zlabels can be leveraged to place different senses of a word into different topics, it requires additional effort to determine when these different senses occur. Our anchoring approach allows a user to more easily anchor one word to multiple topics, allowing CorEx to naturally find topics that revolve around different senses of a word.\nAndrzejewski et al. (2009) presented a second model which allows specification of Must-Link and Cannot-Link relationships between words that help partition otherwise muddled topics. These logical constraints help enforce topic separability, though these mechanisms less directly address how to anchor a single word or set of words to help a topic emerge. More generally, the Must/Cannot link and z-label topic models have been expressed in a powerful first-order-logic framework that allows the specification of arbitrary domain knowledge through logical rules (Andrzejewski et al., 2011). Others have built off this first-order-logic approach to automatically learn rule weights (Mei et al., 2014) and incorporate additional latent variable information (Foulds et al., 2015).\nMathematically, CorEx topic models most closely resemble topic models based on latent tree reconstruction (Chen et al., 2016). In Chen et al.’s (2016) analysis, their own latent tree approach and CorEx both report significantly better perplexity than hi-\nerarchical topic models based on the hierarchical Dirichlet process and the Chinese restaurant process. CorEx has also been investigated as a way to find “surprising” documents (Hodas et al., 2015)."
+  }, {
+    "heading": "4 Data and Evaluation Methods",
+    "text": ""
+  }, {
+    "heading": "4.1 Data",
+    "text": "We use two challenging datasets with corresponding domain knowledge lexicons to evaluate anchored CorEx. Our first dataset consists of 504,000 humanitarian assistance and disaster relief (HA/DR) articles covering 21 disaster types collected from ReliefWeb, an HA/DR news article aggregator sponsored by the United Nations. To mitigate overwhelming label imbalances during anchoring, we both restrict ourselves to documents in English with one label, and randomly subsample 2,000 articles from each of the largest disaster type labels. This leaves us with a corpus of 18,943 articles.2\nWe accompany these articles with an HA/DR lexicon of approximately 34,000 words and phrases. The lexicon was curated by first gathering 40–60 seed terms per disaster type from HA/DR domain experts and CrisisLex. This term list was then expanded by creating word embeddings for each disaster type, and taking terms within a specified cosine similarity of the seed words. These lists were then filtered by removing names, places, non-ASCII characters, and terms with fewer than three characters. Finally, the extracted terms were audited using CrowdFlower, where users rated the relevance of the terms on a Likert scale. Low relevance terms were dropped from the lexicon. Of these terms 11,891 types appear in the HA/DR articles.\nOur second dataset consists of 1,237 deidentified clinical discharge summaries from the Informatics for Integrating Biology and the Bedside (i2b2) 2008 Obesity Challenge.3 These summaries are labeled by clinical experts with 15 conditions frequently associated with obesity. For these documents, we leverage a text pipeline that extracts common medical terms and phrases (Dai et al., 2008; Chapman et al., 2001), which yields 3,231 such term types.\n2HA/DR articles and accompanying lexicon available at http://dx.doi.org/10.7910/DVN/TGOPRU\n3Data available upon data use agreement at https:// www.i2b2.org/NLP/Obesity/\nFor both sets of documents, we use their respective lexicons to break the documents down into bags of words and phrases.\nWe also make use of the 20 Newsgroups dataset, as provided and preprocessed in the Scikit-Learn library (Pedregosa et al., 2011)."
+  }, {
+    "heading": "4.2 Evaluation",
+    "text": "CorEx does not explicitly attempt to learn a generative model and, thus, traditional measures such as perplexity are not appropriate for model comparison against LDA. Furthermore, it is well-known that perplexity and held-out log-likelihood do not necessarily correlate with human evaluation of semantic topic quality (Chang et al., 2009). Therefore, we measure the semantic topic quality using Mimno et al.’s (2011) UMass automatic topic coherence score, which correlates with human judgments.\nWe also evaluate the models in terms of multiclass logistic regression document classification (Pedregosa et al., 2011), where the feature set of each document is its topic distribution. We perform all document classification tasks using a 60/40 trainingtest split.\nFinally, we measure how well each topic model does at clustering documents. We obtain a clustering by assigning each document to the topic that occurs with the highest probability. We then measure the quality within clusters (homogeneity) and across clusters (adjusted mutual information). The highest possible value for both measures is one. We do not report clustering metrics on the clinical health notes because the documents are multi-label and, in that case, the metrics are not well-defined."
+  }, {
+    "heading": "4.3 Choosing Anchor Words",
+    "text": "We wish to systematically test the effect of anchor words given the domain-specific lexicons. To do so, we follow the approach used by Jagarlamudi et al. (2012) to automatically generate anchor words: for each label in a data set, we find the words that have the highest mutual information with the label. For word w and label L, this is computed as\nI(L : w) = H(L)−H(L | w), (11)\nwhere for each document of label L we consider if the word w appears or not."
+  }, {
+    "heading": "5 Results",
+    "text": ""
+  }, {
+    "heading": "5.1 LDA Baseline Comparison",
+    "text": "We compare CorEx to LDA in terms of topic coherence, document classification, and document clustering across three datasets. CorEx is trained on binary data, while LDA is trained on count data. While not reported here, CorEx consistently outperformed LDA trained on binary data. In doing these comparisons, we use the Gensim implementation of LDA (Řehůřek and Sojka, 2010). The results of comparing CorEx to LDA as a function of the number of topics are presented in Figure 2.\nAcross all three datasets, we find that the topics produced by CorEx yield document classification results that are on par with or better than those produced by LDA topics. In terms of clustering, CorEx consistently produces document clusters of higher\nhomogeneity than LDA. On the disaster relief articles, the CorEx clusters are nearly twice as homogeneous as the LDA clusters.\nCorEx outperforms LDA in terms of topic coherence on two out of three of the datasets. While LDA\nproduces more coherent topics for the clinical health notes, it is particularly striking that CorEx is able to produce high quality topics while only leveraging binary count data. Examples of these topics are shown in Table 1. Despite the binary counts limitation, CorEx still finds meaningfully coherent and competitive structure in the data."
+  }, {
+    "heading": "5.2 Anchored CorEx Analysis",
+    "text": "We now examine the effects and benefits of guiding CorEx through anchor words. In doing so, we also compare anchored CorEx to other semi-supervised topic models."
+  }, {
+    "heading": "5.2.1 Anchoring for Topic Separability",
+    "text": "We are first interested in how anchoring can be used to encourage topic separability so that documents cluster well. We focus on the HA/DR articles and 20 newsgroups datasets, since traditional clustering metrics are not well-defined on the multi-label clinical health notes. For both datasets, we fix the\nnumber of topics to be equal to the number of document labels. It is in this context that we compare anchored CorEx to two other semi-supervised topic models: z-labels LDA and must/cannot link LDA.\nUsing the method described in Section 4.3, we automatically retrieve the top five anchors for each disaster type and newsgroup. We then filter these lists of any words that are ambiguous, i.e. words that are anchor words for more than one document label. For anchored CorEx and z-labels LDA we simultaneously assign each set of anchor words to exactly one topic each. For must/cannot link LDA, we create must-links within the words of the same anchor\ngroup, and create cannot-links between words of different anchor groups.\nSince we are simultaneously anchoring to many topics, we use a weak anchoring parameter β = 2 for anchored CorEx. Using the notation from their original papers, we use η = 1 for z-labels LDA, and η = 1000 for must/cannot link LDA. For both LDA variants, we use α = 0.5, β = 0.1 and take 2,000 samples, and estimate the models using code implemented by the original authors.\nThe results of this comparison are shown in Figure 3, and examples of anchored CorEx topics are shown in Table 2. Across all measures CorEx and anchored CorEx outperform LDA. We find that anchored CorEx always improves cluster quality versus CorEx in terms of homogeneity and adjusted mutual information. Compared to CorEx, multiple simultaneous anchoring neither harms nor benefits the topic coherence of anchored CorEx. Together these metrics suggest that anchored CorEx is finding topics that are of equivalent coherence to CorEx, but more relevant to the document labels since gains are seen in terms of document clustering.\nAgainst the other semi-supervised topic models, anchored CorEx compares favorably. The document clustering of anchored CorEx is similar to, or better than, that of z-labels LDA and must/cannot link LDA. Across the disaster relief articles, anchored CorEx finds less coherent topics than the two LDA variants, while it finds similarly coherent topics as must/cannot link LDA on the 20 newsgroup dataset."
+  }, {
+    "heading": "5.2.2 Anchoring for Topic Representation",
+    "text": "We now turn to studying how domain knowledge can be anchored to a single topic to help an otherwise dominated topic emerge, and how the anchoring parameter β affects that emergence. To discern this effect, we focus just on anchored CorEx along with the HA/DR articles and clinical health notes, datasets for which we have a domain expert lexicon.\nWe devise the following experiment: first, we determine the top five anchor words for each document label using the methodology described in Section 4.3. Unlike in the previous section, we do not filter these lists of ambiguous anchor words. Second, for each document label, we run an anchored CorEx topic model with that label’s anchor words anchored to exactly one topic. We compare this an-\nchored topic model to an unsupervised CorEx topic model using the same random seeds, thus creating a matched pair where the only difference is the treatment of anchor words. Finally, this matched pairs process is repeated 30 times, yielding a distribution for each metric over each label.\nWe use 50 topics when modeling the ReliefWeb articles and 30 topics when modeling the i2b2 clinical health notes. These values were chosen by observing diminishing returns to the total correlation explained by additional topics.\nIn Figure 4 we show how the results of this experiment vary as a function of the anchoring parameter β for each disaster and disease type in the two data sets. Since there is heavy variance across document labels for each metric, we also examine a more detailed cross section of these results in Figure 5, where we set β = 5 for the clinical health notes and set β = 10 for the disaster relief articles. As we show momentarily, disaster and disease types that benefit the most from anchoring were un-\n0.1 0.0 0.1 0.2 0.3 0.4 0.5 0.6\nTropical Cyclone Flood\nEpidemic Earthquake\nDrought Volcano Flash Flood Insect Infestation\nCold Wave Technological Disaster\nTsunami Land Slide\nWild Fire Severe Local Storm\nOther Snow Avalanche Extratropical Cyclone Mud Slide\nHeat Wave Storm Surge\nFire\nAnchoring Parameter β= 10\n50 0 50 100\nAnchoring Parameter β= 10\n0.10 0.05 0.00 0.05 0.10 0.15 0.20\nAnchoring Parameter β= 10\nAsthma Coronary Heart Disease\nCongestive Heart Failure Depression\nDiabetes GERD Gallstones Gout\nHypercholesterolemia Hypertension\nHypertriglyceridemia Osteoarthritis Obstructive Sleep Apnea Obesity Peripheral Vascular Disease\nAnchoring Parameter β= 5\nAnchoring Parameter β= 5\nAnchoring Parameter β= 5\n0.0\n0.5\n1.0 P ro\np o rtio n o f R u n s A n ch o re d T o p ic is th e M o st P re d ictiv e\n0.0\n0.5\n1.0\nA v e ra g e F 1 S co re P re -A n ch o rin g\n0.0\n0.5\n1.0 A v e ra\ng e T o p ic O v e rla p P re -A n ch o rin g\n0.0\n0.5\n1.0 P ro\np o rtio n o f R u n s A n ch o re d T o p ic is th e M o st P re d ictiv e\n0.0\n0.5\n1.0\nA v e ra g e F 1 S co re P re -A n ch o rin g\n0.0\n0.5\n1.0 A v e ra\ng e T o p ic O v e rla p P re -A n ch o rin g\nderrepresented pre-anchoring. Document labels that were well-represented prior to anchoring achieve only marginal gain. This results in the variance seen in Figure 4.\nA priori we do not know that anchoring will cause the anchor words to appear at the top of topics. So, we first measure how the topic overlap, the proportion of the top ten mutual information words that appear within the top ten words of the topics, changes before and after anchoring. From Figure 4 (row 1) we see that as β increases, more of these relevant words consistently appear within the topics. For the disaster relief articles, many disaster types see about two more words introduced, while in the clinical health notes the overlap increases by up to four words. Analyzing the cross section in Figure 5 (column 1), we see many of these gains come from disaster and disease types that appeared less in the topics pre-anchoring. Thus, we can sway the topic model towards less dominant themes through anchoring. Document labels that occur the most frequently are those for which the topic overlap changes the least.\nNext, we examine whether these anchored topics\nare more coherent topics. To do so, we compare the coherence of the anchored topic with that of the most predictive topic pre-anchoring, i.e. the topic with the largest corresponding coefficient in magnitude of the logistic regression, when the anchored topic itself is most predictive. From Figure 4 (row 2), we see these results have more variance, but largely the anchored topics are more coherent. In some cases, the coherence is 1.5 to 2 times that of pre-anchoring. Furthermore, by colors of the central panel of Figure 5, we find that the anchored topics are, indeed, often the most predictive topics for each document label. Similar to topic overlap, the labels that see the least improvement are those that appear the most and are already well-represented in the topic model.\nFinally, we find that the anchored, more coherent topics can lead to modest gains in document classification. For the disaster relief articles, Figure 4 (row 3) shows that there are mixed results in terms of F1 score improvement, with some disaster types performing consistently better, and others performing consistently worse. The results are more consistent for the clinical health notes, where there is an average increase of about 0.1 in the F1 score, and\nsome disease types see an increase of up to 0.3 in F1. Given that we are only anchoring 5 words to the topic model, these are significant gains in predictive power.\nUnlike the gains in topic overlap and coherence, the F1 score increases do not simply correlate with which document labels appeared most frequently. For example, we see in Figure 5 (column 3) that Tropical Cyclone exhibits the largest increase in predictive performance, even though it is also one of the most frequently appearing document labels. Similarly, some of the major gains in F1 for the disease types, and major losses in F1 for the disaster types, do not come from the most or least frequent document labels. Thus, if using anchoring single topics within CorEx for document classification, it is important to examine how the anchoring affects prediction for individual document labels."
+  }, {
+    "heading": "5.2.3 Anchoring for Topic Aspects",
+    "text": "Finding topics that revolve around a word, such as a name or location, or a group of words can aid in understanding how a particular subject or event has been framed. We finish with a qualitative experiment where we disambiguate aspects of a topic by anchoring a set of words to multiple topics within the CorEx topic model. Note, must/cannot link LDA cannot be used in this manner, and z-labels LDA would require us to know these aspects beforehand.\nWe consider tweets containing #Ferguson (caseinsensitive), which detail reactions to the shooting of Black teenager Michael Brown by White police officer Darren Wilson on August 9th, 2014 in Ferguson, Missouri. These tweets were collected from the Twitter Gardenhose, a 10% random sample of all tweets, over the period August 9th, 2014 to November 30th, 2014. Since CorEx will seek maximally informative topics by exploiting redundancies, we remove duplicates of retweets, leaving us with 869,091 tweets. We filter these tweets of punctuation, stop words, hyperlinks, usernames, and the ‘RT’ retweet symbol, and use the top 20,000 word types.\nIn the wake of both the shooting and the eventual non-indictment of Darren Wilson, several protests occurred. Some onlookers supported and encouraged such protests, while others characterized the protests as violent “riots.” To disambiguate these\ndifferent depictions, we train a CorEx topic model with 55 topics, anchoring “protest” and “protests” together to five topics, and “riot” and “riots” together to five topics with β = 2. These anchored topics are presented in Table 3.\nThe anchored topics reflect different aspects of the framing of the “protests” and “riots,” and are generally interpretable, despite the typical difficulty of extracting coherent topics from short documents using LDA (Tang et al., 2014). The “protest” topic aspects describe protests in St. Louis, Oakland, Beverly Hills, and parts of New York City (topics 1, 3, 4, 5), resistance by law enforcement (topics 3 and 4), and discussion of whether the protests were peaceful (topic 1). Topic 2 revolves around hip-hop artists who marched in solidarity with protesters.\nThe “riot” topic aspects discuss racial dynamics of the protests (topic 7) and suggest the demonstrations are dangerous (topics 8 and 9). Topic 10 describes the “riot” gear used in the militarized response to the Ferguson protesters, and Topic 7 also hints at aspects of conservatism through the hashtags #tcot (Top Conservatives on Twitter) and #pjnet (Patriot Journalist Network).\nAs we see, anchored CorEx finds several interesting, non-trivial aspects around “protest” and “riot” that could spark additional qualitative investigation. Retrieving topic aspects through anchor words in this manner allows the user to explore different frames of complex issues, events, or discussions within documents. As with the other anchoring strategies, this has the potential to supplement qualitative research done by researchers within the social sciences and digital humanities."
+  }, {
+    "heading": "6 Discussion",
+    "text": "We have introduced an information-theoretic topic model, CorEx, that does not rely on any of the generative assumptions of LDA-based topic models. This topic model seeks maximally informative topics as encoded by their total correlation. We also derived a flexible method for anchoring word-level domain knowledge in the CorEx topic model through the information bottleneck. Anchored CorEx guides the topic model towards themes that do not naturally emerge, and often produces more coherent and predictive topics. Both CorEx and anchored CorEx consistently produce topics that are of comparable quality to LDA-based methods, despite only making use of binarized word counts.\nAnchored CorEx is more flexible than previous attempts at integrating word-level information into topic models. Topic separability can be enforced by lightly anchoring disjoint groups of words to separate topics, topic representation can be promoted by assertively anchoring a group of words to a single topic, and topic aspects can be unveiled by anchoring a single group of words to multiple topics. The flexibility of anchoring through the information bottleneck lends itself to many other possible creative anchoring strategies that could guide the topic model in different ways. Different goals may call for different anchoring strategies, and domain experts can\nshape these strategies to their needs. While we have demonstrated several advantages of the CorEx topic model to LDA, it does have some technical shortcomings. Most notably, CorEx relies on binary count data in its sparsity optimization, rather than the standard count data that is used as input into LDA and other topic models. While we have demonstrated CorEx performs at the level of LDA despite this limitation, its effect would be more noticeable on longer documents. This can be partly overcome if one chunks such longer documents into shorter subdocuments prior to running the topic model. Our implementation also requires that each word appears in only one topic. These limitations are not fundamental limitations of the theory, but a matter of computational efficiency. In future work, we hope to remove these restrictions while preserving the speed of the sparse CorEx topic modeling algorithm.\nAs we have demonstrated, the informationtheoretic approach provided via CorEx has rich potential for finding meaningful structure in documents, particularly in a way that can help domain experts guide topic models with minimal intervention to capture otherwise eclipsed themes. The lightweight and versatile framework of anchored CorEx leaves open possibilities for theoretical extensions and novel applications within the realm of topic modeling."
+  }, {
+    "heading": "Acknowledgments",
+    "text": "We would like to thank the Machine Intelligence and Data Science (MINDS) research group at the Information Sciences Institute for their help and insight during the course of this research. We also thank the Vermont Advanced Computing Core (VACC) for its computational resources. Finally, we thank the anonymous reviewers and the TACL action editors Diane McCarthy and Kristina Toutanova for their time and effort in helping us improve our work. Ryan J. Gallagher was a visiting research assistant at the Information Sciences Institute while performing this research. Ryan J. Gallagher and Greg Ver Steeg were supported by DARPA award HR001115-C-0115 and David Kale was supported by the Alfred E. Mann Innovation in Engineering Doctoral Fellowship."
+  }],
+  "year": 2017,
+  "references": [{
+    "title": "Latent Dirichlet Allocation with topic-in-set knowledge",
+    "authors": ["David Andrzejewski", "Xiaojin Zhu."],
+    "venue": "Proceedings of the NAACL HLT 2009 Workshop on Semi-Supervised Learning for Natural Language Processing, pages 43–48. Association for Computational",
+    "year": 2009
+  }, {
+    "title": "Incorporating domain knowledge into topic modeling via Dirichlet forest priors",
+    "authors": ["David Andrzejewski", "Xiaojin Zhu", "Mark Craven."],
+    "venue": "Proceedings of the 26th Annual International Conference on Machine Learning, pages 25–32.",
+    "year": 2009
+  }, {
+    "title": "A framework for incorporating general domain knowledge into latent Dirichlet allocation using first-order logic",
+    "authors": ["David Andrzejewski", "Xiaojin Zhu", "Mark Craven", "Benjamin Recht."],
+    "venue": "Proceedings of the International Joint Conference on Artificial Intelli-",
+    "year": 2011
+  }, {
+    "title": "Learning topic models–going beyond SVD",
+    "authors": ["Sanjeev Arora", "Rong Ge", "Ankur Moitra."],
+    "venue": "2012 IEEE 53rd Annual Symposium on Foundations of Computer Science (FOCS), pages 1–10. IEEE.",
+    "year": 2012
+  }, {
+    "title": "A practical algorithm for topic modeling with provable guarantees",
+    "authors": ["Sanjeev Arora", "Rong Ge", "Yonatan Halpern", "David M. Mimno", "Ankur Moitra", "David Sontag", "Yichen Wu", "Michael Zhu."],
+    "venue": "Proceedings of International Conference on Machine Learning, pages",
+    "year": 2013
+  }, {
+    "title": "Latent Dirichlet Allocation",
+    "authors": ["David M. Blei", "Andrew Y. Ng", "Michael I. Jordan."],
+    "venue": "Journal of Machine Learning Research, 3(Jan):993–1022.",
+    "year": 2003
+  }, {
+    "title": "Discrete component analysis",
+    "authors": ["Wray Buntine", "Aleks Jakulin."],
+    "venue": "Subspace, Latent Structure and Feature Selection, pages 1–33. Springer.",
+    "year": 2006
+  }, {
+    "title": "Reading tea leaves: How humans interpret topic models",
+    "authors": ["Jonathan Chang", "Sean Gerrish", "Chong Wang", "Jordan L. Boyd-Graber", "David M. Blei."],
+    "venue": "Advances in Neural Information Processing Systems, pages 288–296.",
+    "year": 2009
+  }, {
+    "title": "A simple algorithm for identifying negated findings and diseases in discharge summaries",
+    "authors": ["Wendy W. Chapman", "Will Bridewell", "Paul Hanbury", "Gregory F. Cooper", "Bruce G. Buchanan."],
+    "venue": "Journal of Biomedical Informatics, 34(5):301–310.",
+    "year": 2001
+  }, {
+    "title": "Progressive EM for latent tree models and hierarchical topic detection",
+    "authors": ["Peixian Chen", "Nevin L. Zhang", "Leonard K.M. Poon", "Zhourong Chen."],
+    "venue": "Proceedings of the Thirtieth AAAI Conference on Artificial Intelligence, pages 1498–1504.",
+    "year": 2016
+  }, {
+    "title": "An efficient solution for mapping free",
+    "authors": ["Manhong Dai", "Nigam H. Shah", "Wei Xuan", "Mark A. Musen", "Stanley J. Watson", "Brian D. Athey", "Fan Meng"],
+    "year": 2008
+  }, {
+    "title": "On the equivalence between non-negative matrix factorization and probabilistic latent semantic indexing",
+    "authors": ["Chris Ding", "Tao Li", "Wei Peng."],
+    "venue": "Computational Statistics & Data Analysis, 52(8):3913–3927.",
+    "year": 2008
+  }, {
+    "title": "Latent topic networks: A versatile probabilistic programming framework for topic models",
+    "authors": ["James Foulds", "Shachi Kumar", "Lise Getoor."],
+    "venue": "Proceedings of the International Conference on Machine Learning, pages 777–786.",
+    "year": 2015
+  }, {
+    "title": "Multivariate information bottleneck",
+    "authors": ["Nir Friedman", "Ori Mosenzon", "Noam Slonim", "Naftali Tishby."],
+    "venue": "Proceedings of the Seventeenth Conference on Uncertainty in Artificial Intelligence, pages 152–161.",
+    "year": 2001
+  }, {
+    "title": "Hierarchical topic models and the nested Chinese restaurant process",
+    "authors": ["Thomas L. Griffiths", "Michael I. Jordan", "Joshua B. Tenenbaum", "David M. Blei."],
+    "venue": "Advances in Neural Information Processing Systems, pages 17–24.",
+    "year": 2004
+  }, {
+    "title": "Using anchors to estimate clinical state without labeled data",
+    "authors": ["Yoni Halpern", "Youngduck Choi", "Steven Horng", "David Sontag."],
+    "venue": "AMIA Annual Symposium Proceedings. American Medical Informatics Association.",
+    "year": 2014
+  }, {
+    "title": "Anchored discrete factor analysis",
+    "authors": ["Yoni Halpern", "Steven Horng", "David Sontag."],
+    "venue": "arXiv preprint arXiv:1511.03299.",
+    "year": 2015
+  }, {
+    "title": "Disentangling the lexicons of disaster response in Twitter",
+    "authors": ["Nathan Hodas", "Greg Ver Steeg", "Joshua Harrison", "Satish Chikkagoudar", "Eric Bell", "Courtney Corley."],
+    "venue": "The 3rd International Workshop on Social Web for Disaster Management (SWDM’15).",
+    "year": 2015
+  }, {
+    "title": "Stochastic variational inference",
+    "authors": ["Matthew D. Hoffman", "David M. Blei", "Chong Wang", "John Paisley."],
+    "venue": "Journal of Machine Learning Research, 14(1):1303– 1347.",
+    "year": 2013
+  }, {
+    "title": "Probabilistic latent semantic analysis",
+    "authors": ["Thomas Hofmann."],
+    "venue": "Proceedings of the Fifteenth Conference on Uncertainty in Artificial Intelligence, pages 289– 296.",
+    "year": 1999
+  }, {
+    "title": "Incorporating lexical priors into topic models",
+    "authors": ["Jagadeesh Jagarlamudi", "Hal Daumé III", "Raghavendra Udupa."],
+    "venue": "Proceedings of the 13th Conference of the European Chapter of the Association for Computational Linguistics, pages 204–213. Association for",
+    "year": 2012
+  }, {
+    "title": "Lowdimensional embeddings for interpretable anchorbased topic inference",
+    "authors": ["Moontae Lee", "David Mimno."],
+    "venue": "Proceedings of Empirical Methods in Natural Language Processing, pages 1319–1328.",
+    "year": 2014
+  }, {
+    "title": "UC Irvine Machine Learning Repository",
+    "authors": ["Moshe Lichman."],
+    "venue": "541",
+    "year": 2013
+  }, {
+    "title": "Supervised topic models",
+    "authors": ["Jon D. McAuliffe", "David M. Blei."],
+    "venue": "Advances in Neural Information Processing Systems, pages 121–128.",
+    "year": 2008
+  }, {
+    "title": "Robust RegBayes: Selectively incorporating first-order logic domain knowledge into Bayesian models",
+    "authors": ["Shike Mei", "Jun Zhu", "Jerry Zhu."],
+    "venue": "Proceedings of the 31st International Conference on Machine Learning (ICML-14), pages 253–261.",
+    "year": 2014
+  }, {
+    "title": "Optimizing semantic coherence in topic models",
+    "authors": ["David Mimno", "Hanna M. Wallach", "Edmund Talley", "Miriam Leenders", "Andrew McCallum."],
+    "venue": "Proceedings of the Conference on Empirical Methods in Natural Language Processing, pages 262–272. Asso-",
+    "year": 2011
+  }, {
+    "title": "Anchors regularized: Adding robustness and extensibility to scalable topic-modeling algorithms",
+    "authors": ["Thang Nguyen", "Yuening Hu", "Jordan L. Boyd-Graber."],
+    "venue": "Proceedings of the Association of Computational Linguistics, pages 359–369.",
+    "year": 2014
+  }, {
+    "title": "Is your anchor going up or down? Fast and accurate supervised topic models",
+    "authors": ["Thang Nguyen", "Jordan Boyd-Graber", "Jeffrey Lund", "Kevin Seppi", "Eric Ringger."],
+    "venue": "Proceedings of North American Chapter of the Association for Computational Linguistics.",
+    "year": 2015
+  }, {
+    "title": "Scikit-learn: Machine learning in Python",
+    "authors": ["rot", "Édouard Duchesnay"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2011
+  }, {
+    "title": "Software Framework for Topic Modeling with Large Corpora",
+    "authors": ["Radim Řehůřek", "Petr Sojka."],
+    "venue": "Proceedings of the LREC 2010 Workshop on New Challenges for NLP Frameworks, pages 45–50.",
+    "year": 2010
+  }, {
+    "title": "Toward interpretable topic discovery via anchored correlation explanation",
+    "authors": ["Kyle Reing", "David C. Kale", "Greg Ver Steeg", "Aram Galstyan."],
+    "venue": "ICML Workshop on Human Interpretability in Machine Learning.",
+    "year": 2016
+  }, {
+    "title": "The author-topic model for authors and documents",
+    "authors": ["Michal Rosen-Zvi", "Thomas Griffiths", "Mark Steyvers", "Padhraic Smyth."],
+    "venue": "Proceedings of the 20th Conference on Uncertainty in Artificial Intelligence, pages 487–494.",
+    "year": 2004
+  }, {
+    "title": "Understanding the limiting factors of topic modeling via posterior contraction analysis",
+    "authors": ["Jian Tang", "Zhaoshi Meng", "Xuanlong Nguyen", "Qiaozhu Mei", "Ming Zhang."],
+    "venue": "Proceedings of the International Conference on Machine Learning, pages 190–198.",
+    "year": 2014
+  }, {
+    "title": "The information bottleneck method",
+    "authors": ["Naftali Tishby", "Fernando C. Pereira", "William Bialek."],
+    "venue": "Proceedings of 37th Annual Allerton Conference on Communication, Control and Computing, pages 368–377.",
+    "year": 1999
+  }, {
+    "title": "Discovering structure in high-dimensional data through correlation explanation",
+    "authors": ["Greg Ver Steeg", "Aram Galstyan."],
+    "venue": "Advances in Neural Information Processing Systems, pages 577–585.",
+    "year": 2014
+  }, {
+    "title": "Maximally informative hierarchical representations of highdimensional data",
+    "authors": ["Greg Ver Steeg", "Aram Galstyan."],
+    "venue": "Artificial Intelligence and Statistics, pages 1004–1012. 542",
+    "year": 2015
+  }],
+  "id": "SP:6b655d33c7cf6e7ab52b13943ae3c894a39f1daf",
+  "authors": [{
+    "name": "Ryan J. Gallagher",
+    "affiliations": []
+  }, {
+    "name": "Kyle Reing",
+    "affiliations": []
+  }, {
+    "name": "David Kale",
+    "affiliations": []
+  }, {
+    "name": "Greg Ver Steeg",
+    "affiliations": []
+  }],
+  "abstractText": "While generative models such as Latent Dirichlet Allocation (LDA) have proven fruitful in topic modeling, they often require detailed assumptions and careful specification of hyperparameters. Such model complexity issues only compound when trying to generalize generative models to incorporate human input. We introduce Correlation Explanation (CorEx), an alternative approach to topic modeling that does not assume an underlying generative model, and instead learns maximally informative topics through an informationtheoretic framework. This framework naturally generalizes to hierarchical and semisupervised extensions with no additional modeling assumptions. In particular, word-level domain knowledge can be flexibly incorporated within CorEx through anchor words, allowing topic separability and representation to be promoted with minimal human intervention. Across a variety of datasets, metrics, and experiments, we demonstrate that CorEx produces topics that are comparable in quality to those produced by unsupervised and semisupervised variants of LDA.",
+  "title": "Anchored Correlation Explanation: Topic Modeling with Minimal Domain Knowledge"
+}

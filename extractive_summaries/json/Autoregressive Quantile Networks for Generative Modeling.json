@@ -1,0 +1,269 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "There has been a staggering increase in progress on generative modeling in recent years, built largely upon fundamental advances such as generative adversarial networks (Goodfellow et al., 2014), variational inference (Kingma & Welling, 2013), and autoregressive density estimation (van den Oord et al., 2016c). These have led to breakthroughs in state-ofthe-art generation of natural images (Karras et al., 2017) and audio (van den Oord et al., 2016a), and even been used for unsupervised learning of disentangled representations (Higgins et al., 2017; Chen et al., 2016). These domains often have real-valued distributions with underlying metrics; that is, there is a domain-specific notion of similarity between data points. This similarity is ignored by the predominant work-horse of generative modeling, the Kullback-Leibler (KL) divergence. Progress is now being made towards algorithms that optimize with respect to these underlying metrics (Arjovsky et al., 2017; Bousquet et al., 2017).\n*Equal contribution 1DeepMind, London, UK. Correspondence to: Georg Ostrovski <ostrovski@google.com>, Will Dabney <wdabney@google.com>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\nIn this paper, we present a novel approach to generative modeling, that, while strikingly different from existing methods, is grounded in the well-understood statistical methods of quantile regression. Unlike the majority of recent work, we approach generative modeling without the use of the KL divergence, and without explicitly approximating a likelihood model. Like GANs, in this way we produce an implicitly defined model, but unlike GANs our optimization procedure is inherently stable and lacks degenerate solutions which cause loss of diversity and mode collapse.\nMuch of the recent research on GANs has been focused on improving stability (Radford et al., 2015; Arjovsky et al., 2017; Daskalakis et al., 2017) and sample diversity (Gulrajani et al., 2017; Salimans et al., 2016; 2018). By stark contrast, methods such as PixelCNN (van den Oord et al., 2016b) readily produce high diversity, but due to their use of KL divergence are unable to make reasonable trade-offs between likelihood and perceptual similarity (Theis et al., 2015; Bellemare et al., 2017; Bousquet et al., 2017).\nOur proposed method, autoregressive implicit quantile networks (AIQN), combines the benefits of both: a loss function that respects the underlying metric of the data leading to improved perceptual quality, and a stable optimization process leading to highly diverse samples. While there has been an increasing tendency towards complex architectures (Chen et al., 2017; Salimans et al., 2017) and multiple objective loss functions to overcome these challenges, AIQN is conceptually simple and does not rely on any special architecture or optimization techniques. Empirically it proves to be robust to hyperparameter variations and easy to optimize.\nOur work is motivated by the recent advances achieved by reframing GANs in terms of optimal transport, leading to the Wasserstein GAN algorithm (Arjovsky et al., 2017), as well as work towards understanding the relationship between optimal transport and both GANs and VAEs (Bousquet et al., 2017). In agreement with these results, we focus on loss functions grounded in perceptually meaningful metrics. We build upon recent work in distributional reinforcement learning (Dabney et al., 2018a), which has begun to bridge the gap between approaches in reinforcement learning and unsupervised learning. Towards a practical algorithm we base our experimental results on Gated PixelCNN (van den Oord et al., 2016b), and show that using AIQN significantly im-\nproves objective performance on CIFAR-10 and ImageNet 32x32 in terms of Fréchet Inception Distance (FID) and Inception score, as well as subjective perceptual quality in image samples and inpainting."
+  }, {
+    "heading": "2. Background",
+    "text": "We begin by establishing some notation, before turning to a review of three of the most prevalent methods for generative modeling. Calligraphic letters (e.g.X ) denote sets or spaces, capital letters (e.g. X) denote random variables, and lower case letters (e.g. x) indicate values. A probability distribution with random variable X ∈ X is denoted pX ∈P(X ), its cumulative distribution function (c.d.f.) FX , and inverse c.d.f. or quantile function QX = F−1X . When probability distributions or quantile functions are parameterized by some θ we will write pθ or Qθ recognizing that here we do not view θ as a random variable.\nPerhaps the simplest way to approach generative modeling of a random variableX ∈ X is by fixing some discretization ofX into n separate values, say x1, . . . , xn ∈ X , and parameterize the approximate distribution with pθ(xi) ∝ exp(θi). This type of categorical parameterization is widely used, only slightly less commonly when X does not lend itself naturally to such a partitioning. Typically, the parameters θ are optimized to minimize the Kullback-Leibler (KL) divergence between observed values of X and the model pθ, θ∗ = arg minθDKL(pX‖pθ). However, this is only tractable whenX is a small discrete set or at best low-dimensional. A common method for extending a generative model or density estimator to multivariate distributions is to factor the density as a product of scalarvalued conditional distributions. Let X = (X1, . . . , Xn), then for any permutation of the dimensions σ : Nn → Nn,\npX(x) = n∏ i=1 pXσ(i)(xσ(i)|xσ(1), . . . , xσ(i−1)). (1)\nWhen the conditional density is modeled by a simple (e.g. Gaussian) base distribution, the ordering of the dimensions can be crucial (Papamakarios et al., 2017). However, it is common practice to choose an arbitrary ordering and rely upon a more powerful conditional model to avoid these problems. This class of models includes PixelRNN and PixelCNN (van den Oord et al., 2016c;b), MAF (Papamakarios et al., 2017), MADE (Germain et al., 2015), and many others. Fundamentally, all these approaches use the KL divergence as their loss function.\nAnother class of methods, generally known as latent variable methods, can bypass the need for autoregressive models using a different modeling assumption. Specifically, consider the Variational Autoencoder (VAE) (Kingma & Welling, 2013; Rezende et al., 2014), which represents\npθ as the marginalization over a latent random variable Z ∈ Z . The VAE is trained to maximize an approximate lower bound of the log-likelihood of the observations:\nlog pθ(x) ≥ −DKL(qθ(z|x)‖p(z)) + E [log pθ(x|z)] .\nAlthough VAEs are straightforward to implement and optimize, and effective at capturing structure in highdimensional spaces, they often miss fine-grained detail, resulting in blurry images.\nGenerative Adversarial Networks (GANs) (Goodfellow et al., 2014) pose the problem of learning a generative model as a two-player zero-sum game between a discriminator D, attempting to distinguish between x ∼ pX (real data) and x ∼ pθ (generated data), and a generator G, attempting to generate data indistinguishable from real data. The generator is an implicit latent variable model that reparameterizes samples, typically from an isotropic Gaussian distribution, into values in X . The original formulation of GANs,\narg min G sup D [ E X log(D(X)) + E Z log(1−D(G(Z))) ] ,\ncan be seen as minimizing a lower-bound on the JensenShannon divergence (Goodfellow et al., 2014; Bousquet et al., 2017). That is, even in the case of GANs we are often minimizing functions of the KL divergence1.\nMany recent advances have come from principled combinations of these three fundamental methods (Makhzani et al., 2015; Dumoulin et al., 2016; Rosca et al., 2017)."
+  }, {
+    "heading": "2.1. Distance Metrics and Loss Functions",
+    "text": "A common perspective in generative modeling is that the choice of model should encode existing metric assumptions about the domain, combined with a generic likelihoodfocused loss such as the KL divergence. Under this view, the KL’s general applicability and robust optimization properties make it a natural choice, and most implementations of the methods we reviewed in the previous section attempt to, at least indirectly, minimize a version of the KL.\nOn the other hand, as every model inevitably makes tradeoffs when constrained by capacity or limited training, it is desirable for its optimization goal to incentivize trade-offs prioritizing approximately correct solutions, when the data space is endowed with a metric supporting a meaningful (albeit potentially subjective) notion of approximation. It has been argued (Theis et al., 2015; Bousquet et al., 2017; Arjovsky et al., 2017; Bellemare et al., 2017) that the KL may not always be appropriate from this perspective, by making sub-optimal trade-offs between likelihood and similarity.\n1The Jensen-Shannon divergence is the sum of KLs between distributions P,Q and their uniform mixture M = 0.5(P +Q): JSD(P ||Q) = 0.5(DKL(P ||M) +DKL(Q||M)).\nIndeed, many limitations of existing models can be traced back to the use of KL, and the resulting trade-offs in approximate solutions it implies. For instance, its use appears to play a central role in one of the primary failure modes of VAEs, that of blurry samples. Zhao et al. (2017) argue that the Gaussian posterior pθ(x|z) implies an overly simple model, which, when unable to perfectly fit the data, is forced to average (thus creating blur), and is not incentivized by the KL towards an alternative notion of approximate solution. Theis et al. (2015) emphasized that an improvement of log-likelihood does not necessarily translate to higher perceptual quality, and that the KL loss is more likely to produce atypical samples than some other training criteria.\nWe offer an alternative perspective: a good model should encode assumptions about the data distribution, whereas a good loss should encode the notion of similarity, that is, the underlying metric on the data space. From this point of view, the KL corresponds to an actual absence of explicit underlying metric, with complete focus on probability.\nThe optimal transport metrics Wc, for underlying metric c(x, x′), and in particular the p-Wasserstein distance, when c is an Lp metric, have frequently been proposed as being well-suited replacements to KL (Bousquet et al., 2017; Genevay et al., 2017). Briefly, the advantages are (1) avoidance of mode collapse (no need to choose between spreading over modes or collapsing to a single mode as in KL), and (2) the ability to trade off errors and incentivize approximations that respect the underlying metric.\nRecently, Arjovsky et al. (2017) introduced the Wasserstein\nGAN, reposing the two-player game as the estimation of the gradient of the 1-Wasserstein distance between the data and generator distributions. They reframe this in terms of the dual form of the 1-Wasserstein, with the critic estimating a function f which maximally separates the two distributions. While this is an exciting line of work, it still faces limitations when the critic solution is approximate, i.e. when f∗ is not found before each update. In this case, due to insufficient training of the critic (Bellemare et al., 2017) or limitations of the function approximator, the gradient direction produced can be arbitrarily bad (Bousquet et al., 2017).\nThus, we are left with the question of how to minimize a distribution loss respecting an underlying metric. Recent work in distributional reinforcement learning has proposed the use of quantile regression as a method for minimizing the 1-Wasserstein in the univariate case when approximating using a mixture of Dirac functions (Dabney et al., 2018b)."
+  }, {
+    "heading": "2.2. Quantile Regression",
+    "text": "In this section, we review quantile regression as a method for estimating the quantile function of a distribution at specific points, i.e. its inverse cumulative distribution function. This leads to recent work on approximating a distribution by a neural network approximation of its quantile function, acting as a reparameterization of a random sample from the uniform distribution.\nThe quantile regression loss (Koenker & Hallock, 2001) for a quantile at τ ∈ [0, 1] and error u (positive for underestimation and negative for overestimation) is given by ρτ (u) = (τ − I{u ≤ 0})u. It is an asymmetric loss function penalizing underestimation by weight τ and overestimation by weight 1 − τ . For a given scalar distribution Z with c.d.f. FZ and a quantile τ , the inverse c.d.f. q = F−1Z (τ) minimizes the expected quantile regression loss Ez∼Z [ρτ (z − q)]. Using this loss allows one to train a neural network to approximate a scalar distribution represented by its inverse c.d.f. For this, the network can output a fixed grid of quantiles (Dabney et al., 2018b), with the respective quantile regression losses being applied to each output independently. A more effective approach is to provide the desired quantile τ as an additional input to the network, and train it to output the corresponding value of F−1Z (τ). The implicit quantile network (IQN) model (Dabney et al., 2018a) reparameterizes a sample τ ∼ U([0, 1]) through a deterministic function to produce samples from the underlying data distribution. These two methods can be seen to belong to the top-right and bottom-right categories in Figure 1. An IQN Qθ can be trained by stochastic gradient descent on the quantile regression loss, with u = z −Qθ(τ) and training samples (z, τ) drawn from z ∼ Z and τ ∼ U([0, 1]).\nOne drawback to the quantile regression loss is that gradients do not scale with the magnitude of the error, but instead with the sign of the error and the quantile weight τ . This increases gradient variance and can negatively impact the final model’s sample quality. Increasing the batch size, and thus averaging over more values of τ , would have the effect of lowering this variance. Alternatively, we can smooth the gradients as the model converges by allowing errors, under some threshold κ, to be scaled with their magnitude, reverting to an expectile loss. This results in the Huber quantile loss (Huber, 1964; Dabney et al., 2018b):\nρκτ (u) =\n{ |τ−I{u≤0}| 2κ u\n2, if |u| ≤ κ, |τ − I{u ≤ 0}|(|u| − 12κ), otherwise. (2)"
+  }, {
+    "heading": "3. Autoregressive Implicit Quantiles",
+    "text": "Let X = (X1, . . . , Xn) ∈ X1 × · · · × Xn = X be an ndimensional random variable. We begin by analyzing the effect of two naive applications of IQN to modeling the distribution of X .\nFirst, suppose we use the same quantile target, τ ∈ [0, 1], for every output dimension. The only modification to IQN would be to output n dimensions instead of 1, the loss being applied to each output dimension independently. This is equivalent to assuming that the dimensions of X are comonotonic. Two random variables are comonotonic if and only if they can be expressed as nondecreasing (deterministic) functions of a single random variable (Dhaene et al., 2006). Thus a joint quantile function for a comonotonic X can be written as F−1X (τ) = (F−1X1 (τ), F −1 X2\n(τ), . . . , F−1Xn(τ)). While there are many interesting uses for comonotonic random variables, we believe this assumption is too strong to be useful more broadly.\nSecond, one could use a separate value τi ∈ [0, 1] for each Xi, with the IQN being unchanged from the first case. This corresponds to making an independence assumption on the dimensions of X . Again we would expect this to be an unreasonably restrictive modeling assumption for many domains, such as the case of natural images.\nNow, we turn to our proposed approach of extending IQN to multivariate distributions. We fix an ordering of the n dimensions. If the density function pX is expressed as a product of conditional likelihoods, as in Equation 1, then the joint c.d.f. can be written as\nFX(x) = P(X1 ≤ x1, . . . , Xn ≤ xn),\n= n∏ i=1 FXi|Xi−1,...,X1(xi).\nFurthermore, for τjoint = ∏n i=1 τi, we can write the jointquantile function of X as\nF−1X (τjoint) = (F −1 X1 (τ1), . . . , F −1 Xn|Xn−1,...(τn)).\nThis approach has been used previously by Koenker & Xiao (2006), who introduced a quantile autoregression model for quantile regression on time-series.\nWe propose to extend IQN to an autoregressive model of the above conditional form of a joint-quantile function. Denoting X1:i = X1 × · · · × Xi, let X̃ := ⋃n i=0 X1:i be the space of ‘partial’ data points. We can define the autoregressive IQN as a deterministic functionQθ : X̃ × [0, 1]n → X̃ , mapping partial samples x̃ ∈ X̃ and quantile targets τi ∈ [0, 1] to estimates of F−1X . We can then train Qθ using a quantile regression loss (Equation 2). For generation, one can iterate x1:i = Qθ(x1:i−1, τi), on a sequence of growing partial samples2 x1:i−1 and independently sampled τi ∼ U([0, 1]), for i = 1, . . . , n, to finally obtain a sample x = x1:n."
+  }, {
+    "heading": "3.1. Quantile Regression and the Wasserstein",
+    "text": "As previously mentioned, for the restricted model class of a uniform mixture of Diracs, quantile regression can be shown to minimize the 1-Wasserstein metric (Dabney et al., 2018b). We extend this analysis for the case of arbitrary approximate quantile functions, and find that quantile regression minimizes a closely related divergence which we call quantile divergence, defined, for any distributions P and Q, as\nq(P,Q) := ∫ 1 0 [∫ F−1Q (τ) F−1P (τ) (FP (x)− τ)dx ] dτ.\nIndeed, the expected quantile loss of any parameterized quantile function Q̄θ equals, up to a constant, the quantile divergence between P and the distribution Qθ implicitly defined by Q̄θ:\nE τ∼U([0,1]) [ E z∼P [ρτ (z − Q̄θ(τ))] ] = q(P,Qθ) + h(P ),\nwhere h(P ) does not depend on Qθ. Thus quantile regression minimizes the quantile divergence q(P,Qθ) and the sample gradient ∇θρτ (z − Q̄θ(τ)) (for τ ∼ U([0, 1]) and z ∼ P ) is an unbiased estimate of ∇θq(P,Qθ). See Appendix for proofs."
+  }, {
+    "heading": "3.2. Quantile Density Function",
+    "text": "Although IQN does not directly model the log-likelihood of the data distribution, observe that we can still query the implied density at a point (Jones, 1992):\n∂\n∂τ F−1X (τ) =\n1\npX(F −1 X (τ))\n.\nIndeed, this quantity, known as the sparsity function (Tukey, 1965) or the quantile-density function (Parzen, 1979) plays\n2Throughout we understand x0 = x1:0 ∈ X1:0 to denote the ‘empty tuple’, and the function Qθ to map this to a single unconditional sample x1 = x1:1 = Qθ(x0, τ1).\na central role in the analysis of quantile regression models (Koenker, 1994). A common approach involves choosing a bandwidth parameter h and estimating this quantity through finite-differences around the value of interest as (F−1X (τ+h)−F−1X (τ−h))/2h (Siddiqui, 1960). However, as we have the full quantile function, the quantile-density function can be computed exactly using a single step of back-propagation to compute ∂F\n−1(τ) ∂τ . As this only allows\nquerying the density given the value of τ , application to general likelihoods would require finding the value of τ that produces the closest approximation to the query point x. Though arguably too inefficient for training, this could potentially be used to interrogate the model."
+  }, {
+    "heading": "4. PixelIQN",
+    "text": "To test our proposed method, which is architecturally compatible with many generative model approaches, we wanted to compare and contrast IQN, that is quantile regression and quantile reparameterization, with a method trained with an explicit parameterization to minimize KL divergence. A natural choice for this was PixelCNN, specifically we build upon the Gated PixelCNN of van den Oord et al. (2016b).\nThe Gated PixelCNN takes as input an image x ∼ X , sampled from the training distribution at training time, and potentially all zeros or partially generated at generation time, as well as a location-dependent context s. The model consists of a number of residual layer blocks, whose structure is chosen to allow each output pixel to be a function of all preceding input pixels (in a raster-scan order). At its core, each layer block computes two gated activations of the form\ny = tanh(Wk,f ∗ x+ Vk,f ∗ s) σ(Wk,g ∗ x+ Vk,g ∗ s), with k the layer index, ∗ denoting convolution, and Vk,f and Vk,g being 1 × 1 convolution kernels. See Figure 2 for a full schematic depiction of a Gated PixelCNN layer\nblock. After a number of such layer blocks, the PixelCNN produces a final output layer with shape (n, n, 3, 256), with a softmax across the final dimension, corresponding to the approximate conditional likelihood for the value of each pixel-channel. That is, the conditional likelihood is the product of these individual autoregressive models,\np(x|s) = 3n2∏ i=1 p(xi|x1, . . . , xi−1, si).\nTypically the location-dependent conditioning term was used to condition on class labels, but here, we will use it to condition on the sample point3 τ ∈ [0, 1]3n2 . Thus, in addition to the input image x we input, in place of s, the sample points τ = (τ1, . . . , τ3n2) to be reparameterized, with each τi ∼ U([0, 1]). Finally, our network outputs only the full sample image of shape (n, n, 3), without the need for an additional softmax layer. Note that the number of τ values generated exactly corresponds to the number of random draws from softmax distributions in the original PixelCNN. We are simply changing the role of the randomness, from a draw at the output to a part of the input.\nArchitecturally, our proposed model, PixelIQN, is exactly the network given by van den Oord et al. (2016b), with the one exception that we output only a single value per pixel-channel and do not require the softmax activations.\nIn PixelCNN training is done by passing the training image through the network, and training each output softmax distribution using the KL divergence between the training image and the approximate distribution,∑\ni\nDKL(δxi , p(·|x1, . . . , xi−1)).\nFor PixelIQN, the input is the training image x and a sample point τ ∼ U([0, 1]3n2). The output values Qx(τ) ∈ R3n 2 are interpreted as the approximate quantile function at τ , Qx(τ)i = QX(τi|xi−1, . . .), trained with a single step of quantile regression towards the observed sample x:∑\ni\nρκτi(xi −QX(τi|xi−1, . . .))."
+  }, {
+    "heading": "4.1. CIFAR-10",
+    "text": "We begin by demonstrating PixelIQN on CIFAR-10 (Krizhevsky & Hinton, 2009). For comparison, we train both a baseline Gated PixelCNN and a PixelIQN. Both models correspond to the 15-layer network variant in (van den Oord et al., 2016b), see Appendix for detailed hyperparameters and training procedure. The two methods have substantially different loss functions, so we performed a\n3Conditioning on labels remains possible (see Section 4.2).\nhyperparameter search using a short training run, with the same number (500) of hyperparameter configurations evaluated for both models. For all results, we report full training runs using the best found hyperparameters in each case. The evaluation metric used for the hyperparameter search was the Fréchet Inception Distance (FID) (Heusel et al., 2017), see Appendix for details. In addition to FID, we report Inception score (Salimans et al., 2016) for both models.\nFigure 4 (left) shows Inception score and FID for both models evaluated at several points throughout training. The fully trained PixelCNN achieves an Inception score and FID of 4.6 and 65.9 respectively, while PixelIQN substantially outperforms it with an Inception score of 5.3 and FID of 49.5. This also compares favorably with e.g. WGAN (Arjovsky et al., 2017), which reaches an Inception score of 3.8. For subjective evaluations, we give samples from both models in Figure 3. Samples coming from PixelIQN are much more visually coherent. Of note, the PixelIQN model achieves\na performance level comparable to that of the fully trained PixelCNN with only about one third the number of training updates (and about one third of the wall-clock time)."
+  }, {
+    "heading": "4.2. ImageNet 32x32",
+    "text": "Next, we turn to the small ImageNet dataset (Russakovsky et al., 2015), first used for generative modeling in the PixelRNN work (van den Oord et al., 2016c). Again, we evaluate using FID and Inception score. For this much harder dataset, we base our PixelCNN and PixelIQN models on the larger 20-layer variant used in (van den Oord et al., 2016b). Due to substantially longer training time for this model, we did not perform additional hyperparameter tuning, and mostly used the same hyperparameter values as in the previous sections for both models; details can be found in the Appendix.\nFigure 4 shows Inception score and FID throughout training of PixelCNN and PixelIQN. Again, PixelIQN substan-\ntially outperforms the baseline in terms of final performance and sample complexity. For final scores and a comparison to state-of-the-art GAN models, see Table 1. Figure 5 shows random (non-cherry-picked) samples from both models. Compared to PixelCNN, PixelIQN samples appear to have superior quality with more global consistency and less ‘high-frequency noise’.\nIn Figure 6, we show the inpainting performance of PixelIQN, by fixing the top half of a validation set image as input and sampling repeatedly from the model to generate different completions. We note that the model consistently generates plausible completions with significant diversity between different completion samples for the same input image. Meanwhile, WGAN-GP has been seen to produce deterministic completions (Bellemare et al., 2017).\nFollowing (van den Oord et al., 2016b), we also trained a class-conditional PixelIQN variant, providing to the model the one-hot class label corresponding to a training image (in addition to a τ sample). Samples from a class-conditional model can be expected to have higher visual quality, as the class label provides log2(1000) ≈ 10 bits of information, see Figure 7. As seen in Figure 4 and Table 1, class conditioning also further improves Inception score and FID. To generate each sample for the computation of these scores, we sample one of 1000 class labels randomly, then generate an image conditioned on this label via the trained model.\nFinally, motivated by the very long training time for the large PixelCNN model (approximately 1 day per 100K training steps, on 16 NVIDIA Tesla P100 GPUs), we also trained smaller 15-layer versions of the models (same as the ones used on CIFAR-10) on the small ImageNet dataset. For comparison, these take approximately 12 hours for 100K training steps on a single P100 GPU, or less than 3 hours on 8 P100 GPUs. As expected, little PixelCNN, while suitable\nfor the CIFAR-10 dataset, fails to achieve competitive scores on the ImageNet dataset, achieving Inception score 5.1 and FID 66.4. Astonishingly, little PixelIQN on this dataset reaches Inception score 7.3 and FID 38.5, see Figure 4 (right). It thereby not only outperforms the little PixelCNN, but also the larger 20-layer version! This strongly supports the hypothesis that PixelCNN, and potentially many other models, are constrained not only by their model capacity, but crucially also by the sub-optimal trade-offs made by their log-likelihood training criterion, failing to align with perceptual or evaluation metrics."
+  }, {
+    "heading": "5. Discussion and Conclusions",
+    "text": "Most existing generative models for images belong to one of two classes. The first are likelihood-based models, trained with an elementwise KL reconstruction loss, which,\nwhile perceptually meaningless, provides robust optimization properties and high sample diversity. The second are GANs, trained based on a discriminator loss, typically better aligned with a perceptual metric and enabling the generator to produce realistic, globally consistent samples. Their advantages come at the cost of a harder optimization problem, high parameter sensitivity, and most importantly, a tendency to collapse modes of the data distribution.\nAIQNs are a new, fundamentally different, technique for generative modeling. By using a quantile regression loss instead of KL divergence, they combine some of the best properties of the two model classes. By their nature, they preserve modes of the learned distribution, while producing perceptually appealing high-quality samples. The inevitable approximation trade-offs a generative model makes when constrained by capacity or insufficient training can vary significantly depending on the loss used. We argue that the proposed quantile regression loss aligns more effectively with a given metric and therefore makes subjectively more advantageous trade-offs.\nDevising methods for quantile regression over multidimensional outputs is an active area of research. New methods are continuing to be investigated (Carlier et al., 2016; Hallin & Miroslav, 2016), and a promising direction for future work is to find ways to use these to replace autoregressive models. One approach to reducing the computational burden of such models is to apply AIQN to the latent dimensions\nof a VAE. Similar in spirit to Rosca et al. (2017), this would use the VAE to reduce the dimensionality of the problem and the AIQN to sample from the true latent distribution. In the Appendix we give preliminary results using such an technique, on CelebA 64× 64 (Liu et al., 2015). We have shown that IQN, computationally cheap and technically simple, can be readily applied to existing architectures, PixelCNN and VAE (Appendix), improving robustness and sampling quality of the underlying model. We demonstrated that PixelIQN produces more realistic, globally coherent samples, and improves Inception score and FID.\nWe further point out that many recent advances in generative models could be easily combined with our proposed method. Recent algorithmic improvements to GANs such as mini-batch discrimination and progressive growing (Salimans et al., 2016; Karras et al., 2017), while not strictly necessary in our work, could be applied to further improve performance. PixelCNN++ (Salimans et al., 2017) is an architectural improvement of PixelCNN, with several beneficial modifications supported by experimental evidence. Although we have built upon the original Gated PixelCNN in this work, we believe all of these modifications to be compatible with our work, except for the use of a mixture of logistics in place of PixelCNN’s softmax. As we have entirely replaced this model component, this change does not map onto our model. Of note, the motivation behind this change closely mirrors our own, in looking for a loss that respects the underlying metric between examples. The recent PixelSNAIL model (Chen et al., 2017) achieves stateof-the-art modeling performance by enhancing PixelCNN with ELU nonlinearities, modified block structure, and an attention mechanism. Again, all of these are fully compatible with our work and should improve results further.\nFinally, the implicit quantile formulation lifts a number of architectural restrictions of previous generative models. Most importantly, the reparameterization as an inverse c.d.f. allows to learn distributions over continuous ranges without pre-specified boundaries or quantization. This enables modeling continuous-valued variables, for example for generation of sound (van den Oord et al., 2016a), opening multiple interesting avenues for further investigation."
+  }, {
+    "heading": "Acknowledgements",
+    "text": "We would like to acknowledge the important role many of our colleagues at DeepMind played for this work. We especially thank Aäron van den Oord and Sander Dieleman for invaluable advice on the PixelCNN model; Ivo Danihelka and Danilo J. Rezende for careful reading and insightful comments on an earlier version of the paper; Igor Babuschkin, Alexandre Galashov, Dominik Grewe, Jacob Menick, and Mihaela Rosca for technical help."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Wasserstein generative adversarial networks",
+    "authors": ["M. Arjovsky", "S. Chintala", "L. Bottou"],
+    "venue": "In Proceedings of the 34th International Conference on Machine Learning (ICML),",
+    "year": 2017
+  }, {
+    "title": "The Cramer distance as a solution to biased Wasserstein gradients",
+    "authors": ["M.G. Bellemare", "I. Danihelka", "W. Dabney", "S. Mohamed", "B. Lakshminarayanan", "S. Hoyer", "R. Munos"],
+    "venue": "arXiv preprint arXiv:1705.10743,",
+    "year": 2017
+  }, {
+    "title": "From optimal transport to generative modeling: the vegan cookbook",
+    "authors": ["O. Bousquet", "S. Gelly", "I. Tolstikhin", "Simon-Gabriel", "C.-J", "B. Schoelkopf"],
+    "venue": "arXiv preprint arXiv:1705.07642,",
+    "year": 2017
+  }, {
+    "title": "Vector quantile regression: an optimal transport approach",
+    "authors": ["G. Carlier", "V. Chernozhukov", "A. Galichon"],
+    "venue": "Annals of Statistics, 44(3):1165–1192,",
+    "year": 2016
+  }, {
+    "title": "Infogan: Interpretable representation learning by information maximizing generative adversarial nets",
+    "authors": ["X. Chen", "Y. Duan", "R. Houthooft", "J. Schulman", "I. Sutskever", "P. Abbeel"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2016
+  }, {
+    "title": "PixelSNAIL: An improved autoregressive generative model",
+    "authors": ["X. Chen", "N. Mishra", "M. Rohaninejad", "P. Abbeel"],
+    "venue": "arXiv preprint arXiv:1712.09763,",
+    "year": 2017
+  }, {
+    "title": "Implicit quantile networks for distributional reinforcement learning",
+    "authors": ["W. Dabney", "G. Ostrovski", "D. Silver", "R. Munos"],
+    "venue": "Proceedings of the 34th International Conference on Machine Learning (ICML),",
+    "year": 2018
+  }, {
+    "title": "Distributional reinforcement learning with quantile regression",
+    "authors": ["W. Dabney", "M. Rowland", "M.G. Bellemare", "R. Munos"],
+    "venue": "In Proceedings of the AAAI Conference on Artificial Intelligence,",
+    "year": 2018
+  }, {
+    "title": "Training GANs with optimism",
+    "authors": ["C. Daskalakis", "A. Ilyas", "V. Syrgkanis", "H. Zeng"],
+    "venue": "arXiv preprint arXiv:1711.00141,",
+    "year": 2017
+  }, {
+    "title": "Risk measures and comonotonicity: a review",
+    "authors": ["J. Dhaene", "S. Vanduffel", "M.J. Goovaerts", "R. Kaas", "Q. Tang", "D. Vyncke"],
+    "venue": "Stochastic Models,",
+    "year": 2006
+  }, {
+    "title": "Adversarially learned inference",
+    "authors": ["V. Dumoulin", "I. Belghazi", "B. Poole", "A. Lamb", "M. Arjovsky", "O. Mastropietro", "A. Courville"],
+    "venue": "arXiv preprint arXiv:1606.00704,",
+    "year": 2016
+  }, {
+    "title": "GAN and VAE from an optimal transport point of view",
+    "authors": ["A. Genevay", "G. Peyré", "M. Cuturi"],
+    "venue": "arXiv preprint arXiv:1706.01807,",
+    "year": 2017
+  }, {
+    "title": "MADE: Masked autoencoder for distribution estimation",
+    "authors": ["M. Germain", "K. Gregor", "I. Murray", "H. Larochelle"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2015
+  }, {
+    "title": "Generative adversarial nets",
+    "authors": ["I. Goodfellow", "J. Pouget-Abadie", "M. Mirza", "B. Xu", "D. Warde-Farley", "S. Ozair", "A. Courville", "Y. Bengio"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2014
+  }, {
+    "title": "Improved training of Wasserstein GANs",
+    "authors": ["I. Gulrajani", "F. Ahmed", "M. Arjovsky", "V. Dumoulin", "A.C. Courville"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2017
+  }, {
+    "title": "Multiple-output quantile regression",
+    "authors": ["M. Hallin", "Š. Miroslav"],
+    "venue": "Handbook of Quantile Regression,",
+    "year": 2016
+  }, {
+    "title": "GANs trained by a two time-scale update rule converge to a local nash equilibrium",
+    "authors": ["M. Heusel", "H. Ramsauer", "T. Unterthiner", "B. Nessler", "S. Hochreiter"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2017
+  }, {
+    "title": "Beta-VAE: Learning basic visual concepts with a constrained variational framework",
+    "authors": ["I. Higgins", "L. Matthey", "A. Pal", "C. Burgess", "X. Glorot", "M. Botvinick", "S. Mohamed", "A. Lerchner"],
+    "venue": "In Proceedings of the International Conference on Learning Representations (ICLR),",
+    "year": 2017
+  }, {
+    "title": "Robust estimation of a location parameter",
+    "authors": ["P.J. Huber"],
+    "venue": "Annals of Mathematical Statistics,",
+    "year": 1964
+  }, {
+    "title": "Estimating densities, quantiles, quantile densities and density quantiles",
+    "authors": ["M.C. Jones"],
+    "venue": "Annals of the Institute of Statistical Mathematics,",
+    "year": 1992
+  }, {
+    "title": "Progressive growing of GANs for improved quality, stability, and variation",
+    "authors": ["T. Karras", "T. Aila", "S. Laine", "J. Lehtinen"],
+    "venue": "arXiv preprint arXiv:1710.10196,",
+    "year": 2017
+  }, {
+    "title": "Auto-encoding variational bayes",
+    "authors": ["D.P. Kingma", "M. Welling"],
+    "venue": "arXiv preprint arXiv:1312.6114,",
+    "year": 2013
+  }, {
+    "title": "Confidence intervals for regression quantiles",
+    "authors": ["R. Koenker"],
+    "venue": "In Asymptotic Statistics,",
+    "year": 1994
+  }, {
+    "title": "Quantile regression: an introduction",
+    "authors": ["R. Koenker", "K. Hallock"],
+    "venue": "Journal of Economic Perspectives,",
+    "year": 2001
+  }, {
+    "title": "Quantile autoregression",
+    "authors": ["R. Koenker", "Z. Xiao"],
+    "venue": "Journal of the American Statistical Association,",
+    "year": 2006
+  }, {
+    "title": "Learning multiple layers of features from tiny images",
+    "authors": ["A. Krizhevsky", "G. Hinton"],
+    "venue": "Technical report,",
+    "year": 2009
+  }, {
+    "title": "Deep learning face attributes in the wild",
+    "authors": ["Z. Liu", "P. Luo", "X. Wang", "X. Tang"],
+    "venue": "In Proceedings of International Conference on Computer Vision (ICCV),",
+    "year": 2015
+  }, {
+    "title": "Masked autoregressive flow for density estimation",
+    "authors": ["G. Papamakarios", "I. Murray", "T. Pavlakou"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2017
+  }, {
+    "title": "Nonparametric statistical data modeling",
+    "authors": ["E. Parzen"],
+    "venue": "Journal of the American Statistical Association,",
+    "year": 1979
+  }, {
+    "title": "Unsupervised representation learning with deep convolutional generative adversarial networks",
+    "authors": ["A. Radford", "L. Metz", "S. Chintala"],
+    "venue": "arXiv preprint arXiv:1511.06434,",
+    "year": 2015
+  }, {
+    "title": "Stochastic backpropagation and approximate inference in deep generative models",
+    "authors": ["D.J. Rezende", "S. Mohamed", "D. Wierstra"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2014
+  }, {
+    "title": "Variational approaches for autoencoding generative adversarial networks",
+    "authors": ["M. Rosca", "B. Lakshminarayanan", "D. Warde-Farley", "S. Mohamed"],
+    "venue": "arXiv preprint arXiv:1706.04987,",
+    "year": 2017
+  }, {
+    "title": "Imagenet large scale visual recognition challenge",
+    "authors": ["O. Russakovsky", "J. Deng", "H. Su", "J. Krause", "S. Satheesh", "S. Ma", "Z. Huang", "A. Karpathy", "A. Khosla", "M Bernstein"],
+    "venue": "International Journal of Computer Vision,",
+    "year": 2015
+  }, {
+    "title": "Improved techniques for training GANs",
+    "authors": ["T. Salimans", "I. Goodfellow", "W. Zaremba", "V. Cheung", "A. Radford", "X. Chen"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2016
+  }, {
+    "title": "PixelCNN++: Improving the pixelcnn with discretized logistic mixture likelihood and other modifications",
+    "authors": ["T. Salimans", "A. Karpathy", "X. Chen", "D.P. Kingma"],
+    "venue": "arXiv preprint arXiv:1701.05517,",
+    "year": 2017
+  }, {
+    "title": "Improving gans using optimal transport",
+    "authors": ["T. Salimans", "H. Zhang", "A. Radford", "D. Metaxas"],
+    "venue": "In Proceedings of the International Conference on Learning Representations (ICLR),",
+    "year": 2018
+  }, {
+    "title": "Distribution of quantiles in samples from a bivariate population",
+    "authors": ["M.M. Siddiqui"],
+    "venue": "J. Res. Nat. Bur. Standards B,",
+    "year": 1960
+  }, {
+    "title": "A note on the evaluation of generative models",
+    "authors": ["L. Theis", "A. van den Oord", "M. Bethge"],
+    "venue": "arXiv preprint arXiv:1511.01844,",
+    "year": 2015
+  }, {
+    "title": "Which part of the sample contains the information",
+    "authors": ["J.W. Tukey"],
+    "venue": "Proceedings of the National Academy of Sciences,",
+    "year": 1965
+  }, {
+    "title": "Wavenet: A generative model for raw audio",
+    "authors": ["A. van den Oord", "S. Dieleman", "H. Zen", "K. Simonyan", "O. Vinyals", "A. Graves", "N. Kalchbrenner", "A. Senior", "K. Kavukcuoglu"],
+    "venue": "arXiv preprint arXiv:1609.03499,",
+    "year": 2016
+  }, {
+    "title": "Conditional image generation with PixelCNN decoders",
+    "authors": ["A. van den Oord", "N. Kalchbrenner", "L. Espeholt", "O. Vinyals", "A. Graves", "K. Kavukcuoglu"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2016
+  }, {
+    "title": "Pixel recurrent neural networks",
+    "authors": ["A. van den Oord", "N. Kalchbrenner", "K. Kavukcuoglu"],
+    "venue": "In Proceedings of the International Conference on Machine Learning,",
+    "year": 2016
+  }, {
+    "title": "Towards deeper understanding of variational autoencoding models",
+    "authors": ["S. Zhao", "J. Song", "S. Ermon"],
+    "venue": "arXiv preprint arXiv:1702.08658,",
+    "year": 2017
+  }],
+  "id": "SP:79815f31f42708fd59da345f8fa79f635a070730",
+  "authors": [{
+    "name": "Georg Ostrovski",
+    "affiliations": []
+  }, {
+    "name": "Will Dabney",
+    "affiliations": []
+  }, {
+    "name": "Rémi Munos",
+    "affiliations": []
+  }],
+  "abstractText": "We introduce autoregressive implicit quantile networks (AIQN), a fundamentally different approach to generative modeling than those commonly used, that implicitly captures the distribution using quantile regression. AIQN is able to achieve superior perceptual quality and improvements in evaluation metrics, without incurring a loss of sample diversity. The method can be applied to many existing models and architectures. In this work we extend the PixelCNN model with AIQN and demonstrate results on CIFAR-10 and ImageNet using Inception score, FID, non-cherrypicked samples, and inpainting results. We consistently observe that AIQN yields a highly stable algorithm that improves perceptual quality while maintaining a highly diverse distribution.",
+  "title": "Autoregressive Quantile Networks for Generative Modeling"
+}

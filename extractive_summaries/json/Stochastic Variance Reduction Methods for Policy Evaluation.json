@@ -1,0 +1,234 @@
+{
+  "sections": [{
+    "heading": "1 Introduction",
+    "text": "Reinforcement learning (RL) is a powerful learning paradigm for sequential decision making (see, e.g., Bertsekas & Tsitsiklis, 1995; Sutton & Barto, 1998). An RL agent interacts with the environment by repeatedly observing the current state, taking an action according to a certain policy, receiving a reward signal and transitioning to a next state. A policy specifies which action to take given the current state. Policy evaluation estimates a value function that predicts expected cumulative reward the agent would receive by following a fixed policy starting at a certain state. In addition to quantifying long-term values of states, which can be of interest on its own, value functions also provide\n1Machine Learning Department, Carnegie Mellon University, Pittsburgh, Pennsylvania 15213, USA. 2Microsoft Research, Redmond, Washington 98052, USA.. Correspondence to: Simon S. Du <ssdu@cs.cmu.edu>, Jianshu Chen <jianshuc@microsoft.com>, Lihong Li <lihongli@microsoft.com>, Lin Xiao <lin.xiao@microsoft.com>, Dengyong Zhou <denzho@microsoft.com>.\nProceedings of the 34 th International Conference on Machine Learning, Sydney, Australia, PMLR 70, 2017. Copyright 2017 by the author(s).\nimportant information for the agent to optimize its policy. For example, policy-iteration algorithms iterate between policy-evaluation steps and policy-improvement steps, until a (near-)optimal policy is found (Bertsekas & Tsitsiklis, 1995; Lagoudakis & Parr, 2003). Therefore, estimating the value function efficiently and accurately is essential in RL.\nThere has been substantial work on policy evaluation, with temporal-difference (TD) methods being perhaps the most popular. These methods use the Bellman equation to bootstrap the estimation process. Different cost functions are formulated to exploit this idea, leading to different policy evaluation algorithms; see Dann et al. (2014) for a comprehensive survey. In this paper, we study policy evaluation by minimizing the mean squared projected Bellman error (MSPBE) with linear approximation of the value function. We focus on the batch setting where a fixed, finite dataset is given. This fixed-data setting is not only important in itself (Lange et al., 2011), but also an important component in other RL methods such as experience replay (Lin, 1992).\nThe finite-data regime makes it possible to solve policy evaluation more efficiently with recently developed fast optimization methods based on stochastic variance reduction, such as SVRG (Johnson & Zhang, 2013) and SAGA (Defazio et al., 2014). For minimizing strongly convex functions with a finite-sum structure, such methods enjoy the same low computational cost per iteration as the classical stochastic gradient method, but also achieve fast, linear convergence rates (i.e., exponential decay of the optimality gap in the objective). However, they cannot be applied directly to minimize the MSPBE, whose objective does not have the finite-sum structure. In this paper, we overcome this obstacle by transforming the empirical MSPBE problem to an equivalent convex-concave saddle-point problem that possesses the desired finite-sum structure.\nIn the saddle-point problem, we consider the model parameters as the primal variables, which are coupled with the dual variables through a bilinear term. Moreover, without an `\n2 -regularization on the model parameters, the objective is only strongly concave in the dual variables, but not in the primal variables. We propose a primal-dual batch gradient method, as well as two stochastic variance-reduction methods based on SVRG and SAGA, respectively. Surprisingly, we show that when the coupling matrix is full rank, these algorithms achieve linear convergence in both the primal\nand dual spaces, despite the lack of strong convexity of the objective in the primal variables. Our results also extend to off-policy learning and TD with eligibility traces (Sutton & Barto, 1998; Precup et al., 2001).\nWe note that Balamurugan & Bach (2016) have extended both SVRG and SAGA to solve convex-concave saddlepoint problems with linear-convergence guarantees. The main difference between our results and theirs are\n• Linear convergence in Balamurugan & Bach (2016) relies on the assumption that the objective is strongly convex in the primal variables and strongly concave in the dual. Our results show, somewhat surprisingly, that only one of them is necessary if the primal-dual coupling is bilinear and the coupling matrix is full rank. In fact, we are not aware of similar previous results even for the primal-dual batch gradient method, which we show in this paper. • Even if a strongly convex regularization on the primal variables is introduced to the MSPBE objective, the algorithms in Balamurugan & Bach (2016) cannot be applied efficiently. Their algorithms require that the proximal mappings of the strongly convex and concave regularization functions be computed efficiently. In our saddle-point formulation, the strong concavity of the dual variables comes from a quadratic function defined by the feature covariance matrix, which cannot be inverted efficiently and makes the proximal mapping costly to compute. Instead, our algorithms only use its (stochastic) gradients and hence are much more efficient.\nWe compare various gradient based algorithms on a Random MDP and Mountain Car data sets. The experiments demonstrate the effectiveness of our proposed methods."
+  }, {
+    "heading": "2 Preliminaries",
+    "text": "We consider a Markov Decision Process (MDP) (Puterman, 2005) described by (S,A,Pa\nss 0 ,R, ), where S is the set of states, A the set of actions, Pa\nss 0 the transition probability from state s to state s0 after taking action a, R (s, a) the reward received after taking action a in state s, and 2 [0, 1) a discount factor. The goal of an agent is to find an actionselection policy ⇡, so that the long-term reward under this policy is maximized. For ease of exposition, we assume S is finite, but none of our results relies on this assumption.\nA key step in many algorithms in RL is to estimate the value function of a given policy ⇡, defined as V ⇡(s) , E[ P1\nt=0\ntR(s t , a t )|s 0 = s,⇡]. Let V ⇡ denote a vector constructed by stacking the values of V ⇡(1), . . . , V ⇡(|S|) on top of each other. Then V ⇡ is the unique fixed point of the Bellman operator T⇡:\nV ⇡ = T⇡V ⇡ , R⇡ + P⇡V ⇡ , (1)\nwhere R⇡ is the expected reward vector under policy ⇡, defined elementwise as R⇡(s) = E\n⇡(a|s)R(s, a); and P⇡ is the transition matrix induced by the policy applying ⇡, defined entrywise as P⇡(s, s0) = E\n⇡(a|s)Pa ss 0 ."
+  }, {
+    "heading": "2.1 Mean squared projected Bellman error (MSPBE)",
+    "text": "One approach to scale up when the state space size |S| is large or infinite is to use a linear approximation for V ⇡ . Formally, we use a feature map : S ! Rd and approximate the value function by bV ⇡ (s) = (s)T ✓, where ✓ 2 Rd is the model parameter to be estimated. Here, we want to find ✓ that minimizes the mean squared projected Bellman error, or MSPBE:\nMSPBE (✓) , 1 2 kbV ⇡ ⇧T⇡ bV ⇡k2 ⌅ , (2)\nwhere ⌅ is a diagonal matrix with diagonal elements being the stationary distribution over S induced by the policy ⇡, and ⇧ is the weighted projection matrix onto the linear space spanned by (1), . . . , (|S|), that is,\n⇧ = (\nT\n⌅ )\n1 T ⌅ (3)\nwhere , [ T (1), . . . , T (|S|)] is the matrix obtained by stacking the feature vectors row by row. Substituting (3) and (1) into (2), we obtain (see, e.g., Dann et al., 2014)\nMSPBE(✓) = 1\n2\nk T⌅(bV ⇡ T⇡ bV ⇡)k2 ( T ⌅ ) 1 .\nWe can further rewrite the above expression for MSPBE as a standard weighted least-squares problem:\nMSPBE(✓) = 1\n2\nkA✓ bk2 C 1 ,\nwith properly defined A, b and C, described as follows. Suppose the MDP under policy ⇡ settles at its stationary distribution and generates an infinite transition sequence {(s\nt , a t , r t , s t+1 )}1 t=1 , where s t is the current state, a t\nis the action, r\nt is the reward, and s t+1 is the next state. Then with the definitions\nt , (s t ) and 0 t , (s t+1 ), we have\nA = E[ t ( t\n0 t ) T ], b = E[ t r t ], C = E[ t T t ], (4)\nwhere E[·] are with respect to the stationary distribution. Many TD solutions converge to a minimizer of MSPBE in the limit (Tsitsiklis & Van Roy, 1997; Dann et al., 2014)."
+  }, {
+    "heading": "2.2 Empirical MSPBE",
+    "text": "In practice, quantities in (4) are often unknown, and we only have access to a finite dataset with n transitions D = {(s\nt , a t , r t , s t+1 )}n t=1 . By replacing the unknown statistics with their finite-sample estimates, we obtain the Empirical MSPBE, or EM-MSPBE. Specifically, let\nbA , 1 n\nnX\nt=1\nA t , bb , 1 n\nnX\nt=1\nb t , bC , 1 n\nnX\nt=1\nC t , (5)\nwhere for t = 1, . . . , n,\nA t , t ( t\n0 t ) T , b t , r t t , C t , t T t . (6)\nEM-MSPBE with an optional ` 2 -regularization is given by:\nEM-MSPBE (✓) = 1\n2\nk bA✓ bbk2b C 1 + ⇢\n2\nk✓k2, (7)\nwhere ⇢ 0 is a regularization factor. Observe that (7) is a (regularized) weighted least squares problem. Assuming bC is invertible, its optimal solution is\n✓? = ( bA> bC 1 bA+ ⇢I) 1 bA> bC 1bb. (8)\nComputing ✓? directly requires O(nd2) operations to form the matrices bA, bb and bC, and then O(d3) operations to complete the calculation. This method, known as leastsquares temporal difference or LSTD (Bradtke & Barto, 1996; Boyan, 2002), can be very expensive when n and d are large. One can also skip forming the matrices explicitly and compute ✓? using n recusive rank-one updates (Nedić & Bertsekas, 2003). Since each rank-one update costs O(d2), the total cost is O(nd2).\nIn the sequel, we develop efficient algorithms to minimize EM-MSPBE by using stochastic variance reduction methods, which samples one (\nt , 0 t ) per update without precomputing bA,bb and bC. These algorithms not only maintain a low O(d) per-iteration computation cost, but also attain fast linear convergence rates with a log(1/✏) dependence on the desired accuracy ✏."
+  }, {
+    "heading": "3 Saddle-Point Formulation of EM-MSPBE",
+    "text": "Our algorithms (in Section 5) are based on the stochastic variance reduction techniques developed for minimizing a finite sum of convex functions, more specifically, SVRG (Johnson & Zhang, 2013) and SAGA (Defazio et al., 2014). They deal with problems of the form\nmin x2Rd\n⇢ f(x) , 1\nn\nnX\ni=1\nf i (x) , (9)\nwhere each f i is convex. We immediately notice that the EM-MSPBE in (7) cannot be put into such a form, even though the matrices bA, bb and bC have the finite-sum structure given in (5). Thus, extending variance reduction techniques to EM-MSPBE minimization is not straightforward.\nNevertheless, we will show that the minimizing the EMMSPBE is equivalent to solving a convex-concave saddlepoint problem which actually possesses the desired finitesum structure. To proceed, we resort to the machinery of conjugate functions (e.g. Rockafellar, 1970, Section 12). For a function f : Rd ! R, its conjugate function f? :\nRd ! R is defined as f?(y) , sup x (yTx f(x)). Note that the conjugate function of 1\n2 kxk2b C is 1 2 kyk2b C 1 , i.e.,\n1\n2\nkyk2b C\n1 = max x\n⇣ yTx 1\n2\nkxk2b C\n⌘ .\nWith this relation, we can rewrite EM-MSPBE in (7) as\nmax\nw\n⇣ wT (bb bA✓) 1\n2\nkwk2b C\n⌘ + ⇢\n2\nk✓k2 ,\nso that minimizing EM-MSPBE is equivalent to solving\nmin ✓2Rd max w2Rd\n⇢ L(✓, w) = 1\nn\nnX\nt=1\nL t (✓, w) , (10)\nwhere the Lagrangian, defined as\nL(✓, w) , ⇢ 2\nk✓k2 wT bA✓ ⇣ 1\n2\nkwk2b C\nwTbb ⌘ , (11)\nmay be decomposed using (5), with\nL t (✓, w) , ⇢ 2 k✓k2 wTA t\n✓ ⇣ 1\n2\nkwk2 Ct wT b t\n⌘ .\nTherefore, minimizing the EM-MSPBE is equivalent to solving the saddle-point problem (10), which is convex in the primal variable ✓ and concave in the dual variable w. Moreover, it has a finite-sum structure similar to (9).\nLiu et al. (2015) and Valcarcel Macua et al. (2015) independently showed that the GTD2 algorithm (Sutton et al., 2009b) is indeed a stochastic gradient method for solving the saddle-point problem (10), although they obtained the saddle-point formulation with different derivations. More recently, Dai et al. (2016) used the conjugate function approach to obtain saddle-point formulations for a more general class of problems and derived primal-dual stochastic gradient algorithms for solving them. However, these algorithms have sublinear convergence rates, which leaves much room to improve when applied to problems with finite datasets. Recently, Lian et al. (2017) developed SVRG methods for a general finite-sum composition optimization that achieve linear convergence rate. Different from our methods, their stochastic gradients are biased and they have worse dependency on the condition numbers (3 and 4).\nThe fast linear convergence of our algorithms presented in Sections 4 and 5 requires the following assumption: Assumption 1. bA has full rank, bC is strictly positive definite, and the feature vector\nt\nis uniformly bounded.\nUnder mild regularity conditions (e.g., Wasserman, 2013, Chapter 5), we have bA and bC converge in probability to A and C defined in (4), respectively. Thus, if the true statistics A is non-singular and C is positive definite, and we have enough training samples, these assumptions are usually satisfied. They have been widely used in previous works on gradient-based algorithms (e.g., Sutton et al., 2009a;b).\nA direct consequence of Assumption 1 is that ✓? in (8) is the unique minimizer of the EM-MSPBE in (7), even without any strongly convex regularization on ✓ (i.e., even if ⇢ = 0). However, if ⇢ = 0, then the Lagrangian L(✓, w) is only strongly concave in w, but not strongly convex in ✓. In this case, we will show that non-singularity of the coupling matrix bA can “pass” an implicit strong convexity on ✓, which is exploited by our algorithms to obtain linear convergence in both the primal and dual spaces."
+  }, {
+    "heading": "4 A Primal-Dual Batch Gradient Method",
+    "text": "Before diving into the stochastic variance reduction algorithms, we first present Algorithm 1, which is a primal-dual batch gradient (PDBG) algorithm for solving the saddlepoint problem (10). In Step 2, the vector B(✓, w) is obtained by stacking the primal and negative dual gradients:\nB (✓, w) ,  r ✓\nL(✓, w) r\nw\nL(✓, w)\n= \" ⇢✓ bATw bA✓ bb+ bCw # . (12)\nSome notation is needed in order to characterize the convergence rate of Algorithm 1. For any symmetric and positive definite matrix S, let\nmax (S) and min (S) denote its maximum and minimum eigenvalues respectively, and define its condition number to be (S) ,\nmax (S)/ min (S). We also define L\n⇢ and µ ⇢ for any ⇢ 0:\nL ⇢ , max (⇢I + bAT bC 1 bA), (13)\nµ ⇢ , min (⇢I + bAT bC 1 bA). (14)\nBy Assumption 1, we have L ⇢\nµ ⇢ > 0. The following theorem is proved in Appendix B. Theorem 1. Suppose Assumption 1 holds and let (✓\n? , w ? )\nbe the (unique) solution of (10). If the step sizes are chosen as\n✓\n=\n1\n9L⇢( b C)\nand w =\n8\n9\nmax\n( b C)\n, then the number\nof iterations of Algorithm 1 to achieve k✓ ✓ ? k2 + kw w\n?\nk2  ✏2 is upper bounded by\nO ✓  ⇣ ⇢I + bAT bC 1 bA ⌘ · ( bC) · log ⇣ 1\n✏\n⌘◆ . (15)\nWe assigned specific values to the step sizes ✓ and w for clarity. In general, we can use similar step sizes while keeping their ratio roughly constant as w\n✓ ⇡ 8L⇢\nmin\n( b C) ; see Appendices A and B for more details. In practice, one can use a parameter search on a small subset of data to find reasonable step sizes. It is an interesting open problem how to automatically select and adjust step sizes.\nNote that the linear rate is determined by two parts: (i) the strongly convex regularization parameter ⇢, and (ii) the positive definiteness of bAT bC 1 bA. The second part could be interpreted as transferring strong concavity in dual variables via the full-rank bi-linear coupling matrix bA. For\nAlgorithm 1 PDBG for Policy Evaluation Inputs: initial point (✓, w), step sizes\n✓ and w , and number of epochs M .\n1: for i = 1 to M do 2:  ✓ w  ✓ w  ✓ 0\n0 w\nB(✓, w)\nwhere B(✓, w) is computed according to (12). 3: end for\nthis reason, even if the saddle-point problem (10) has only strong concavity in dual variables (when ⇢ = 0), the algorithm still enjoys a linear convergence rate.\nMoreover, even if ⇢ > 0, it will be inefficient to solve problem (10) using primal-dual algorithms based on proximal mappings of the strongly convex and concave terms (e.g., Chambolle & Pock, 2011; Balamurugan & Bach, 2016). The reason is that, in (10), the strong concavity of the Lagrangian with respect to the dual lies in the quadratic function (1/2)kwk b\nC , whose proximal mapping cannot be computed efficiently. In contrast, the PDBG algorithm only needs its gradients.\nIf we pre-compute and store bA, bb and bC, which costs O(nd2) operations, then computing the gradient operator B(✓, w) in (12) during each iteration of PDBG costs O(d2) operations. Alternatively, if we do not want to store these d ⇥ d matrices (especially if d is large), then we can compute B(✓, w) as finite sums on the fly. More specifically, B(✓, w) = 1\nn\nP n\nt=1\nB t (✓, w), where for each t = 1, . . . , n,\nB t (✓, w) =\n ⇢✓ A\nt w A\nt ✓ b t + C t w\n. (16)\nSince A t , b t and C t are all rank-one matrices, as given in (6), computing each B\nt (✓, w) only requires O(d) operations. Therefore, computing B(✓, w) costs O(nd) operations as it averages B\nt\n(✓, w) over n samples."
+  }, {
+    "heading": "5 Stochastic Variance Reduction Methods",
+    "text": "If we replace B(✓, w) in Algorithm 1 (line 2) by the stochastic gradient B\nt (✓, w) in (16), then we recover the GTD2 algorithm of Sutton et al. (2009b), applied to a fixed dataset, possibly with multiple passes. It has a low periteration cost but a slow, sublinear convergence rate. In this section, we provide two stochastic variance reduction methods and show they achieve fast linear convergence."
+  }, {
+    "heading": "5.1 SVRG for policy evaluation",
+    "text": "Algorithm 2 is adapted from the stochastic variance reduction gradient (SVRG) method (Johnson & Zhang, 2013). It uses two layers of loops and maintains two sets of parameters (˜✓, w̃) and (✓, w). In the outer loop, the algorithm computes a full gradient B(˜✓, w̃) using (˜✓, w̃), which takes\nAlgorithm 2 SVRG for Policy Evaluation Inputs: initial point (✓, w), step sizes {\n✓ , w }, number of outer iterations M , and number of inner iterations N .\n1: for m = 1 to M do 2: Initialize (˜✓, w̃) = (✓, w) and compute B(˜✓, w̃). 3: for j = 1 to N do 4: Sample an index t\nj from {1, · · · , n} and do 5: Compute B\ntj (✓, w) and Btj (˜✓, w̃).\n6:  ✓ w\n ✓ w\n ✓ 0\n0 w\nB tj (✓, w, ˜✓, w̃)\nwhere B tj (✓, w, ˜✓, w̃) is given in (17).\n7: end for 8: end for\nAlgorithm 3 SAGA for Policy Evaluation Inputs: initial point (✓, w), step sizes\n✓ and w , and number of iterations M .\n1: Compute each g t = B t (✓, w) for t = 1, . . . , n. 2: Compute B = B(✓, w) = 1\nn\nP n\nt=1\ng t . 3: for m = 1 to M do 4: Sample an index t\nm from {1, · · · , n}. 5: Compute h\ntm = Btm(✓, w).\n6:  ✓ w\n ✓ w\n ✓ 0\n0 w\n(B + h tm gtm).\n7: B B + 1 n (h tm gtm) 8: g tm htm . 9: end for\nO(nd) operations. Afterwards, the algorithm executes the inner loop, which randomly samples an index t\nj and updates (✓, w) using variance-reduced stochastic gradient:\nB tj(✓, w, ˜✓, w̃) = Btj(✓, w) +B(˜✓, w̃) Btj(˜✓, w̃). (17)\nHere, B tj (✓, w) contains the stochastic gradients at (✓, w) computed using the random sample with index t j\n, and B(˜✓, w̃) B\ntj ( ˜✓, w̃) is a term used to reduce the variance\nin B tj (✓, w) while keeping Btj(✓, w, ˜✓, w̃) an unbiased estimate of B(✓, w).\nSince B(˜✓, w̃) is computed once during each iteration of the outer loop with cost O(nd) (as explained at the end of Section 4), and each of the N iterations of the inner loop cost O(d) operations, the total computational cost of for each outer loop is O(nd+Nd). We will present the overall complexity analysis of Algorithm 2 in Section 5.3."
+  }, {
+    "heading": "5.2 SAGA for policy evaluation",
+    "text": "The second stochastic variance reduction method for policy evaluation is adapted from SAGA (Defazio et al., 2014); see Algorithm 3. It uses a single loop, and maintains a single set of parameters (✓, w). Algorithm 3 starts by first\ncomputing each component gradients g t = B t (✓, w) at the initial point, and also form their average B = P n\nt\ng t . At each iteration, the algorithm randomly picks an index t m\n2 {1, . . . , n} and computes the stochastic gradient h tm = Btm(✓, w). Then, it updates (✓, w) using a variance reduced stochastic gradient: B + h tm gtm , where g tm is the previously computed stochastic gradient using the t m\n-th sample (associated with certain past values of ✓ and w). Afterwards, it updates the batch gradient estimate B as B + 1\nn\n(h tm gtm) and replaces gtm with htm .\nAs Algorithm 3 proceeds, different vectors g t are computed using different values of ✓ and w (depending on when the index t was sampled). So in general we need to store all vectors g\nt , for t = 1, . . . , n, to facilitate individual updates, which will cost additional O(nd) storage. However, by exploiting the rank-one structure in (6), we only need to store three scalars (\nt\n0\n) T ✓, ( t\n0\n) Tw, and T t w, and form g\ntm on the fly using O(d) computation. Overall, each iteration of SAGA costs O(d) operations."
+  }, {
+    "heading": "5.3 Theoretical analyses of SVRG and SAGA",
+    "text": "In order to study the convergence properties of SVRG and SAGA for policy evaluation, we introduce a smoothness parameter L\nG based on the stochastic gradients B t (✓, w). Let =\nw / ✓ be the ratio between the primal and dual step-sizes, and define a pair of weighted Euclidean norms\n⌦(✓, w) , (k✓k2 + 1kwk2)1/2, ⌦ ⇤ (✓, w) , (k✓k2 + kwk2)1/2.\nNote that ⌦(·, ·) upper bounds the error in optimizing ✓: ⌦(✓ ✓\n? , w w ? ) k✓ ✓ ? k. Therefore, any bound on ⌦(✓ ✓\n? , w w ? ) applies automatically to k✓ ✓ ? k. Next, we define the parameter L\nG\nthrough its square:\nL2 G , sup ✓\n1\n,w\n1\n,✓\n2\n,w\n2\n1\nn\nP n\nt=1\n⌦ ⇤ B t (✓ 1 , w 1 ) B t (✓ 2 , w 2 ) 2\n⌦(✓ 1 ✓ 2 , w 1 w 2 ) 2\n.\nThis definition is similar to the smoothness constant ¯L used in Balamurugan & Bach (2016) except that we used the step-size ratio rather than the strong convexity and concavity parameters of the Lagrangian to define ⌦ and ⌦⇤.1 Substituting the definition of B\nt\n(✓, w) in (16), we have\nL2 G =\n1\nn\nnX\nt=1\nGT t G t , where Gt ,  ⇢I p AT\ntp A\nt\nC t\n.\n(18)\nWith the above definitions, we characterize the convergence of ⌦(✓\nm ✓ ? , w m w ? ), where (✓ ? , w ? ) is the solution of (10), and (✓\nm , w m ) is the output of the algorithms 1Since our saddle-point problem is not necessarily strongly convex in ✓ (when ⇢ = 0), we could not define ⌦ and ⌦⇤ in the same way as Balamurugan & Bach (2016).\nafter the m-th iteration. For SVRG, it is the m-th outer iteration in Algorithm 2. The following two theorems are proved in Appendices C and D, respectively. Theorem 2 (Convergence rate of SVRG). Suppose Assumption 1 holds. If we choose\n✓\n=\nµ⇢\n48( b C)L 2\nG\n, w =\n8L⇢\nmin\n( b C) ✓\n, N = 51 2 (\nb C)L 2\nG µ 2 ⇢ , where L ⇢ and µ ⇢ are defined in (13) and (14), then\nE ⇥ ⌦(✓\nm ✓ ? , w m w ? ) 2\n⇤  ⇣ 4\n5\n⌘ m\n⌦(✓ 0 ✓ ? , w 0 w ? ) 2.\nThe overall computational cost for reaching E ⇥ ⌦(✓\nm\n✓ ? , w m w ? )\n⇤  ✏ is upper bounded by\nO ✓✓ n+\n( bC)L2 G\n2 min\n(⇢I + bAT bC 1 bA)\n◆ d log ⇣ 1\n✏\n⌘◆ . (19)\nTheorem 3 (Convergence rate of SAGA). Suppose Assumption 1 holds. If we choose\n✓\n=\nµ⇢\n3\n(\n8\n2\n( b C)L 2\nG+nµ 2 ⇢)\nand w = 8L⇢\nmin\n( b C) ✓\nin Algorithm 3, then\nE ⇥ ⌦(✓\nm ✓ ? , w m w ? ) 2\n⇤  2(1 ⇢)m⌦(✓\n0 ✓ ? , w 0 w ? ) 2,\nwhere ⇢ µ 2 ⇢\n9\n(\n8\n2\n( b C)L 2\nG+nµ 2 ⇢) . The total cost to achieve\nE ⇥ ⌦(✓\nm ✓ ? , w m w ? )\n⇤  ✏ has the same bound in (19).\nSimilar to our PDBG results in (15), both the SVRG and SAGA algorithms for policy evaluation enjoy linear convergence even if there is no strong convexity in the saddlepoint problem (10) (i.e., when ⇢ = 0). This is mainly due to the positive definiteness of bAT bC 1 bA when bC is positivedefinite and bA is full-rank. In contrast, the linear convergence of SVRG and SAGA in Balamurugan & Bach (2016) requires the Lagrangian to be both strongly convex in ✓ and strongly concave in w.\nMoreover, in the policy evaluation problem, the strong concavity with respect to the dual variable w comes from a weighted quadratic norm (1/2)kwk b\nC , which does not admit an efficient proximal mapping as required by the proximal versions of SVRG and SAGA in Balamurugan & Bach (2016). Our algorithms only require computing the stochastic gradients of this function, which is easy to do due to its finite sum structure.\nBalamurugan & Bach (2016) also proposed accelerated variants of SVRG and SAGA using the “catalyst” framework of Lin et al. (2015). Such extensions can be done similarly for the three algorithms presented in this paper, and we omit the details due to space limit."
+  }, {
+    "heading": "6 Comparison of Different Algorithms",
+    "text": "This section compares the computation complexities of several representative policy-evaluation algorithms that minimize EM-MSPBE, as summarized in Table 1.\nThe upper part of the table lists algorithms whose complexity is linear in feature dimension d, including the two new algorithms presented in the previous section. We can also apply GTD2 to a finite dataset with samples drawn uniformly at random with replacement. It costs O(d) per iteration, but has a sublinear convergence rate regarding ✏. In practice, people may choose ✏ = ⌦(1/n) for generalization reasons (see, e.g., Lazaric et al. (2010)), leading to an O(0nd) overall complexity for GTD2, where 0 is a condition number related to the algorithm. However, as verified by our experiments, the bounds in the table show that our SVRG/SAGA-based algorithms are much faster as their effective condition numbers vanish when n becomes large. TDC has a similar complexity to GTD2.\nIn the table, we list two different implementations of PDBG. PDBG-(I) computes the gradients by averaging the stochastic gradients over the entire dataset at each iteration, which costs O(nd) operations; see discussions at the end of Section 4. PDBG-(II) first pre-computes the matrices bA, bb and bC using O(nd2) operations, then computes the batch gradient at each iteration with O(d2) operations. If d is very large (e.g., when d n), then PDBG-(I) would have an advantage over PDBG-(II). The lower part of the table also includes LSTD, which has O(nd2) complexity if rankone updates are used.\nSVRG and SAGA are more efficient than the other algorithms, when either d or n is very large. In particular, they have a lower complexity than LSTD when d > (1 + ( b C) 2\nG n ) log\n⇣ 1\n✏\n⌘ , This condition is easy to satisfy,\nwhen n is very large. On the other hand, SVRG and SAGA algorithms are more efficient than PDBG-(I) if n is large, say n > ( bC)2\nG\n( bC) 1 , where  and \nG are described in the caption of Table 1.\nThere are other algorithms whose complexity scales linearly with n and d, including iLSTD (Geramifard et al., 2007), and TDC (Sutton et al., 2009b), fLSTDSA (Prashanth et al., 2014), and the more recent algorithms of Wang et al. (2016) and Dai et al. (2016). However, their\nconvergence is slow: the number of iterations required to reach a desired accuracy ✏ grows as 1/✏ or worse. The CTD algorithm (Korda & Prashanth, 2015) uses a similar idea as SVRG to reduce variance in TD updates. This algorithm is shown to have a similar linear convergence rate in an online setting where the data stream is generated by a Markov process with finite states and exponential mixing. The method solves for a fixed-point solution by stochastic approximation. As a result, they can be non-convergent in off-policy learning, while our algorithms remain stable (c.f., Section 7.1)."
+  }, {
+    "heading": "7 Extensions",
+    "text": "It is possible to extend our approach to accelerate optimization of other objectives such as MSBE and NEU (Dann et al., 2014). In this section, we briefly describe two extensions of the algorithms developed earlier."
+  }, {
+    "heading": "7.1 Off-policy learning",
+    "text": "In some cases, we may want to estimate the value function of a policy ⇡ from a set of data D generated by a different “behavior” policy ⇡\nb . This is called off-policy learning (Sutton & Barto, 1998, Chapter 8).\nIn the off-policy case, samples are generated from the distribution induced by the behavior policy ⇡\nb , not the the target policy ⇡. While such a mismatch often causes stochastic-approximation-based methods to diverge (Tsitsiklis & Van Roy, 1997), our gradient-based algorithms remain convergent with the same (fast) convergence rate.\nConsider the RL framework outlined in Section 2. For each state-action pair (s\nt , a t ) such that ⇡ b (a t |s t ) > 0, we define the importance ratio, ⇢\nt , ⇡(a t |s t )/⇡ b (a t |s t ). The EMMSPBE for off-policy learning has the same expression as in (7) except that A\nt , b t and C t are modified by the weight factor ⇢\nt , as listed in Table 2; see also Liu et al. (2015, Eqn 6) for a related discussion.) Algorithms 1–3 remain the same for the off-policy case after A\nt , b t and C t are modified correspondingly."
+  }, {
+    "heading": "7.2 Learning with eligibility traces",
+    "text": "Eligibility traces are a useful technique to trade off bias and variance in TD learning (Singh & Sutton, 1996; Kearns & Singh, 2000). When they are used, we can pre-compute z\nt\nin Table 2 before running our new algorithms. Note that EM-MSPBE with eligibility traces has the same form of (7), with A\nt , b t and C t defined differently according to the last row of Table 2. At the m-th step of the learning process, the algorithm randomly samples z\ntm , tm , 0 tm and r tm from the fixed dataset and computes the corresponding stochastic gradients, where the index t m\nis uniformly distributed over {1, . . . , n} and are independent for different values of m. Algorithms 1–3 immediately work for this case, enjoying a similar linear convergence rate and a com-\nputation complexity linear in n and d. We need additional O(nd) operations to pre-compute z\nt recursively and an additional O(nd) storage for z\nt . However, it does not change the order of the total complexity for SVRG/SAGA."
+  }, {
+    "heading": "8 Experiments",
+    "text": "In this section, we compare the following algorithms on two benchmark problems: (i) PDBG (Algorithm 1); (ii) GTD2 with samples drawn randomly with replacement from a dataset; (iii) TD: the fLSTD-SA algorithm of Prashanth et al. (2014); (iv) SVRG (Algorithm 2); and (v) SAGA (Algorithm 3). Note that when ⇢ > 0, the TD solution and EM-MSPBE minimizer differ, so we do not include TD. For step size tuning,\n✓ is chosen from 10 1, 10 2, . . . , 10 6 1\nL⇢( b C)\nand w is chosen from 1, 10 1, 10 2 1\nmax\n( b C) . We only report the results of each algorithm which correspond to the best-tuned step sizes; for SVRG we choose N = 2n.\nIn the first task, we consider a randomly generated MDP with 400 states and 10 actions (Dann et al., 2014). The transition probabilities are defined as P (s0|a, s) / pa\nss\n0+10 5,\nwhere pa ss 0 ⇠ U [0, 1]. The data-generating policy and start distribution were generated in a similar way. Each state is represented by a 201-dimensional feature vector, where 200 of the features were sampled from a uniform distribution, and the last feature was constant one. We chose = 0.95. Fig. 1 shows the performance of various algorithms for n = 20000. First, notice that the stochastic variance methods converge much faster than others. In fact, our proposed methods achieve linear convergence. Second, as we increase ⇢, the performances of PDBG, SVRG and SAGA improve significantly due to better conditioning, as predicted by our theoretical results.\nNext, we test these algorithms on Mountain Car (Sutton & Barto, 1998, Chapter 8). To collect the dataset, we first ran Sarsa with d = 300 CMAC features to obtain a good policy. Then, we ran this policy to collect trajectories that comprise the dataset. Figs. 2 and 3 show our proposed stochastic variance reduction methods dominate other first-order methods. Moreover, with better conditioning (through a larger ⇢), PDBG, SVRG and SAGA achieve faster convergence rate. Finally, as we increase sample size n, SVRG and SAGA converge faster. This simulation verifies our\nmax\ntheoretical finding in Table 1 that SVRG/SAGA need fewer epochs for large n."
+  }, {
+    "heading": "9 Conclusions",
+    "text": "In this paper, we reformulated the EM-MSPBE minimization problem in policy evaluation into an empirical saddlepoint problem, and developed and analyzed a batch gradient method and two first-order stochastic variance reduction methods to solve the problem. An important result we obtained is that even when the reformulated saddle-point problem lacks strong convexity in primal variables and has only strong concavity in dual variables, the proposed algorithms are still able to achieve a linear convergence rate. We are not aware of any similar results for primal-dual\nbatch gradient methods or stochastic variance reduction methods. Furthermore, we showed that when both the feature dimension d and the number of samples n are large, the developed stochastic variance reduction methods are more efficient than any other gradient-based methods which are convergent in off-policy settings.\nThis work leads to several interesting directions for research. First, we believe it is important to extend the stochastic variance reduction methods to nonlinear approximation paradigms (Bhatnagar et al., 2009), especially with deep neural networks. Moreover, it remains an important open problem how to apply stochastic variance reduction techniques to policy optimization."
+  }],
+  "year": 2017,
+  "references": [{
+    "title": "Stochastic variance reduction methods for saddle-point problems",
+    "authors": ["P Balamurugan", "Bach", "Francis"],
+    "venue": "In Advances in Neural Information Processing Systems",
+    "year": 2016
+  }, {
+    "title": "Neurodynamic programming: An overview",
+    "authors": ["Bertsekas", "Dimitri P", "Tsitsiklis", "John N"],
+    "venue": "In Decision and Control,",
+    "year": 1995
+  }, {
+    "title": "Convergent temporal-difference learning with arbitrary smooth function approximation",
+    "authors": ["Bhatnagar", "Shalabh", "Precup", "Doina", "Silver", "David", "Sutton", "Richard S", "Maei", "Hamid R", "Szepesvári", "Csaba"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2009
+  }, {
+    "title": "Technical update: Least-squares temporal difference learning",
+    "authors": ["Boyan", "Justin A"],
+    "venue": "Machine Learning,",
+    "year": 2002
+  }, {
+    "title": "Linear leastsquares algorithms for temporal difference learning",
+    "authors": ["Bradtke", "Steven J", "Barto", "Andrew G"],
+    "venue": "Machine Learning,",
+    "year": 1996
+  }, {
+    "title": "A first-order primal-dual algorithm for convex problems with applications to imaging",
+    "authors": ["Chambolle", "Antonin", "Pock", "Thomas"],
+    "venue": "Journal of Mathematical Imaging and Vision,",
+    "year": 2011
+  }, {
+    "title": "Learning from conditional distributions via dual embeddings",
+    "authors": ["Dai", "Bo", "He", "Niao", "Pan", "Yunpeng", "Boots", "Byron", "Song", "Le"],
+    "year": 2016
+  }, {
+    "title": "Policy evaluation with temporal differences: a survey and comparison",
+    "authors": ["Dann", "Christoph", "Neumann", "Gerhard", "Peters", "Jan"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2014
+  }, {
+    "title": "SAGA: A fast incremental gradient method with support for non-strongly convex composite objectives",
+    "authors": ["Defazio", "Aaron", "Bach", "Francis", "Lacoste-Julien", "Simon"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2014
+  }, {
+    "title": "iLSTD: Eligibility traces and convergence analysis",
+    "authors": ["Geramifard", "Alborz", "Bowling", "Michael H", "Zinkevich", "Martin", "Sutton", "Richard S"],
+    "venue": "In Advances in Neural Information Processing Systems",
+    "year": 2007
+  }, {
+    "title": "Indefinite linear algebra and applications",
+    "authors": ["Gohberg", "Israel", "Lancaster", "Peter", "Rodman", "Leiba"],
+    "venue": "Springer Science & Business Media,",
+    "year": 2006
+  }, {
+    "title": "Accelerating stochastic gradient descent using predictive variance reduction",
+    "authors": ["Johnson", "Rie", "Zhang", "Tong"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2013
+  }, {
+    "title": "Bias-variance” error bounds for temporal difference updates",
+    "authors": ["Kearns", "Michael J", "Singh", "Satinder P"],
+    "venue": "In Proceedings of the Thirteenth Annual Conference on Computational Learning Theory (COLT-00),",
+    "year": 2000
+  }, {
+    "title": "On TD(0) with function approximation: Concentration bounds and a centered variant with exponential convergence",
+    "authors": ["Korda", "Nathaniel", "L.A. Prashanth"],
+    "venue": "In Proceedings of the Thirty-Second International Conference on Machine Learning",
+    "year": 2015
+  }, {
+    "title": "Least-squares policy iteration",
+    "authors": ["Lagoudakis", "Michail G", "Parr", "Ronald"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2003
+  }, {
+    "title": "Batch reinforcement learning",
+    "authors": ["Lange", "Sascha", "Gabel", "Thomas", "Riedmiller", "Martin"],
+    "venue": "Reinforcement Learning: State of the Art,",
+    "year": 2011
+  }, {
+    "title": "Finite-sample analysis of LSTD",
+    "authors": ["Lazaric", "Alessandro", "Ghavamzadeh", "Mohammad", "Munos", "Rémi"],
+    "venue": "In Proceedings of the Twenty-Seventh International Conference on Machine Learning,",
+    "year": 2010
+  }, {
+    "title": "Finite-sum composition optimization via variance reduced gradient descent",
+    "authors": ["Lian", "Xiangru", "Wang", "Mengdi", "Liu", "Ji"],
+    "venue": "In Proceedings of Artificial Intelligence and Statistics Conference (AISTATS),",
+    "year": 2017
+  }, {
+    "title": "On nonsymmetric saddle point matrices that allow conjugate gradient iterations",
+    "authors": ["Liesen", "Jörg", "Parlett", "Beresford N"],
+    "venue": "Numerische Mathematik,",
+    "year": 2008
+  }, {
+    "title": "A universal catalyst for first-order optimization",
+    "authors": ["Lin", "Hongzhou", "Mairal", "Julien", "Harchaoui", "Zaid"],
+    "venue": "In Advances in Neural Information Processing Systems (NIPS)",
+    "year": 2015
+  }, {
+    "title": "Self-improving reactive agents based on reinforcement learning, planning and teaching",
+    "authors": ["Lin", "Long-Ji"],
+    "venue": "Machine Learning,",
+    "year": 1992
+  }, {
+    "title": "Finite-sample analysis of proximal gradient TD algorithms",
+    "authors": ["Liu", "Bo", "Ji", "Ghavamzadeh", "Mohammad", "Mahadevan", "Sridhar", "Petrik", "Marek"],
+    "venue": "In Proc. The 31st Conf. Uncertainty in Artificial Intelligence,",
+    "year": 2015
+  }, {
+    "title": "Least squares policy evaluation algorithms with linear function approximation",
+    "authors": ["A. Nedić", "Bertsekas", "Dimitri P"],
+    "venue": "Discrete Event Dynamics Systems: Theory and Applications,",
+    "year": 2003
+  }, {
+    "title": "Off-policy temporal-difference learning with funtion approximation",
+    "authors": ["Precup", "Doina", "Sutton", "Richard S", "Dasgupta", "Sanjoy"],
+    "venue": "In Proceedings of the Eighteenth Conference on Machine Learning",
+    "year": 2001
+  }, {
+    "title": "Convex Analysis",
+    "authors": ["Rockafellar", "R. Tyrrell"],
+    "year": 1970
+  }, {
+    "title": "A condition for the nonsymmetric saddle point matrix being diagonalizable and having real and positive eigenvalues",
+    "authors": ["Shen", "Shu-Qian", "Huang", "Ting-Zhu", "Cheng", "GuangHui"],
+    "venue": "Journal of Computational and Applied Mathematics,",
+    "year": 2008
+  }, {
+    "title": "Reinforcement learning with replacing eligibility traces",
+    "authors": ["Singh", "Satinder P", "Sutton", "Richard S"],
+    "venue": "Machine Learning,",
+    "year": 1996
+  }, {
+    "title": "Reinforcement Learning: An Introduction",
+    "authors": ["Sutton", "Richard S", "Barto", "Andrew G"],
+    "year": 1998
+  }, {
+    "title": "A convergent o(n) temporal-difference algorithm for off-policy learning with linear function approximation",
+    "authors": ["Sutton", "Richard S", "Maei", "Hamid R", "Szepesvári", "Csaba"],
+    "venue": "In Advances in neural information processing systems,",
+    "year": 2009
+  }, {
+    "title": "An analysis of temporal-difference learning with function approximation",
+    "authors": ["Tsitsiklis", "John N", "Van Roy", "Benjamin"],
+    "venue": "IEEE Transactions on Automatic Control,",
+    "year": 1997
+  }, {
+    "title": "Distributed policy evaluation under multiple behavior strategies",
+    "authors": ["Valcarcel Macua", "Sergio", "Chen", "Jianshu", "Zazo", "Santiago", "Sayed", "Ali H"],
+    "venue": "Automatic Control, IEEE Transactions on,",
+    "year": 2015
+  }, {
+    "title": "Accelerating stochastic composition optimization",
+    "authors": ["Wang", "Mengdi", "Liu", "Ji", "Fang", "Ethan"],
+    "venue": "In Advances in Neural Information Processing Systems (NIPS)",
+    "year": 2016
+  }, {
+    "title": "All of Statistics: A Concise Course in Statistical Inference",
+    "authors": ["Wasserman", "Larry"],
+    "venue": "Springer Science & Business Media,",
+    "year": 2013
+  }],
+  "id": "SP:e2c1f09c0d6ebfd74770a3883fbc671c11826d9c",
+  "authors": [{
+    "name": "Simon S. Du",
+    "affiliations": []
+  }, {
+    "name": "Jianshu Chen",
+    "affiliations": []
+  }, {
+    "name": "Lihong Li",
+    "affiliations": []
+  }, {
+    "name": "Lin Xiao",
+    "affiliations": []
+  }, {
+    "name": "Dengyong Zhou",
+    "affiliations": []
+  }],
+  "abstractText": "Abstract Policy evaluation is concerned with estimating the value function that predicts long-term values of states under a given policy. It is a crucial step in many reinforcement-learning algorithms. In this paper, we focus on policy evaluation with linear function approximation over a fixed dataset. We first transform the empirical policy evaluation problem into a (quadratic) convex-concave saddle-point problem, and then present a primal-dual batch gradient method, as well as two stochastic variance reduction methods for solving the problem. These algorithms scale linearly in both sample size and feature dimension. Moreover, they achieve linear convergence even when the saddle-point problem has only strong concavity in the dual variables but no strong convexity in the primal variables. Numerical experiments on benchmark problems demonstrate the effectiveness of our methods.",
+  "title": "Stochastic Variance Reduction Methods for Policy Evaluation"
+}

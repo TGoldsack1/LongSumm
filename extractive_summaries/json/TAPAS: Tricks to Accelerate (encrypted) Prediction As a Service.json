@@ -1,0 +1,269 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Applications using machine learning techniques have exploded during the recent years, with “deep learning” techniques being applied on a wide variety of tasks that had hitherto proved challenging. Training highly accurate machine learning models requires large quantities of (high quality) data, technical expertise and computational resources. An important recent paradigm is prediction as a service, whereby a service provider with expertise and resources can make predictions for clients. However, this approach requires trust between service provider and client; there are several instances where clients may be unwilling or unable to provide data to service providers due to privacy\n1University of Oxford, Oxford, UK 2The Alan Turing Institute, London, UK 3University of Warwick, Coventry, UK. Correspondence to: Amartya Sanyal <amartya.sanyal@cs.ox.ac.uk>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\nconcerns. Examples include assisting in medical diagnoses (Kononenko, 2001; Blecker et al., 2017), detecting fraud from personal finance data (Ghosh & Reilly, 1994), and detecting online communities from user data (Fortunato, 2010). The ability of a service provider to predict on encrypted data can alleviate concerns of data leakage.\nThe framework of fully homomorphic encryption (FHE) is ideal for this paradigm. Fully homomorphic encryption schemes support arbitrary computations to be performed directly on encrypted data without prior decryption. The first fully homomorphic encryption system was developed just 10 years ago by Gentry (2009), after being an open question for 30 years (Rivest et al., 1978). Since then several other schemes have been proposed (Gentry et al., 2012; 2013; Brakerski & Vaikuntanathan, 2014; Ducas & Micciancio, 2015; Chillotti et al., 2016). However, without significant changes to machine learning models and improved algorithmic tools, homomorphic encryption does not scale to real-world machine learning applications.\nIndeed, already there have been several recent works trying to accelerate predictions of machine learning models on fully homomorphic encrypted data. In general, the approach has been to approximate all or parts of a machine learning model to accommodate the restrictions of an FHE framework. Often, certain kind of FHE schemes are preferred because they allow for “batched” parallel encrypted computations, called SIMD operations (Smart & Vercauteren, 2014). This technique is exemplified by the CryptoNets model (Gilad-Bachrach et al., 2016). While these models allow for high-throughput (via SIMD), they are not particularly suited for the prediction as a service framework for individual users, as single predictions are slow. Further, because they employ a leveled homomorphic encryption scheme, they are unable to perform many nested multiplications, a requirement for state-of-the-art deep learning models (He et al., 2016; Huang et al., 2017).\nOur solution demonstrates that existing work on Binary Neural Networks (BNNs) (Kim & Smaragdis, 2015; Courbariaux et al., 2016) can be adapted to produce efficient and highly accurate predictions on encrypted data. We show that a recent FHE encryption scheme (Chillotti et al., 2016) which only supports operations on binary data can be leveraged to compute all of the operations of BNNs. To do so,\nwe develop specialized circuits for fully-connected, convolutional, and batch normalization layers (Ioffe & Szegedy, 2015). Additionally we design tricks to sparsify encrypted computation that reduce computation time even further.\nMost similar to our work is Bourse et al. (2017) who use neural networks with signed integer weights and binary activations to perform encrypted prediction. However, this model is only evaluated on MNIST, with modest accuracy results, and the encryption scheme parameters depend on the structure of the model, potentially requiring clients to re-encrypt their data if the service provider updates their model. Our framework allows the service provider to update their model at anytime, and allows one to use binary neural networks of Courbariaux et al. (2016) which, in particular, achieve high accuracy on MNIST (99.04%). Another closely related work is Meehan et al. (2018) who design encrypted adder and multiplier circuits so that they can implement machine learning models on integers. This can be seen as complementary to our work on binary networks: while they achieve improved accuracy because of greater precision, they are less efficient than our methods (however on MNIST we achieve the same accuracy with a 29× speedup, via our sparsification and parallelization tricks).\nPrivate training. In this work, we do not address the question of training machine learning models with encrypted data. There has been some recent work in this area (Hardy et al., 2017; Aono et al., 2017). However, as of now it appears possible only to train very small models using fully homomorphic encryption. We leave this for future work."
+  }, {
+    "heading": "1.1. Our contributions",
+    "text": "In this work, our focus is on achieving speed-ups when using complex models on fully homomorphic encrypted data. In order to achieve these speed-ups, we propose several methods to modify the training and design of neural networks, as well as algorithmic tricks to parallelize and accelerate computation on encrypted data:\n• We propose two types of circuits for performing inner products between unencrypted and encrypted data: reduce tree circuits and sorting networks. We give a runtime comparison of each method.\n• We introduce an easy trick, which we call the +1 trick to sparsify encrypted computations.\n• We demonstrate that our techniques are easily parallelizable and we report timing for a variety of computation settings on real world datasets, alongside classification accuracies."
+  }, {
+    "heading": "2. Encrypted Prediction as a Service",
+    "text": "In this section we describe our Encrypted Prediction as a Service (EPAAS) paradigm. We then detail our privacy and computational guarantees. Finally, we discuss how different related work is suited to this paradigm and propose a solution.\nIn the EPAAS setting we have any number of clients, say C1, . . . , Cn that have data x1, . . . ,xn. The clients would like to use a highly-accurate model f provided by a server S to predict some outcome. In cases where data x is not sensitive there are already many solutions for this such as BigML, Wise.io, Google Cloud AI, Amazon Machine Learning, among others. However, if the data is sensitive so that the clients would be uncomfortable giving the raw data to the server, none of these systems can offer the client a prediction."
+  }, {
+    "heading": "2.1. Privacy and computational guarantees",
+    "text": "If data x is sensitive (e.g., x may be the health record of client C, and f(x) may be the likelihood of heart disease), then we would like to have the following privacy guarantees:\nP1. Neither the server S, or any other party, learn anything about client data x, other than its size (privacy of the data).\nP2. Neither the client C, or any other party, learn anything about model f , other than the prediction f(x) given client data x (and whatever can be deduced from it) (privacy of the model).\nFurther, the main attraction of EPAAS is that the client is involved as little as possible. More concretely, we wish to have the following computational guarantees:\nC1. No external party is involved in the computation.\nC2. The rounds of communication between client and server should be limited to 2 (send data & receive prediction).\nC3. Communication and computation at the client side should be independent of model f . In particular, (i) the server should be able to update f without communicating with any client, and (ii) clients should not need to be online during the computation of f(x).\nNote that these requirements rule out protocols with preprocessing stages or that involve third parties. Generally speaking, a satisfactory solution based on FHE would proceed as follows: (1) a client generates encryption parameters, encrypts their data x using the private key, and sends the resulting encryption x̃, as well as the public key to the server. (2) The server evaluates f on x̃ leveraging the homomorphic properties of the encryption, to obtain an encryption f̃(x) without learning anything whatsoever about x, and sends f̃(x) to the client. (3) Finally, the client decrypts and recovers the prediction f(x) in the clear. A high level depiction of these steps is shown in Figure 1."
+  }, {
+    "heading": "2.2. Existing approaches",
+    "text": "Table 1 describes whether prior work satisfy the above privacy and computational guarantees. First, note that Cryptonets (Gilad-Bachrach et al., 2016) violates C3(i) and P2. This is because the clients would have to generate parameters for the encryption according to the structure of f , so we are able to make inferences about the model (violating P2) and the client is not allowed to change the model f without telling the client (violating C3(i)). The same holds for the work of Chabanne et al. (2017). The approach of Bourse et al. (2017) requires the server to calibrate the parameters of the encryption scheme according to the magnitude of intermediate values, thus C3(i) is not necessarily satisfied. Closely related to our work is that of Meehan et al. (2018)\nwhich satisfies our privacy and computational requirements. We will show that our method is significantly faster than this method, with very little sacrifice in accuracy.\nMulti-Party Computation (MPC). It is important to distinguish between approaches purely based on homomorphic encryption (described above), and those involving MultiParty Computation (MPC) techniques, such as (Mohassel & Zhang, 2017; Liu et al., 2017; Rouhani et al., 2017; Riazi et al., 2017; Chase et al.; Juvekar et al., 2018). While generally MPC approaches are faster, they crucially rely on all parties being involved in the whole computation, which is in conflict with requirement C3(ii). Additionally, in MPC the structure of the computation is public to both parties, which means that the server would have to communicate basic information such as the number of layers of f . This is conflict with requirements P1, C2, and C3(i).\nIn this work, we propose to use a very tailored homomorphic encryption technique to guarantee all privacy and computational requirements. In the next section we give background on homomorphic encryption. Further, we motivate the encryption protocol and the machine learning model class we use to satisfy all guarantees."
+  }, {
+    "heading": "3. Background",
+    "text": "All cryptosystems define two functions: 1. an encryption function E(·) that maps data (often called plaintexts) to encrypted data (ciphertexts); 2. a decryption function D(·) that maps ciphertexts back to plaintexts. In public-key cryptosystems, to evaluate the encryption function E , one needs to hold a public key kPUB, so the encryption of data x is E(x, kPUB). Similarly, to compute the decryption function D(·) one needs to hold a secret key kSEC which allows us to recover: D(E(x, kPUB), kSEC) = x.\nA cryptosystem is homomorphic in some operation if it is possible to perform another (possibly different) operation such that: E(x, kPUB) E(x, kPUB) = E(x y, kPUB). Finally, in this work we assume all data to be binary ∈ {0, 1}. For more detailed background on FHE beyond what is described below, see the excellent tutorial of Halevi (2017)."
+  }, {
+    "heading": "3.1. Fully Homomorphic Encryption",
+    "text": "In 1978, cryptographers posed the question: Does an encryption scheme exist that allows one to perform arbitrary computations on encrypted data? The implications of this, called a Fully homomorphic encryption (FHE) scheme, would enable clients to send computations to the cloud while retaining control over the secrecy of their data. This was still an open problem however 30 years later. Then, in 2009, a cryptosystem (Gentry, 2009) was devised that could, in principle, perform such computations on encrypted data. Similar to previous approaches, in each computation, noise is introduced into the encrypted data. And after a certain number of computations, the noise grows too large so that the encryptions can no longer be decrypted. The key innovation was a technique called bootstrapping, which allows one to reduce the noise to its original level without decrypting. That result constituted a massive breakthrough, as it established, for the first time, a fully homomorphic encryption scheme (Gentry, 2009). Unfortunately, the original bootstrapping procedure was highly impractical. Consequently, much of the research since the first FHE scheme has been devoted to reducing the growth of noise so that the scheme never has to perform bootstrapping. Indeed, even in recent FHE schemes bootstrapping is slow (roughly six minutes in a highly-optimized implementation of a recent popular scheme (Halevi & Shoup, 2015)) and bootstrapping many times increases the memory requirements of encrypted data."
+  }, {
+    "heading": "3.1.1. ENCRYPTED PREDICTION WITH LEVELED HE",
+    "text": "Thus, one common technique to implement encrypted prediction was to take an existing ML algorithm and approximate it with as few operations as possible, in order to never have to bootstrap. This involved careful parameter tuning to ensure that the security of the encryption scheme was sufficient, that it didn’t require too much memory, and that it ran in a reasonable amount of time. One prominent example of this is Cryptonets (Gilad-Bachrach et al., 2016)."
+  }, {
+    "heading": "3.1.2. ENCRYPTED PREDICTION WITH FHE",
+    "text": "Recent developments in cryptography call for rethinking this approach. Ducas & Micciancio (2015) devised a scheme that that could bootstrap a single Boolean gate in under one second with reduced memory. Recently, Chillotti et al. (2016) introduced optimizations implemented in the TFHE library, which further reduced bootstrapping of to under 0.1 seconds. In this paper, we demonstrate that this change has a huge impact on designing encrypted machine learning algorithms. Specifically, encrypted computation is now modular: the cost of adding a few layers to an encrypted neural network is simply the added cost of each layer in isolation. This is particularly important as recent developments in deep learning such as Residual Networks (He\net al., 2016) and Dense Networks (Huang et al., 2017) have shown that networks with many layers are crucial to achieve state-of-the-art accuracy."
+  }, {
+    "heading": "3.2. Binary Neural Networks",
+    "text": "The cryptosystem that we will use in this paper, TFHE, is however restricted to computing binary operations. We note that, concurrent to the work that led to TFHE, was the development of neural network models that perform binary operations between binary weights and binary activations. These models, called Binary Neural Networks (BNNs), were first devised by Kim & Smaragdis (2015); Courbariaux et al. (2016), and were motivated by the prospect of training and testing deep models on limited memory and limited compute devices, such as mobile phones.\nTechnical details. We now describe the technical details of binary networks that we will aim to replicate on encrypted data. In a Binary Neural Network (BNN) every layer maps a binary input x ∈ {−1, 1}d to a binary output z ∈ {−1, 1}p using a set of binary weights W ∈ {−1, 1}(p,d) and a binary activation function sign(·) that is 1 if x ≥ 0 and −1 otherwise. Although binary nets don’t typically use a bias term, applying batch-normalization (Ioffe & Szegedy, 2015) when evaluating the model it means that a bias term b ∈ Zp may need to be added before applying the activation function (cf. Sec. 4.1.2). Thus, when evaluating the model, a fully connected layer in a BNN implements the following transformation z := sign(Wx + b). From now on we will call all data represented as {−1, 1} non-standard binary and data represented as {0, 1} as binary. Kim & Smaragdis (2015); Courbariaux et al. (2016) were the first to note that the above inner product nonlinearity in BNNs could be implemented using the following steps:\n1. Transform data and weights from non-standard binary to binary: w,x→ w,x by replacing −1 with 0. n\n2. Element-wise multiply by applying the logical operator XNOR(w,x) for each element of w and x.\n3. Sum result of previous step by using popcount operation (which counts the number of 1s), call this S.\n4. If the bias term is b, check if 2S ≥ d − b, if so the activation is positive and return 1, otherwise return −1.\nThus we have that,\nzi = sign(2 · popcount(XNOR(wi,x))− d + b)\nRelated binary models. Since the initial work on BNNs there has been a wealth of work on binarizing, ternarizing, and quantizing neural networks Chen et al. (2015); Courbariaux et al. (2015); Han et al. (2016); Hubara et al. (2016);\nZhu et al. (2016); Chabanne et al. (2017); Chen et al. (2017). Our approach is currently tailored to methods that have binary activations and we leave the implementation of these methods on encrypted data for future work."
+  }, {
+    "heading": "4. Methods",
+    "text": "In this work, we make the observation that BNNs can be run on encrypted data by designing circuits in TFHE for computing their operations. In this section we consider Boolean circuits that operate on encrypted data and unencrypted weights and biases. We show how these circuits allow us to efficiently implement the three main layers of binary neural networks: fully connected, convolutional, and batch-normalization. We then show how a simple trick allows us to sparsify our computations. Our techniques can be easily parallelized. During the evaluation of a circuit, gates at the same level in the tree representation of the circuit can be evaluated in parallel. Hence, when implementing a function, “shallow” circuits are preferred in terms of parallelization. While parallel computation was often used to justify employing second generation FHE techniques— where parallelization comes from ciphertext packing—we show in the following section that our techniques create dramatic speedups for a state-of-the-art FHE technique. We emphasize that a key challenge is that we need to use data oblivious algorithms (circuits) when dealing with encrypted data as the algorithm never discovers the actual value of any query made on the data."
+  }, {
+    "heading": "4.1. Binary OPs",
+    "text": "The three primary circuits we need are for the following tasks: 1. computing the inner product; 2. computing the binary activation function (described in the previous section) and; 3. dealing with the bias."
+  }, {
+    "heading": "4.1.1. ENCRYPTED INNER PRODUCT",
+    "text": "As described in the previous section, BNNs can speed up an inner product by computing XNORs (for element-wise multiplication) followed by a POPCOUNT (for summing). In our case, we compute an inner product of size d by computing XNORs element-wise between d bits of encrypted data and d bits of unencrypted data, which results in an encrypted d bit output. To sum this output, the POPCOUNT operation is useful when weights and data are unencrypted because POPCOUNT is implemented in the instruction set of Intel and AMD processors, but when dealing with encrypted data we simply resort to using shallow circuits. We consider two circuits for summation, both with sublinear depth: a reduce tree adder and a sorting network.\nReduce tree adder. We implement the sum using a binary tree of half and ripple-carry (RC) adders organized into a reduction tree, as shown in Figure 2 (Left). All these structures can be implemented to run on encrypted data because TFHE allows us to compute XNOR, AND, and OR on encrypted data. The final number returned by the reduction tree S̃ is the binary representation of the number of 1s resulting from the XNOR, just like POPCOUNT. Thus, to compute the BNN activation function sign(·) we need to check whether 2S̃ ≥ d− b, where d is the number of bits in S̃ and b is the bias. Note that if the bias is zero we simply need to check if S̃ ≥ d/2. To do so we can simply return the second-to-last bit of S̃. If it is 1 then S̃ is at least d/2. If the bias b is non-zero (because of batch-normalization, described in Section 4.1.2), we can implement a circuit to perform the check 2S̃ ≥ d − b. The bias b (which is available in the clear) may be an integer as large as S̃. Let B[(d − b)/2], B[S̃] be the binary representations of b and S̃. Algorithm 1 describes a comparator circuit that returns an encrypted value of 1 if the above condition holds and (encrypted) 0 otherwise (where MUX(s, a, b) returns a if s = 1 and b otherwise). As encrypted operations dominate\nthe running time of our computation, in practice this computation essentially corresponds to evaluating d MUX gates. This gate has a dedicated implementation in TFHE, which results in a very efficient comparator in our setting.\nAlgorithm 1 Comparator Inputs: Encrypted B[S̃], unencrypted B[(d− b)/2], size d of B[(d− b)/2],B[S̃] Output: Result of 2S̃ ≥ d− b\n1: o = 0 2: for i = 1, . . . , d do 3: if B[(d− b)/2]i = 0 then 4: o = MUX(B[S̃]i, 1̃, o) 5: else 6: o = MUX(B[S̃]i, o, 0̃) 7: end if 8: end for 9: Return: o\nSorting network. We do not technically care about the sum of the result of the element-wise XNOR between w̄ and x̄. In fact, all we care about is if the result of the comparison: 2S̃ ≥ d − b. Thus, another idea is to take the output of the (bitwise) XNOR and sort it. Although this sorting needs to be performed over encrypted data, the rest of the computation does not require any homomorphic operations; after sorting we hold a sequence of encrypted 1s, followed by encrypted 0s. To output the correct value, we only need to select one the (encrypted) bit in the correct position and return it. If b = 0 we can simply return the encryption of the central bit in the sequence; indeed, if the central bit is 1, then there are more 1s than 0s and thus 2S̃ ≥ d and we return 1. If b 6= 0 we need to offset the returned index by b in the correct direction depending on the sign of b. In order to sort the initial array we implement a sorting network, shown in Figure 2 (Right). The sorting network is a sequence of swap gates between individuals bits, where SWAP(a, b) = (OR(a, b), AND(a, b)). Note that if a ≥ b then SWAP(a, b) = (a, b), and otherwise is (b, a). More specifically, we implement Batcher’s sorting network (Batcher, 1968), which consists of O(n log2(n)) swap gates, and has depth O(log2(n))."
+  }, {
+    "heading": "4.1.2. BATCH NORMALIZATION",
+    "text": "Batch normalization is mainly used during training; however during evaluating a model this requires us scale and translate and scale the input (which is the output of the previous layer). In practice, when our activation function is the sign function, this only means that we need to update the bias term (the actual change to the bias term is an elementary calculation). As our circuits are designed to work with a bias term, and the scaling and translation factors are available as\nplaintext (as they are part of the model), this operation is easily implemented during test time."
+  }, {
+    "heading": "4.2. Sparsification via “+1”-trick",
+    "text": "Since we have access to W ∈ {−1, 1}p×d and the bias term b ∈ Zp in the clear (only data x and subsequent activations are encrypted), we can exploit the fact that W always has values±1 to roughly halve the cost computation. We consider w ∈ {−1, 1}d which is a single row of W and observe that:\nw>x = (1 + w)>(1 + x)− ∑ i wi − (1 + x)>1,\nwhere 1 denotes the vector in which every entry is 1. Further note that (1 + w) ∈ {0, 2}d which means that the product (1+w)>(1+x) is simply the quantity 4 ∑ i:wi=1\nx̄i, where x̄ refers to the standard binary representation of the nonstandard binary x. Assuming at most half of the wis were originally +1, if w ∈ {−1, 1}d, only d/2 encrypted values need be added. We also need to compute the encrypted sum ∑ i xi; however, this latter sum need only be computed once, no matter how many output units the layer has. Thus, this small bit of extra overhead roughly halves the amount of computation required. We note that if w has more −1s than +1s, w>x can be computed using (1−w) and (1− x) instead. This guarantees that we never need to sum more than half the inputs for any output unit. The sums of encrypted binary values can be calculated as described in Sec. 4.1. The overheads are two additions required to compute (1+x)>1 and (1 − x)>1, and then a subtraction of two log(d)-bit long encrypted numbers. (The multiplication by 2 or 4 as may be sometimes required is essentially free, as bit shifts correspond to dropping bits, and hence do not require homomorphic operations). As our experimental results show this simple trick roughly halves the computation time of one\nlayer; the actual savings appear to be even more than half as in many instances the number of elements we need to sum over is significantly smaller than half.\nIt is worth emphasizing the advantage for binarizing and then using the above approach to making the sums sparse. By default, units in a neural network compute an affine function to which an activation function is subsequently applied. The affine map involves an inner product which involves d multiplications. Multiplication under fully homomorphic encryption schemes is however significantly more expensive than addition. By binarizing and applying the above calculation, we’ve replaced the inner product operation by selection (which is done in the clear as W is available in plaintext) and (encrypted) addition."
+  }, {
+    "heading": "4.3. Ternarization (Weight Dropping)",
+    "text": "Ternary neural networks use weights in {−1, 0, 1} rather than {−1, 1}; this can alternatively be viewed as dropping connections from a BNN. Using ternary neural networks rather than binary reduces the computation time as encrypted inputs for which the corresponding wi is 0 can be safely dropped from the computation, before the method explained in section 4.2 is applied to the remaining elements. Our experimental results show that a binary network can be ternarized to maintain the same level of test accuracy with roughly a quarter of the weights being 0 (cf. Sec. 5.4)."
+  }, {
+    "heading": "5. Experimental Results",
+    "text": "In this section we report encrypted binary neural network prediction experiments on a number of real-world datasets. We begin by comparing the efficiency of the two circuits used for inner product, the reduce tree and the sorting network. We then describe the datasets and the architecture of the BNNs used for classification. We report the classification timings of these BNNs for each dataset, for different computational settings. Finally, we give accuracies of the BNNs compared to floating point networks. Our code is freely available at (tap, 2018)."
+  }, {
+    "heading": "5.1. Reduce tree vs. sorting network",
+    "text": "We show timings of reduce tree and sorting network for different number of input bits, with and without parallelization in Figure 3 (parallelization is over 16 CPUs). We notice that the reduce tree is strictly better when comparing parallel or non-parallel timings of the circuits. As such, from now on we use the reduce tree circuit for inner product.\nIt should be mentioned that at the outset this result was not obvious because while sorting networks have more levels of computation, they have fewer gates. Specifically, the sorting network used for encrypted sorting is the bitonic sorting network which for n bits has O(log2 n) levels of computa-\ntion whereas the reduce tree only has O(log n) levels. On the other hand, the reduce tree requires 2 gates for each half adder and 5k gates for each k-bit RC adder, whereas a sorting network only requires 2 gates per SWAP operation. Another factor that may slow down sorting networks is that is that our implementation of sorting networks is recursive, whereas the reduce tree is iterative."
+  }, {
+    "heading": "5.2. Datasets",
+    "text": "We evaluate on four datasets, three of which have privacy implications due to health care information (datasets Cancer and Diabetes) or applications in surveillance (dataset Faces). We also evaluate on the standard benchmark MNIST dataset.\nCancer. The Cancer dataset1 contains 569 data points where each point has 30 real-valued features. The task is to predict whether a tumor is malignant (cancerous) or benign. Similar to Meehan et al. (2018) we divide the dataset into a training set and a test in a 70 : 30 ratio. For every real-valued feature, we divide the range of each feature into three equal-spaced bins and one-hot encode each feature by its bin-membership. This creates a 90-dimensional binary vector for each example. We use a single fully connected layer 90→ 1 followed by a batch normalization layer, as is common practice for BNNs (Courbariaux et al., 2016).\nDiabetes. This dataset2 contains data on 100000 patients with diabetes. The task is to predict one of three possible labels regarding hospital readmission after release. We divide patients into a 80/20 train/test split. As this dataset contains real and categorical features, we bin them as in the Cancer dataset. We obtain a 1704 dimensional binary data point for each entry. Our network (selected by cross validation) consists of a fully connected layer 1704→ 10, a batch normalization layer, a SIGN activation function, followed by another fully connected layer 10→ 3, and a batch normalization layer.\nFaces. The Labeled Faces in the Wild-a dataset contains 13233 gray-scale face images. We use the binary classification task of gender identification from the images. We resize the images to size 50 × 50. Our network architecture (selected by cross-validation) contains 5 convolutional layers, each of which is followed by a batch normalization layer and a SIGN activation function (except the last which has no activation). All convolutional layers have unit stride and filter dimensions 10 × 10. All layers except the last layer have 32 output channels (the last has a single output channel). The output is flattened and passed through a fully connected layer 25→ 1 and a batch normalization layer.\n1https://tinyurl.com/gl3yhzb 2https://tinyurl.com/m6upj7y"
+  }, {
+    "heading": "5.3. Timing",
+    "text": "in Table 2 (computed with Intel Xeon CPUs @ 2.40GHz, processor number E5-2673V3). We notice that without parallelization over BNN outputs, the predictions on datasets which use fully connected layers: Cancer and Diabetes, finish within seconds or minutes. While the for the datasets that use convolutional layers: Faces and MNIST, predictions require multiple days. The +1-trick cuts the time of MNIST prediction by half and reduces the time of Faces prediction by 200 hours. With only a bit of parallelism over outputs (Out 16-Parallel) prediction on the Faces dataset now requires less than 1.5 days and MNIST can be done\n3https://tinyurl.com/yc8d79oe\nin 2 hours. With complete parallelism (Out N-Parallel) all methods reduce to under 2 hours."
+  }, {
+    "heading": "5.4. Accuracy",
+    "text": "We wanted to ensure that BNNs can still achieve similar test set accuracies to floating point networks. To do so, for each dataset we construct similar floating point networks. For the Cancer dataset we use the same network except we use the original 30 real-valued features, so the fully connected layer is 30 → 1, as was used in Meehan et al. (2018). For Diabetes and Faces, just like for our BNNs we cross validate to find the best networks (for Faces: 4 convolutional layers, with filter sizes of 5× 5 and 64 output channels; for Diabetes the best network is the same as used in the BNN). For MNIST we report the accuracy of the best performing method (Wan et al., 2013) as reported4. Additionally, we report the accuracy of the weight-dropping method described in Section 4. The results are shown in\nTable 3. We notice that apart from the Faces dataset, the accuracies differ between the floating point networks and BNNs by at most 1.2% (on MNIST). The face dataset uses a different network in floating point which seems to be able to exploit the increased precision to increase accuracy by 5.1%. We also observe that weight dropping by 10% reduces the accuracy by at most 1.2% (on Faces). Dropping 20% of the weights seem to have small effect on all datasets except Cancer, which has only a single layer and so likely relies more on every individual weight."
+  }, {
+    "heading": "6. Conclusion",
+    "text": "In this work, we devised a set of techniques that allow for practical Encrypted Prediction as a Service. In future work, we aim to develop techniques for encrypting non-binary quantized neural networks, and well as design methods for encrypted model training.\n4https://tinyurl.com/knn2434"
+  }, {
+    "heading": "Acknowledgments",
+    "text": "The authors would like to thank Nick Barlow and Oliver Strickson for their support in using the SHEEP platform. AS acknowledges support from The Alan Turing Institute under the Turing Doctoral Studentship grant TU/C/000023. AG, MK, and VK were supported by The Alan Turing Institute under the EPSRC grant EP/N510129/1."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Privacypreserving deep learning via additively homomorphic encryption",
+    "authors": ["Y. Aono", "T. Hayashi", "L. Wang", "S Moriai"],
+    "venue": "IEEE Transactions on Information Forensics and Security,",
+    "year": 2017
+  }, {
+    "title": "Sorting Networks and Their Applications",
+    "authors": ["K.E. Batcher"],
+    "venue": "In AFIPS Spring Joint Computing Conference,",
+    "year": 1968
+  }, {
+    "title": "Early identification of patients with acute decompensated heart failure",
+    "authors": ["S. Blecker", "D. Sontag", "L.I. Horwitz", "G. Kuperman", "H. Park", "A. Reyentovich", "S.D. Katz"],
+    "venue": "Journal of cardiac failure,",
+    "year": 2017
+  }, {
+    "title": "Fast homomorphic evaluation of deep discretized neural networks",
+    "authors": ["F. Bourse", "M. Minelli", "M. Minihold", "P. Paillier"],
+    "venue": "Cryptology ePrint Archive,",
+    "year": 2017
+  }, {
+    "title": "Efficient fully homomorphic encryption from (standard) lwe",
+    "authors": ["Z. Brakerski", "V. Vaikuntanathan"],
+    "venue": "SIAM Journal on Computing,",
+    "year": 2014
+  }, {
+    "title": "Privacy-preserving classification on deep neural network",
+    "authors": ["H. Chabanne", "A. de Wargny", "J. Milgram", "C. Morel", "E. Prouff"],
+    "venue": "IACR Cryptology ePrint Archive,",
+    "year": 2017
+  }, {
+    "title": "Private collaborative neural network learning",
+    "authors": ["M. Chase", "R. Gilad-Bachrach", "K. Laine", "K. Lauter", "P. Rindal"],
+    "venue": "Technical report, IACR Cryptology ePrint Archive,",
+    "year": 2017
+  }, {
+    "title": "Compressing neural networks with the hashing trick",
+    "authors": ["W. Chen", "J. Wilson", "S. Tyree", "K. Weinberger", "Y. Chen"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2015
+  }, {
+    "title": "Faster fully homomorphic encryption: Bootstrapping in less than 0.1 seconds",
+    "authors": ["I. Chillotti", "N. Gama", "M. Georgieva", "M. Izabachene"],
+    "venue": "In International Conference on the Theory and Application of Cryptology and Information Security,",
+    "year": 2016
+  }, {
+    "title": "Binaryconnect: Training deep neural networks with binary weights during propagations",
+    "authors": ["M. Courbariaux", "Y. Bengio", "David", "J.-P"],
+    "venue": "In Advances in neural information processing systems,",
+    "year": 2015
+  }, {
+    "title": "Binarized neural networks: Training deep neural networks with weights and activations constrained to+ 1 or-1",
+    "authors": ["M. Courbariaux", "I. Hubara", "D. Soudry", "R. El-Yaniv", "Y. Bengio"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2016
+  }, {
+    "title": "Fhew: bootstrapping homomorphic encryption in less than a second",
+    "authors": ["L. Ducas", "D. Micciancio"],
+    "venue": "In Annual International Conference on the Theory and Applications of Cryptographic Techniques,",
+    "year": 2015
+  }, {
+    "title": "Community detection in graphs",
+    "authors": ["S. Fortunato"],
+    "venue": "Physics reports,",
+    "year": 2010
+  }, {
+    "title": "Fully homomorphic encryption using ideal lattices",
+    "authors": ["C. Gentry"],
+    "venue": "In Proceedings of the Forty-first Annual ACM Symposium on Theory of Computing,",
+    "year": 2009
+  }, {
+    "title": "Fully homomorphic encryption with polylog overhead",
+    "authors": ["C. Gentry", "S. Halevi", "N.P. Smart"],
+    "venue": "In Annual International Conference on the Theory and Applications of Cryptographic Techniques,",
+    "year": 2012
+  }, {
+    "title": "Homomorphic encryption from learning with errors: Conceptually-simpler, asymptotically-faster, attribute-based",
+    "authors": ["C. Gentry", "A. Sahai", "B. Waters"],
+    "venue": "In Advances in Cryptology–CRYPTO",
+    "year": 2013
+  }, {
+    "title": "Credit card fraud detection with a neural-network",
+    "authors": ["S. Ghosh", "D.L. Reilly"],
+    "venue": "In System Sciences,",
+    "year": 1994
+  }, {
+    "title": "Homomorphic encryption",
+    "authors": ["S. Halevi"],
+    "venue": "In Tutorials on the Foundations of Cryptography,",
+    "year": 2017
+  }, {
+    "title": "Bootstrapping for helib",
+    "authors": ["S. Halevi", "V. Shoup"],
+    "venue": "In Annual International Conference on the Theory and Applications of Cryptographic Techniques,",
+    "year": 2015
+  }, {
+    "title": "Deep compression: Compressing deep neural network with pruning, trained quantization and huffman coding",
+    "authors": ["S. Han", "H. Mao", "W.J. Dally"],
+    "venue": "In Proceedings of the 6th International Conference on Learning Representations,",
+    "year": 2016
+  }, {
+    "title": "Private federated learning on vertically partitioned data via entity resolution and additively homomorphic encryption",
+    "authors": ["S. Hardy", "W. Henecka", "H. Ivey-Law", "R. Nock", "G. Patrini", "G. Smith", "B. Thorne"],
+    "venue": "arXiv preprint arXiv:1711.10677,",
+    "year": 2017
+  }, {
+    "title": "Deep residual learning for image recognition",
+    "authors": ["K. He", "X. Zhang", "S. Ren", "J. Sun"],
+    "venue": "In Computer vision and pattern recognition,",
+    "year": 2016
+  }, {
+    "title": "Densely connected convolutional networks",
+    "authors": ["G. Huang", "Z. Liu", "K.Q. Weinberger", "L. van der Maaten"],
+    "venue": "In Proceedings of the IEEE conference on computer vision and pattern recognition,",
+    "year": 2017
+  }, {
+    "title": "Quantized neural networks: Training neural networks with low precision weights and activations",
+    "authors": ["I. Hubara", "M. Courbariaux", "D. Soudry", "R. El-Yaniv", "Y. Bengio"],
+    "venue": "arXiv preprint arXiv:1609.07061,",
+    "year": 2016
+  }, {
+    "title": "Batch normalization: Accelerating deep network training by reducing internal covariate shift",
+    "authors": ["S. Ioffe", "C. Szegedy"],
+    "venue": "In International conference on machine learning,",
+    "year": 2015
+  }, {
+    "title": "Gazelle: A low latency framework for secure neural network inference, 2018",
+    "authors": ["C. Juvekar", "V. Vaikuntanathan", "A. Chandrakasan"],
+    "venue": "URL http://arxiv.org/",
+    "year": 2018
+  }, {
+    "title": "Bitwise neural networks",
+    "authors": ["M. Kim", "P. Smaragdis"],
+    "venue": "In ICML Workshop on Resource-Efficient Machine Learning,",
+    "year": 2015
+  }, {
+    "title": "Machine learning for medical diagnosis: history, state of the art and perspective",
+    "authors": ["I. Kononenko"],
+    "venue": "Artificial Intelligence in medicine,",
+    "year": 2001
+  }, {
+    "title": "Oblivious neural network predictions via minionn transformations",
+    "authors": ["J. Liu", "M. Juuti", "Y. Lu", "N. Asokan"],
+    "venue": "Cryptology ePrint Archive, Report 2017/452,",
+    "year": 2017
+  }, {
+    "title": "Deep learning inferences with hybrid homomorphic encryption, 2018",
+    "authors": ["A. Meehan", "R.K.L. Ko", "G. Holmes"],
+    "venue": "URL https://openreview.net/forum? id=ByCPHrgCW",
+    "year": 2018
+  }, {
+    "title": "Secureml: A system for scalable privacy-preserving machine learning",
+    "authors": ["P. Mohassel", "Y. Zhang"],
+    "venue": "In Security and Privacy (SP),",
+    "year": 2017
+  }, {
+    "title": "Chameleon: A hybrid secure computation framework for machine learning applications",
+    "authors": ["M.S. Riazi", "C. Weinert", "O. Tkachenko", "E.M. Songhori", "T. Schneider", "F. Koushanfar"],
+    "venue": "Cryptology ePrint Archive, Report 2017/1164,",
+    "year": 2017
+  }, {
+    "title": "On data banks and privacy homomorphisms",
+    "authors": ["R.L. Rivest", "L. Adleman", "M.L. Dertouzos"],
+    "venue": "Foundations of Secure Computation,",
+    "year": 1978
+  }, {
+    "title": "Deepsecure: Scalable provably-secure deep learning, 2017",
+    "authors": ["B.D. Rouhani", "M.S. Riazi", "F. Koushanfar"],
+    "venue": "URL http://arxiv.org/abs/1705.08963",
+    "year": 2017
+  }, {
+    "title": "Fully homomorphic simd operations. Designs, codes and cryptography",
+    "authors": ["N.P. Smart", "F. Vercauteren"],
+    "year": 2014
+  }, {
+    "title": "Regularization of neural networks using dropconnect",
+    "authors": ["L. Wan", "M. Zeiler", "S. Zhang", "Y.L. Cun", "R. Fergus"],
+    "venue": "In Proceedings of the 30th International Conference on Machine Learning,",
+    "year": 2013
+  }],
+  "id": "SP:7255f05e764717c030985a88947942a1af63b2f6",
+  "authors": [{
+    "name": "Amartya Sanyal",
+    "affiliations": []
+  }, {
+    "name": "Matt J. Kusner",
+    "affiliations": []
+  }, {
+    "name": "Adrià Gascón",
+    "affiliations": []
+  }, {
+    "name": "Varun Kanade",
+    "affiliations": []
+  }],
+  "abstractText": "Machine learning methods are widely used for a variety of prediction problems. Prediction as a service is a paradigm in which service providers with technological expertise and computational resources may perform predictions for clients. However, data privacy severely restricts the applicability of such services, unless measures to keep client data private (even from the service provider) are designed. Equally important is to minimize the amount of computation and communication required between client and server. Fully homomorphic encryption offers a possible way out, whereby clients may encrypt their data, and on which the server may perform arithmetic computations. The main drawback of using fully homomorphic encryption is the amount of time required to evaluate large machine learning models on encrypted data. We combine ideas from the machine learning literature, particularly work on binarization and sparsification of neural networks, together with algorithmic tools to speed-up and parallelize computation using encrypted data.",
+  "title": "TAPAS: Tricks to Accelerate (encrypted) Prediction As a Service"
+}

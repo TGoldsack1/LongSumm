@@ -1,0 +1,259 @@
+{
+  "sections": [{
+    "text": "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Long Papers), pages 1171–1180 Melbourne, Australia, July 15 - 20, 2018. c©2018 Association for Computational Linguistics\n1171"
+  }, {
+    "heading": "1 Introduction",
+    "text": "Devising fast and accurate constituency parsing algorithms is an important, long-standing problem in natural language processing. Parsing has been useful for incorporating linguistic prior in several related tasks, such as relation extraction, paraphrase detection (Callison-Burch, 2008), and more recently, natural language inference (Bowman et al., 2016) and machine translation (Eriguchi et al., 2017).\nNeural network-based approaches relying on dense input representations have recently achieved competitive results for constituency parsing (Vinyals et al., 2015; Cross and Huang, 2016; Liu and Zhang, 2017b; Stern et al., 2017a). Generally speaking, either these approaches produce the parse tree sequentially, by governing\n∗Equal contribution. Corresponding authors: yikang.shen@umontreal.ca, zhouhan.lin@umontreal.ca.\n†Work done while at Microsoft Research, Montreal.\nthe sequence of transitions in a transition-based parser (Nivre, 2004; Zhu et al., 2013; Chen and Manning, 2014; Cross and Huang, 2016), or use a chart-based approach by estimating non-linear potentials and performing exact structured inference by dynamic programming (Finkel et al., 2008; Durrett and Klein, 2015; Stern et al., 2017a).\nTransition-based models decompose the structured prediction problem into a sequence of local decisions. This enables fast greedy decoding but also leads to compounding errors because the model is never exposed to its own mistakes during training (Daumé et al., 2009). Solutions to this problem usually complexify the training procedure by using structured training through beamsearch (Weiss et al., 2015; Andor et al., 2016) and dynamic oracles (Goldberg and Nivre, 2012; Cross and Huang, 2016). On the other hand, chartbased models can incorporate structured loss functions during training and benefit from exact inference via the CYK algorithm but suffer from higher computational cost during decoding (Durrett and Klein, 2015; Stern et al., 2017a).\nIn this paper, we propose a novel, fully-parallel\nmodel for constituency parsing, based on the concept of “syntactic distance”, recently introduced by (Shen et al., 2017) for language modeling. To construct a parse tree from a sentence, one can proceed in a top-down manner, recursively splitting larger constituents into smaller constituents, where the order of the splits defines the hierarchical structure. The syntactic distances are defined for each possible split point in the sentence. The order induced by the syntactic distances fully specifies the order in which the sentence needs to be recursively split into smaller constituents (Figure 1): in case of a binary tree, there exists a oneto-one correspondence between the ordering and the tree. Therefore, our model is trained to reproduce the ordering between split points induced by the ground-truth distances by means of a margin rank loss (Weston et al., 2011). Crucially, our model works in parallel: the estimated distance for each split point is produced independently from the others, which allows for an easy parallelization in modern parallel computing architectures for deep learning, such as GPUs. Along with the distances, we also train the model to produce the constituent labels, which are used to build the fully labeled tree.\nOur model is fully parallel and thus does not require computationally expensive structured inference during training. Mapping from syntactic distances to a tree can be efficiently done in O(n log n), which makes the decoding computationally attractive. Despite our strong conditional independence assumption on the output predictions, we achieve good performance for single model discriminative parsing in PTB (91.8 F1) and CTB (86.5 F1) matching, and sometimes outperforming, recent chart-based and transition-based parsing models."
+  }, {
+    "heading": "2 Syntactic Distances of a Parse Tree",
+    "text": "In this section, we start from the concept of syntactic distance introduced in Shen et al. (2017) for unsupervised parsing via language modeling and we extend it to the supervised setting. We propose two algorithms, one to convert a parse tree into a compact representation based on distances between consecutive words, and another to map the inferred representation back to a complete parse tree. The representation will later be used for supervised training. We formally define the syntactic distances of a parse tree as follows:\nAlgorithm 1 Binary Parse Tree to Distance (∪ represents the concatenation operator of lists)\n1: function DISTANCE(node) 2: if node is leaf then 3: d← [] 4: c← [] 5: t← [node.tag] 6: h← 0 7: else 8: childl, childr ← children of node 9: dl, cl, tl, hl ← Distance(childl) 10: dr, cr, tr, hr ← Distance(childr) 11: h← max(hl, hr) + 1 12: d← dl ∪ [h] ∪ dr 13: c← cl ∪ [node.label] ∪ cr 14: t← tl ∪ tr 15: end if 16: return d, c, t, h 17: end function\nDefinition 2.1. Let T be a parse tree that contains a set of leaves (w0, ..., wn). The height of the lowest common ancestor for two leaves (wi, wj) is noted as d̃ij . The syntactic distances of T can be any vector of scalars d = (d1, ..., dn) that satisfy:\nsign(di − dj) = sign(d̃i−1i − d̃ j−1 j ) (1)\nIn other words, d induces the same ranking order as the quantities d̃ji computed between pairs of consecutive words in the sequence, i.e. (d̃01, ..., d̃ n−1 n ). Note that there are n − 1 syntactic distances for a sentence of length n.\nExample 2.1. Consider the tree in Fig. 1 for which d̃01 = 2, d̃ 1 2 = 1. An example of valid syntactic distances for this tree is any d = (d1, d2) such that d1 > d2.\nGiven this definition, the parsing model predicts a sequence of scalars, which is a more natural setting for models based on neural networks, rather than predicting a set of spans. For comparison, in most of the current neural parsing methods, the model needs to output a sequence of transitions (Cross and Huang, 2016; Chen and Manning, 2014).\nLet us first consider the case of a binary parse tree. Algorithm 1 provides a way to convert it to a tuple (d, c, t), where d contains the height of the inner nodes in the tree following a left-to-right (in order) traversal, c the constituent labels for each node in the same order and t the part-of-speech\nAlgorithm 2 Distance to Binary Parse Tree 1: function TREE(d,c,t) 2: if d = [] then 3: node← Leaf(t) 4: else 5: i← argmaxi(d) 6: childl ← Tree(d<i, c<i, t<i) 7: childr ← Tree(d>i, c>i, t≥i) 8: node← Node(childl, childr, ci) 9: end if 10: return node 11: end function\n(POS) tags of each word in the left-to-right order. d is a valid vector of syntactic distances satisfying Definition 2.1.\nOnce a model has learned to predict these variables, Algorithm 2 can reconstruct a unique binary tree from the output of the model (d̂, ĉ, t̂). The idea in Algorithm 2 is similar to the top-down parsing method proposed by Stern et al. (2017a), but differs in one key aspect: at each recursive call, there is no need to estimate the confidence for every split point. The algorithm simply chooses the split point i with the maximum d̂i, and assigns to the span the predicted label ĉi. This makes the\nrunning time of our algorithm to be inO(n log n), compared to theO(n2) of the greedy top-down algorithm by (Stern et al., 2017a). Figure 2 shows an example of the reconstruction of parse tree. Alternatively, the tree reconstruction process can also be done in a bottom-up manner, which requires the recursive composition of adjacent spans according to the ranking induced by their syntactic distance, a process akin to agglomerative clustering.\nOne potential issue is the existence of unary and n-ary nodes. We follow the method proposed by Stern et al. (2017a) and add a special empty label ∅ to spans that are not themselves full constituents but simply arise during the course of implicit binarization. For the unary nodes that contains one nonterminal node, we take the common approach of treating these as additional atomic labels alongside all elementary nonterminals (Stern et al., 2017a). For all terminal nodes, we determine whether it belongs to a unary chain or not by predicting an additional label. If it is predicted with a label different from the empty label, we conclude that it is a direct child of a unary constituent with that label. Otherwise if it is predicted to have an empty label, we conclude that it is a child of a bigger constituent which has other constituents or words as its siblings.\nAn n-ary node can arbitrarily be split into binary nodes. We choose to use the leftmost split point. The split point may also be chosen based on model prediction during training. Recovering an n-ary parse tree from the predicted binary tree simply requires removing the empty nodes and split combined labels corresponding to unary chains.\nAlgorithm 2 is a divide-and-conquer algorithm. The running time of this procedure is O(n log n). However, the algorithm is naturally adapted for execution in a parallel environment, which can further reduce its running time to O(log n)."
+  }, {
+    "heading": "3 Learning Syntactic Distances",
+    "text": "We use neural networks to estimate the vector of syntactic distances for a given sentence. We use a modified hinge loss, where the target distances are generated by the tree-to-distance conversion given by Algorithm 1. Section 3.1 will describe in detail the model architecture, and Section 3.2 describes the loss we use in this setting."
+  }, {
+    "heading": "3.1 Model Architecture",
+    "text": "Given input words w = (w0, w1, ..., wn), we predict the tuple (d, c, t). The POS tags t are given by an external Part-Of-Speech (POS) tagger. The syntactic distances d and constituent labels c are predicted using a neural network architecture that stacks recurrent (LSTM (Hochreiter and Schmidhuber, 1997)) and convolutional layers.\nWords and tags are first mapped to sequences of embeddings ew0 , ..., e w n and e t 0, ..., e t n. Then the word embeddings and the tag embeddings are concatenated together as inputs for a stack of bidirectional LSTM layers:\nhw0 , ...,h w n = BiLSTMw([e w 0 , e t 0], ..., [e w n , e t n])\n(2) where BiLSTMw(·) is the word-level bidirectional layer, which gives the model enough capacity to capture long-term syntactical relations between words.\nTo predict the constituent labels for each word, we pass the hidden states representations hw0 , ...,h w n through a 2-layer network FF w c , with softmax output:\np(cwi |w) = softmax(FFwc (hwi )) (3)\nTo compose the necessary information for inferring the syntactic distances and the constituency\nlabel information, we perform an additional convolution:\ngs1, . . . ,g s n = CONV(h w 0 , ...,h w n ) (4)\nwhere gsi can be seen as a draft representation for each split position in Algorithm 2. Note that the subscripts of gsi s start with 1, since we have n− 1 positions as non-terminal constituents. Then, we stack a bidirectional LSTM layer on top of gsi :\nhs1, ...,h s n = BiLSTMs(g s 1, . . . ,g s n) (5)\nwhere BiLSTMs fine-tunes the representation by conditioning on other split position representations. Interleaving between LSTM and convolution layers turned out empirically to be the best choice over multiple variations of the model, including using self-attention (Vaswani et al., 2017) instead of LSTM.\nTo calculate the syntactic distances for each position, the vectors hs1, . . . ,h s n are transformed through a 2-layer feed-forward network FFd with a single output unit (this can be done in parallel with 1x1 convolutions), with no activation function at the output layer:\nd̂i = FFd(hsi ), (6)\nFor predicting the constituent labels, we pass the same representations hs1, . . . ,h s n through another 2-layer network FFsc, with softmax output.\np(csi |w) = softmax(FFsc(hsi)) (7)\nThe overall architecture is shown in Figure 2a. Since the output (d, c, t) can be unambiguously transfered to a unique parse tree, the model implicitly makes all parsing decisions inside the recurrent and convolutional layers."
+  }, {
+    "heading": "3.2 Objective",
+    "text": "Given a set of training examples D = {〈dk, ck, tk,wk〉}Kk=1, the training objective is the sum of the prediction losses of syntactic distances dk and constituent labels ck.\nDue to the categorical nature of variable c, we use a standard softmax classifier with a crossentropy loss Llabel for constituent labels, using the estimated probabilities obtained in Eq. 3 and 7.\nA naïve loss function for estimating syntactic distances is the mean-squared error (MSE):\nLmsedist = ∑ i (di − d̂i)2 (8)\nThe MSE loss forces the model to regress on the exact value of the true distances. Given that only the ranking induced by the ground-truth distances in d is important, as opposed to the absolute values themselves, using an MSE loss over-penalizes the model by ignoring ranking equivalence between different predictions.\nTherefore, we propose to minimize a pair-wise learning-to-rank loss, similar to those proposed in (Burges et al., 2005). We define our loss as a variant of the hinge loss as:\nLrankdist = ∑ i,j>i [1− sign(di − dj)(d̂i − d̂j)]+, (9)\nwhere [x]+ is defined as max(0, x). This loss encourages the model to reproduce the full ranking order induced by the ground-truth distances. The final loss for the overall model is just the sum of individual losses L = Llabel + Lrankdist ."
+  }, {
+    "heading": "4 Experiments",
+    "text": "We evaluate our model described above on 2 different datasets, the standard Wall Street Journal (WSJ) part of the Penn Treebank (PTB) dataset, and the Chinese Treebank (CTB) dataset.\nFor evaluating the F1 score, we use the standard evalb1 tool. We provide both labeled and unlabeled F1 score, where the former takes into consideration the constituent label for each predicted\n1http://nlp.cs.nyu.edu/evalb/\nconstituent, while the latter only considers the position of the constituents. In the tables below, we report the labeled F1 scores for comparison with previous work, as this is the standard metric usually reported in the relevant literature."
+  }, {
+    "heading": "4.1 Penn Treebank",
+    "text": "For the PTB experiments, we follow the standard train/valid/test separation and use sections 2-21 for training, section 22 for development and section 23 for test set. Following this split, the dataset has 45K training sentences and 1700, 2416 sentences for valid/test respectively. The placeholders with the -NONE- tag are stripped from the dataset during preprocessing. The POS tags are predicted with the Stanford Tagger (Toutanova et al., 2003).\nWe use a hidden size of 1200 for each direction on all LSTMs, with 0.3 dropout in all the feedforward connections, and 0.2 recurrent connection dropout (Merity et al., 2017). The convolutional filter size is 2. The number of convolutional channels is 1200. As a common practice for neural network based NLP models, the embedding layer that maps word indexes to word embeddings is randomly initialized. The word embeddings are sized 400. Following (Merity et al., 2017), we randomly swap an input word embedding during training with the zero vector with probability of 0.1. We found this helped the model to generalize better. Training is conducted with Adam algorithm with l2 regularization decay 1 × 10−6. We pick the result obtaining the highest labeled F1\non the validation set, and report the corresponding test F1, together with other statistics. We report our results in Table 1. Our best model obtains a labeled F1 score of 91.8 on the test set (Table 1). Detailed dev/test set performances, including label accuracy is reported in Table 3.\nOur model performs achieves good performance for single-model constituency parsing trained without external data. The best result from (Stern et al., 2017b) is obtained by a generative model. Very recently, we came to knowledge of Gaddy et al. (2018), which uses character-level LSTM features coupled with chart-based parsing to improve performance. Similar sub-word features can be also used in our model. We leave this investigation for future works. For comparison, other models obtaining better scores either use ensembles, benefit from semi-supervised learning, or recur to re-ranking of a set of candidates."
+  }, {
+    "heading": "4.2 Chinese Treebank",
+    "text": "We use the Chinese Treebank 5.1 dataset, with articles 001-270 and 440-1151 for training, articles\n301-325 as development set, and articles 271-300 for test set. This is a standard split in the literature (Liu and Zhang, 2017b). The -NONE- tags are stripped as well. The hidden size for the LSTM networks is set to 1200. We use a dropout rate of 0.4 on the feed-forward connections, and 0.1 recurrent connection dropout. The convolutional layer has 1200 channels, with a filter size of 2. We use 400 dimensional word embeddings. During training, input word embeddings are randomly swapped with the zero vector with probability of 0.1. We also apply a l2 regularization weighted by 1×10−6 on the parameters of the network. Table 2 reports our results compared to other benchmarks. To the best of our knowledge, we set a new stateof-the-art for single-model parsing achieving 86.5 F1 on the test set. The detailed statistics are shown in Table 3."
+  }, {
+    "heading": "4.3 Ablation Study",
+    "text": "We perform an ablation study by removing components from a network trained with the best set of hyperparameters, and re-train the ablated version from scratch. This gives an idea of the relative contributions of each of the components in the model. Results are reported in Table 4. It seems that the top LSTM layer has a relatively big impact on performance. This may give additional capacity to the model for capturing long-term dependencies useful for label prediction. We also exper-\nimented by using 300D GloVe (Pennington et al., 2014) embedding for the input layer but this didn’t yield improvements over the model’s best performance. Unsurprisingly, the model trained with MSE loss underperforms considerably a model trained with the rank loss."
+  }, {
+    "heading": "4.4 Parsing Speed",
+    "text": "The prediction of syntactic distances can be batched in modern GPU architectures. The distance to tree conversion is a O(n log n) (n stand for the number of words in the input sentence) divide-and-conquer algorithm. We compare the parsing speed of our parser with other state-ofthe-art neural parsers in Table 5. As the syntactic distance computation can be performed in parallel within a GPU, we first compute the distances in a batch, then we iteratively decode the tree with Algorithm 2. It is worth to note that this comparison may be unfair since some of the reported results may use very different hardware settings. We couldn’t find the source code to re-run them on our hardware, to give a fair enough comparison. In our setting, we use an NVIDIA TITAN Xp graphics card for running the neural network part, and the distance to tree inference is run on an Intel Core i7-6850K CPU, with 3.60GHz clock speed."
+  }, {
+    "heading": "5 Related Work",
+    "text": "Parsing natural language with neural network models has recently received growing attention. These models have attained state-of-the-art results for dependency parsing (Chen and Manning, 2014) and constituency parsing (Dyer et al., 2016; Cross and Huang, 2016; Coavoux and Crabbé, 2016). Early work in neural network based parsing directly use a feed-forward neural network to predict parse trees (Chen and Manning, 2014). Vinyals et al. (2015) use a sequence-tosequence framework where the decoder outputs a linearized version of the parse tree given an input sentence. Generally, in these models, the correctness of the output tree is not strictly ensured (although empirically observed).\nOther parsing methods ensure structural consistency by operating in a transition-based setting (Chen and Manning, 2014) by parsing either in the top-down direction (Dyer et al., 2016; Liu and Zhang, 2017b), bottom-up (Zhu et al., 2013; Watanabe and Sumita, 2015; Cross and Huang, 2016) and recently in-order (Liu and Zhang, 2017a). Transition-based methods generally suffer from compounding errors due to exposure bias: during testing, the model is exposed to a very different regime (i.e. decisions sampled from the model itself) than what was encountered during training (i.e. the ground-truth decisions) (Daumé et al., 2009; Goldberg and Nivre, 2012). This can have catastrophic effects on test performance but\ncan be mitigated to a certain extent by using beamsearch instead of greedy decoding. (Stern et al., 2017b) proposes an effective inference method for generative parsing, which enables direct decoding in those models. More complex training methods have been devised in order to alleviate this problem (Goldberg and Nivre, 2012; Cross and Huang, 2016). Other efforts have been put into neural chart-based parsing (Durrett and Klein, 2015; Stern et al., 2017a) which ensure structural consistency and offer exact inference with CYK algorithm. (Gaddy et al., 2018) includes a simplified CYK-style inference, but the complexity still remains in O(n3).\nIn this work, our model learns to produce a particular representation of a tree in parallel. Representations can be computed in parallel, and the conversion from representation to a full tree can efficiently be done with a divide-and-conquer algorithm. As our model outputs decisions in parallel, our model doesn’t suffer from the exposure bias. Interestingly, a series of recent works, both in machine translation (Gu et al., 2018) and speech synthesis (Oord et al., 2017), considered the sequence of output variables conditionally independent given the inputs."
+  }, {
+    "heading": "6 Conclusion",
+    "text": "We presented a novel constituency parsing scheme based on predicting real-valued scalars, named syntactic distances, whose ordering identify the sequence of top-down split decisions. We employ a neural network model that predicts the distances d and the constituent labels c. Given the algorithms presented in Section 2, we can build an unambiguous mapping between each (d, c, t) and a parse tree. One peculiar aspect of our model is that it predicts split decisions in parallel. Our experiments show that our model can achieve strong performance compare to previous models, while being significantly more efficient. Since the architecture of model is no more than a stack of standard recurrent and convolution layers, which are essential components in most academic and industrial deep learning frameworks, the deployment of this method would be straightforward."
+  }, {
+    "heading": "Acknowledgement",
+    "text": "The authors would like to thank Compute Canada for providing the computational resources. The authors would also like to thank Jackie Chi Kit\nCheung for the helpful discussions. Zhouhan Lin would like to thank AdeptMind for generously supporting his research via scholarship."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Globally normalized transition-based neural networks",
+    "authors": ["Daniel Andor", "Chris Alberti", "David Weiss", "Aliaksei Severyn", "Alessandro Presta", "Kuzman Ganchev", "Slav Petrov", "Michael Collins."],
+    "venue": "Proceedings of the 54th Annual Meeting of the Associa-",
+    "year": 2016
+  }, {
+    "title": "A fast unified model for parsing and sentence understanding",
+    "authors": ["Samuel R. Bowman", "Jon Gauthier", "Abhinav Rastogi", "Raghav Gupta", "Christopher D. Manning", "Christopher Potts."],
+    "venue": "Proceedings of the 54th Annual Meeting of the Associa-",
+    "year": 2016
+  }, {
+    "title": "Learning to rank using gradient descent",
+    "authors": ["Chris Burges", "Tal Shaked", "Erin Renshaw", "Ari Lazier", "Matt Deeds", "Nicole Hamilton", "Greg Hullender."],
+    "venue": "Proceedings of the 22Nd International Conference on Machine Learning. pages 89–96.",
+    "year": 2005
+  }, {
+    "title": "Syntactic constraints on paraphrases extracted from parallel corpora",
+    "authors": ["Chris Callison-Burch."],
+    "venue": "Proceedings of the Conference on Empirical Methods in Natural Language Processing. Association for Computational Linguistics, pages 196–205.",
+    "year": 2008
+  }, {
+    "title": "A maximum-entropy-inspired parser",
+    "authors": ["Eugene Charniak."],
+    "venue": "Proceedings of the 1st North American chapter of the Association for Computational Linguistics conference. Association for Computational Linguistics, pages 132–139.",
+    "year": 2000
+  }, {
+    "title": "Coarseto-fine n-best parsing and maxent discriminative reranking",
+    "authors": ["Eugene Charniak", "Mark Johnson."],
+    "venue": "Proceedings of the 43rd annual meeting on association for computational linguistics. Association for Computational Linguistics, pages 173–",
+    "year": 2005
+  }, {
+    "title": "A fast and accurate dependency parser using neural networks",
+    "authors": ["Danqi Chen", "Christopher Manning."],
+    "venue": "Proceedings of the 2014 Conference on Empirical Methods in Natural Language Processing. Association for Computational Linguistics,",
+    "year": 2014
+  }, {
+    "title": "Neural greedy constituent parsing with dynamic oracles",
+    "authors": ["Maximin Coavoux", "Benoit Crabbé."],
+    "venue": "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics: Volume 1, Long Papers. Association for Computational Lin-",
+    "year": 2016
+  }, {
+    "title": "Span-based constituency parsing with a structure-label system and provably optimal dynamic oracles",
+    "authors": ["James Cross", "Liang Huang."],
+    "venue": "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing. Association",
+    "year": 2016
+  }, {
+    "title": "Search-based structured prediction",
+    "authors": ["Hal Daumé", "John Langford", "Daniel Marcu."],
+    "venue": "Machine learning 75(3):297–325.",
+    "year": 2009
+  }, {
+    "title": "Neural crf parsing",
+    "authors": ["Greg Durrett", "Dan Klein."],
+    "venue": "Proceedings of the 53rd Annual Meeting of the Association for Computational Linguistics and the 7th International Joint Conference on Natural Language Processing (Volume 1: Long Papers). Associ-",
+    "year": 2015
+  }, {
+    "title": "Recurrent neural network grammars",
+    "authors": ["Chris Dyer", "Adhiguna Kuncoro", "Miguel Ballesteros", "Noah A Smith."],
+    "venue": "Proceedings of the 2016 Conference of the North American Chapter of the Association for Computational Linguistics: Human Lan-",
+    "year": 2016
+  }, {
+    "title": "Learning to parse and translate improves neural machine translation",
+    "authors": ["Akiko Eriguchi", "Yoshimasa Tsuruoka", "Kyunghyun Cho."],
+    "venue": "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 2: Short Papers). Asso-",
+    "year": 2017
+  }, {
+    "title": "Efficient, feature-based, conditional random field parsing",
+    "authors": ["Jenny Rose Finkel", "Alex Kleeman", "Christopher D. Manning."],
+    "venue": "Proceedings of ACL. Association for Computational Linguistics, pages 959–967.",
+    "year": 2008
+  }, {
+    "title": "WhatâĂŹs going on in neural constituency parsers? an analysis",
+    "authors": ["David Gaddy", "Mitchell Stern", "Dan Klein."],
+    "venue": "Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language",
+    "year": 2018
+  }, {
+    "title": "A dynamic oracle for arc-eager dependency parsing",
+    "authors": ["Yoav Goldberg", "Joakim Nivre."],
+    "venue": "COLING 2012, 24th International Conference on Computational Linguistics, Proceedings of the Conference: Technical Papers. pages 959–976.",
+    "year": 2012
+  }, {
+    "title": "Non-autoregressive neural machine translation",
+    "authors": ["Jiatao Gu", "James Bradbury", "Caiming Xiong", "Victor OK Li", "Richard Socher."],
+    "venue": "Proceedings of International Conference on Learning Representations.",
+    "year": 2018
+  }, {
+    "title": "Long short-term memory",
+    "authors": ["Sepp Hochreiter", "Jürgen Schmidhuber."],
+    "venue": "Neural computation 9(8):1735–1780.",
+    "year": 1997
+  }, {
+    "title": "Forest reranking: Discriminative parsing with non-local features",
+    "authors": ["Liang Huang."],
+    "venue": "Proceedings of ACL-08: HLT . Association for Computational Linguistics, pages 586–594.",
+    "year": 2008
+  }, {
+    "title": "In-order transition-based constituent parsing",
+    "authors": ["Jiangming Liu", "Yue Zhang."],
+    "venue": "Transactions of the Association of Computational Linguistics 5(1):413–424.",
+    "year": 2017
+  }, {
+    "title": "Shift-reduce constituent parsing with neural lookahead features",
+    "authors": ["Jiangming Liu", "Yue Zhang."],
+    "venue": "Transactions of the Association for Computational Linguistics 5:45–58.",
+    "year": 2017
+  }, {
+    "title": "Regularizing and optimizing lstm language models",
+    "authors": ["Stephen Merity", "Nitish Shirish Keskar", "Richard Socher."],
+    "venue": "arXiv preprint arXiv:1708.02182 .",
+    "year": 2017
+  }, {
+    "title": "Incrementality in deterministic dependency parsing",
+    "authors": ["Joakim Nivre."],
+    "venue": "Proceedings of the Workshop on Incremental Parsing: Bringing Engineering and Cognition Together. Association for Computational Linguistics, pages 50–57.",
+    "year": 2004
+  }, {
+    "title": "Parallel wavenet: Fast high-fidelity speech synthesis",
+    "authors": ["Aaron van den Oord", "Yazhe Li", "Igor Babuschkin", "Karen Simonyan", "Oriol Vinyals", "Koray Kavukcuoglu", "George van den Driessche", "Edward Lockhart", "Luis C Cobo", "Florian Stimberg"],
+    "year": 2017
+  }, {
+    "title": "Glove: Global vectors for word representation",
+    "authors": ["Jeffrey Pennington", "Richard Socher", "Christopher Manning."],
+    "venue": "Proceedings of the 2014 conference on empirical methods in natural language processing (EMNLP). pages 1532–1543.",
+    "year": 2014
+  }, {
+    "title": "Improved inference for unlexicalized parsing",
+    "authors": ["Slav Petrov", "Dan Klein."],
+    "venue": "Human Language Technologies 2007: The Conference of the North American Chapter of the Association for Computational Linguistics; Proceedings of the Main Confer-",
+    "year": 2007
+  }, {
+    "title": "Neural language modeling by jointly learning syntax and lexicon",
+    "authors": ["Yikang Shen", "Zhouhan Lin", "Chin-Wei Huang", "Aaron Courville."],
+    "venue": "Proceedings of the International Conference on Learning Representations.",
+    "year": 2017
+  }, {
+    "title": "Bayesian symbol-refined tree substitution grammars for syntactic parsing",
+    "authors": ["Hiroyuki Shindo", "Yusuke Miyao", "Akinori Fujino", "Masaaki Nagata."],
+    "venue": "Proceedings of the 50th Annual Meeting of the Association for Computational Linguistics: Volume 1,",
+    "year": 2012
+  }, {
+    "title": "A minimal span-based neural constituency parser",
+    "authors": ["Mitchell Stern", "Jacob Andreas", "Dan Klein."],
+    "venue": "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers). Association for Computational Lin-",
+    "year": 2017
+  }, {
+    "title": "Effective inference for generative neural parsing",
+    "authors": ["Mitchell Stern", "Daniel Fried", "Dan Klein."],
+    "venue": "arXiv preprint arXiv:1707.08976 .",
+    "year": 2017
+  }, {
+    "title": "Feature-rich part-ofspeech tagging with a cyclic dependency network",
+    "authors": ["Kristina Toutanova", "Dan Klein", "Christopher D Manning", "Yoram Singer."],
+    "venue": "Proceedings of the 2003 Conference of the North American Chapter of the Association for Computa-",
+    "year": 2003
+  }, {
+    "title": "Attention is all you need",
+    "authors": ["Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N Gomez", "Łukasz Kaiser", "Illia Polosukhin."],
+    "venue": "Advances in Neural Information Processing Systems. pages 6000–6010.",
+    "year": 2017
+  }, {
+    "title": "Grammar as a foreign language",
+    "authors": ["Oriol Vinyals", "Łukasz Kaiser", "Terry Koo", "Slav Petrov", "Ilya Sutskever", "Geoffrey Hinton."],
+    "venue": "Advances in Neural Information Processing Systems. pages 2773–2781.",
+    "year": 2015
+  }, {
+    "title": "Feature optimization for constituent parsing via neural networks",
+    "authors": ["Zhiguo Wang", "Haitao Mi", "Nianwen Xue."],
+    "venue": "Proceedings of the 53rd Annual Meeting of the Association for Computational Linguistics and the 7th International Joint Conference",
+    "year": 2015
+  }, {
+    "title": "Joint pos tagging and transition-based constituent parsing in chinese with non-local features",
+    "authors": ["Zhiguo Wang", "Nianwen Xue."],
+    "venue": "Proceedings of the 52nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers). vol-",
+    "year": 2014
+  }, {
+    "title": "Transitionbased neural constituent parsing",
+    "authors": ["Taro Watanabe", "Eiichiro Sumita."],
+    "venue": "Proceedings of the 53rd Annual Meeting of the Association for Computational Linguistics and the 7th International Joint Conference on Natural Language Processing:",
+    "year": 2015
+  }, {
+    "title": "Structured training for neural network transition-based parsing",
+    "authors": ["David Weiss", "Chris Alberti", "Michael Collins", "Slav Petrov."],
+    "venue": "arXiv preprint arXiv:1506.06158 .",
+    "year": 2015
+  }, {
+    "title": "Wsabie: Scaling up to large vocabulary image annotation",
+    "authors": ["Jason Weston", "Samy Bengio", "Nicolas Usunier."],
+    "venue": "IJCAI 2011, Proceedings of the 22nd International Joint Conference on Artificial Intelligence. pages 2764–2770.",
+    "year": 2011
+  }, {
+    "title": "Fast and accurate shiftreduce constituent parsing",
+    "authors": ["Muhua Zhu", "Yue Zhang", "Wenliang Chen", "Min Zhang", "Jingbo Zhu."],
+    "venue": "Proceedings of the 51st Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers). vol-",
+    "year": 2013
+  }],
+  "id": "SP:0b52164480abd1283b860980b49a5794828f5b91",
+  "authors": [{
+    "name": "Yikang Shen",
+    "affiliations": []
+  }, {
+    "name": "Zhouhan Lin",
+    "affiliations": []
+  }, {
+    "name": "Athul Paul Jacob",
+    "affiliations": []
+  }, {
+    "name": "Alessandro Sordoni",
+    "affiliations": []
+  }, {
+    "name": "Aaron Courville",
+    "affiliations": []
+  }],
+  "abstractText": "In this work, we propose a novel constituency parsing scheme. The model predicts a vector of real-valued scalars, named syntactic distances, for each split position in the input sentence. The syntactic distances specify the order in which the split points will be selected, recursively partitioning the input, in a top-down fashion. Compared to traditional shiftreduce parsing schemes, our approach is free from the potential problem of compounding errors, while being faster and easier to parallelize. Our model achieves competitive performance amongst single model, discriminative parsers in the PTB dataset and outperforms previous models",
+  "title": "Straight to the Tree: Constituency Parsing with Neural Syntactic Distance"
+}

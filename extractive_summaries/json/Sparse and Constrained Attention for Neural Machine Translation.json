@@ -1,0 +1,160 @@
+{
+  "sections": [{
+    "text": "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Short Papers), pages 370–376 Melbourne, Australia, July 15 - 20, 2018. c©2018 Association for Computational Linguistics\n370"
+  }, {
+    "heading": "1 Introduction",
+    "text": "Neural machine translation (NMT) emerged in the last few years as a very successful paradigm (Sutskever et al., 2014; Bahdanau et al., 2014; Gehring et al., 2017; Vaswani et al., 2017). While NMT is generally more fluent than previous statistical systems, adequacy is still a major concern (Koehn and Knowles, 2017): common mistakes include dropping source words and repeating words in the generated translation.\nPrevious work has attempted to mitigate this problem in various ways. Wu et al. (2016) incorporate coverage and length penalties during beam search—a simple yet limited solution, since it only affects the scores of translation hypotheses that are already in the beam. Other approaches involve architectural changes: providing coverage vectors to track the attention history (Mi et al., 2016; Tu et al., 2016), using gating architectures and adaptive attention to control the amount of source context provided (Tu et al., 2017a; Li and Zhu, 2017), or adding a reconstruction loss (Tu et al., 2017b). Feng et al. (2016) also use the notion of fertility\n∗Work done during an internship at Unbabel.\nimplicitly in their proposed model. Their fertility conditioned decoder uses a coverage vector and an extract gate which are incorporated in the decoding recurrent unit, increasing the number of parameters.\nIn this paper, we propose a different solution that does not change the overall architecture, but only the attention transformation. Namely, we replace the traditional softmax by other recently proposed transformations that either promote attention sparsity (Martins and Astudillo, 2016) or upper bound the amount of attention a word can receive (Martins and Kreutzer, 2017). The bounds are determined by the fertility values of the source words. While these transformations have given encouraging results in various NLP problems, they have never been applied to NMT, to the best of our knowledge. Furthermore, we combine these two ideas and propose a novel attention transformation, constrained sparsemax, which produces both sparse and bounded attention weights, yielding a compact and interpretable set of alignments. While being in-between soft and hard alignments (Figure 2), the constrained sparsemax transformation is end-to-end differentiable, hence amenable for training with gradient backpropagation.\nTo sum up, our contributions are as follows:1\n• We formulate constrained sparsemax and derive efficient linear and sublinear-time algorithms for running forward and backward propagation. This transformation has two levels of sparsity: over time steps, and over the attended words at each step.\n• We provide a detailed empirical comparison of various attention transformations, including softmax (Bahdanau et al., 2014), sparse1Our software code is available at the OpenNMT fork\nwww.github.com/Unbabel/OpenNMT-py/tree/dev and the running scripts at www.github.com/Unbabel/ sparse constrained attention.\nmax (Martins and Astudillo, 2016), constrained softmax (Martins and Kreutzer, 2017), and our newly proposed constrained sparsemax. We provide error analysis including two new metrics targeted at detecting coverage problems."
+  }, {
+    "heading": "2 Preliminaries",
+    "text": "Our underlying model architecture is a standard attentional encoder-decoder (Bahdanau et al., 2014). Let x := x1:J and y := y1:T denote the source and target sentences, respectively. We use a Bi-LSTM encoder to represent the source words as a matrix H := [h1, . . . ,hJ ] ∈ R2D×J . The conditional probability of the target sentence is given as\np(y | x) := ∏T t=1 p(yt | y1:(t−1), x), (1)\nwhere p(yt | y1:(t−1), x) is computed by a softmax output layer that receives a decoder state st as input. This state is updated by an auto-regressive LSTM, st = RNN(embed(yt−1), st−1, ct), where ct is an input context vector. This vector is computed as ct := Hαt, where αt is a probability distribution that represents the attention over the source words, commonly obtained as\nαt = softmax(zt), (2)\nwhere zt ∈ RJ is a vector of scores. We follow Luong et al. (2015) and define zt,j := s>t−1Whj as a bilinear transformation of encoder and decoder states, whereW is a model parameter.2"
+  }, {
+    "heading": "3 Sparse and Constrained Attention",
+    "text": "In this work, we consider alternatives to Eq. 2. Since the softmax is strictly positive, it forces all words in the source to receive some probability mass in the resulting attention distribution, which can be wasteful. Moreover, it may happen that the decoder attends repeatedly to the same source words across time steps, causing repetitions in the generated translation, as Tu et al. (2016) observed.\nWith this in mind, we replace Eq. 2 by αt = ρ(zt,ut), where ρ is a transformation that may depend both on the scores zt ∈ RJ and on upper bounds ut ∈ RJ that limit the amount of attention that each word can receive. We consider three alternatives to softmax, described next.\n2This is the default implementation in the OpenNMT package. In preliminary experiments, feedforward attention (Bahdanau et al., 2014) did not show improvements.\nSparsemax. The sparsemax transformation (Martins and Astudillo, 2016) is defined as:\nsparsemax(z) := argmin α∈∆J\n‖α− z‖2, (3)\nwhere ∆J := {α ∈ RJ | α ≥ 0, ∑\nj αj = 1}. In words, it is the Euclidean projection of the scores z onto the probability simplex. These projections tend to hit the boundary of the simplex, yielding a sparse probability distribution. This allows the decoder to attend only to a few words in the source, assigning zero probability mass to all other words. Martins and Astudillo (2016) have shown that the sparsemax can be evaluated in O(J) time (same asymptotic cost as softmax) and gradient backpropagation takes sublinear time (faster than softmax), by exploiting the sparsity of the solution.\nConstrained softmax. The constrained softmax transformation was recently proposed by Martins and Kreutzer (2017) in the context of easy-first sequence tagging, being defined as follows:\ncsoftmax(z;u) := argmin α∈∆J\nKL(α‖ softmax(z))\ns.t. α ≤ u, (4)\nwhere u is a vector of upper bounds, and KL(.‖.) is the Kullback-Leibler divergence. In other words, it returns the distribution closest to softmax(z) whose attention probabilities are bounded by u. Martins and Kreutzer (2017) have shown that this transformation can be evaluated in O(J log J) time and its gradients backpropagated in O(J) time.\nTo use this transformation in the attention mechanism, we make use of the idea of fertility (Brown et al., 1993). Namely, let βt−1 :=∑t−1\nτ=1ατ denote the cumulative attention that each source word has received up to time step t, and let f := (fj)Jj=1 be a vector containing fertility upper bounds for each source word. The attention at step t is computed as\nαt = csoftmax(zt,f − βt−1). (5)\nIntuitively, each source word j gets a credit of fj units of attention, which are consumed along the decoding process. If all the credit is exhausted, it receives zero attention from then on. Unlike the sparsemax transformation, which places sparse attention over the source words, the constrained softmax leads to sparsity over time steps.\nConstrained sparsemax. In this work, we propose a novel transformation which shares the two properties above: it provides both sparse and bounded probabilities. It is defined as:\ncsparsemax(z;u) := argmin α∈∆J\n‖α− z‖2\ns.t. α ≤ u. (6)\nThe following result, whose detailed proof we include as supplementary material (Appendix A), is key for enabling the use of the constrained sparsemax transformation in neural networks.\nProposition 1 Let α? = csparsemax(z;u) be the solution of Eq. 6, and define the sets A = {j ∈ [J ] | 0 < α?j < uj}, AL = {j ∈ [J ] | α?j = 0}, and AR = {j ∈ [J ] | α?j = uj}. Then: • Forward propagation. α? can be com-\nputed in O(J) time with the algorithm of Pardalos and Kovoor (1990) (Alg. 1 in Appendix A). The solution takes the form α?j = max{0,min{uj , zj − τ}}, where τ is a normalization constant.\n• Gradient backpropagation. Backpropagation takes sublinear time O(|A| + |AR|). Let L(θ)\nbe a loss function, dα = ∇αL(θ) be the output gradient, and dz = ∇zL(θ) and du = ∇uL(θ) be the input gradients. Then, we have:\ndzj = 1(j ∈ A)(dαj −m) (7) duj = 1(j ∈ AR)(dαj −m), (8)\nwhere m = 1|A| ∑ j∈A dαj ."
+  }, {
+    "heading": "4 Fertility Bounds",
+    "text": "We experiment with three ways of setting the fertility of the source words: CONSTANT, GUIDED, and PREDICTED. With CONSTANT, we set the fertilities of all source words to a fixed integer value f . With GUIDED, we train a word aligner based on IBM Model 2 (we used fast align in our experiments, Dyer et al. (2013)) and, for each word in the vocabulary, we set the fertilities to the maximal observed value in the training data (or 1 if no alignment was observed). With the PREDICTED strategy, we train a separate fertility predictor model using a bi-LSTM tagger.3 At training time, we provide as supervision the fertility estimated by fast align. Since our model works\n3A similar strategy was recently used by Gu et al. (2018) as a component of their non-autoregressive NMT model.\nwith fertility upper bounds and the word aligner may miss some word pairs, we found it beneficial to add a constant to this number (1 in our experiments). At test time, we use the expected fertilities according to our model.\nSink token. We append an additional <SINK> token to the end of the source sentence, to which we assign unbounded fertility (fJ+1 = ∞). The token is akin to the null alignment in IBM models. The reason we add this token is the following: without the sink token, the length of the generated target sentence can never exceed ∑ j fj words if we use constrained softmax/sparsemax. At training time this may be problematic, since the target length is fixed and the problems in Eqs. 4–6 can become infeasible. By adding the sink token we guarantee ∑ j fj =∞, eliminating the problem.\nExhaustion strategies. To avoid missing source words, we implemented a simple strategy to encourage more attention to words with larger credit: we redefine the pre-attention word scores as z′t = zt + cut, where c is a constant (c = 0.2 in our experiments). This increases the score of words which have not yet exhausted their fertility (we may regard it as a “soft” lower bound in Eqs. 4–6)."
+  }, {
+    "heading": "5 Experiments",
+    "text": "We evaluated our attention transformations on three language pairs. We focused on small datasets, as they are the most affected by coverage mistakes. We use the IWSLT 2014 corpus for DE-EN, the KFTT corpus for JA-EN (Neubig, 2011), and the WMT 2016 dataset for ROEN. The training sets have 153,326, 329,882, and 560,767 parallel sentences, respectively. Our reason to prefer smaller datasets is that this regime is what brings more adequacy issues and demands more structural biases, hence it is a good test bed for our methods. We tokenized the data using the Moses scripts and preprocessed it with subword units (Sennrich et al., 2016) with a joint vocabulary and 32k merge operations. Our implementation was done on a fork of the OpenNMT-py toolkit (Klein et al., 2017) with the default parameters 4. We used a validation set to tune hyperparameters introduced by our model. Even though our attention implementations are CPU-based using NumPy (unlike the rest of the computation which is done on the GPU), we did not observe any noticeable slowdown using multiple devices.\nAs baselines, we use softmax attention, as well as two recently proposed coverage models: • COVPENALTY (Wu et al., 2016, §7). At test\ntime, the hypotheses in the beam are rescored with a global score that includes a length and a coverage penalty.5 We tuned α and β with grid search on {0.2k}5k=0, as in Wu et al. (2016).\n• COVVECTOR (Tu et al., 2016). At training and test time, coverage vectors β and additional parameters v are used to condition the next attention step. We adapted this to our bilinear attention by defining zt,j = s>t−1(Whj + vβt−1,j).\nWe also experimented combining the strategies above with the sparsemax transformation.\nAs evaluation metrics, we report tokenized BLEU, METEOR (Denkowski and Lavie (2014), as well as two new metrics that we describe next to account for over and under-translation.6\n4We used a 2-layer LSTM, embedding and hidden size of 500, dropout 0.3, and the SGD optimizer for 13 epochs.\n5Since our sparse attention can become 0 for some words, we extended the original coverage penalty by adding another parameter , set to 0.1: cp(x; y) := β ∑J j=1 logmax{ ,min{1, ∑|y|\nt=1 αjt}}. 6Both evaluation metrics are included in our software\npackage at www.github.com/Unbabel/ sparse constrained attention.\nREP-score: a new metric to count repetitions. Formally, given an n-gram s ∈ V n, let t(s) and r(s) be the its frequency in the model translation and reference. We first compute a sentence-level score\nσ(t, r) = λ1 ∑\ns∈V n, t(s)≥2 max{0, t(s)− r(s)} + λ2 ∑ w∈V max{0, t(ww)− r(ww)}.\nThe REP-score is then given by summing σ(t, r) over sentences, normalizing by the number of words on the reference corpus, and multiplying by 100. We used n = 2, λ1 = 1 and λ2 = 2.\nDROP-score: a new metric that accounts for possibly dropped words. To compute it, we first compute two sets of word alignments: from source to reference translation, and from source to the predicted translation. In our experiments, the alignments were obtained with fast align (Dyer et al., 2013), trained on the training partition of the data. Then, the DROP-score computes the percentage of source words that aligned with some word from the reference translation, but not with any word from the predicted translation.\nTable 1 shows the results. We can see that on average, the sparse models (csparsemax as well as sparsemax combined with coverage models) have higher scores on both BLEU and METEOR. Generally, they also obtain better REP and DROP scores than csoftmax and softmax, which suggests that sparse attention alleviates the problem of coverage to some extent.\nTo compare different fertility strategies, we ran experiments on the DE-EN for the csparsemax transformation (Table 2). We see that the PREDICTED strategy outperforms the others both in terms of BLEU and METEOR, albeit slightly.\nFigure 2 shows examples of sentences for which the csparsemax fixed repetitions, along with the corresponding attention maps. We see that in the case of softmax repetitions, the decoder attends repeatedly to the same portion of the source sentence (the expression “letzten hundert” in the first sentence and “regierung” in the second sentence). Not only did csparsemax avoid repetitions, but it also yielded a sparse set of alignments, as expected. Appendix B provides more examples of translations from all models in discussion."
+  }, {
+    "heading": "6 Conclusions",
+    "text": "We proposed a new approach to address the coverage problem in NMT, by replacing the softmax attentional transformation by sparse and constrained alternatives: sparsemax, constrained softmax, and the newly proposed constrained sparsemax. For the latter, we derived efficient forward and backward propagation algorithms. By incorporating a model for fertility prediction, our attention transformations led to sparse alignments, avoiding repeated words in the translation."
+  }, {
+    "heading": "Acknowledgments",
+    "text": "We thank the Unbabel AI Research team for numerous discussions, and the three anonymous reviewers for their insightful comments. This work was supported by the European Research Council (ERC StG DeepSPIN 758969) and by the Fundação para a Ciência e Tecnologia through contracts UID/EEA/50008/2013, PTDC/EEI-SII/7092/2014 (LearnBig), and CMUPERI/TIC/0046/2014 (GoLocal)."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Fast and Robust Compressive Summarization with Dual Decomposition and Multi-Task Learning",
+    "authors": ["Miguel B. Almeida", "André F.T. Martins."],
+    "venue": "Proc. of the Annual Meeting of the Association for Computational Linguistics.",
+    "year": 2013
+  }, {
+    "title": "Neural machine translation by jointly learning to align and translate",
+    "authors": ["Dzmitry Bahdanau", "Kyunghyun Cho", "Yoshua Bengio."],
+    "venue": "arXiv preprint arXiv:1409.0473 .",
+    "year": 2014
+  }, {
+    "title": "Time bounds for selection",
+    "authors": ["Manuel Blum", "Robert W Floyd", "Vaughan Pratt", "Ronald L Rivest", "Robert E Tarjan."],
+    "venue": "Journal of Computer and System Sciences 7(4):448–461.",
+    "year": 1973
+  }, {
+    "title": "The mathematics of statistical machine translation: Parameter estimation",
+    "authors": ["Peter F Brown", "Vincent J Della Pietra", "Stephen A Della Pietra", "Robert L Mercer."],
+    "venue": "Computational linguistics 19(2):263–311.",
+    "year": 1993
+  }, {
+    "title": "Meteor universal: Language specific translation evaluation for any target language",
+    "authors": ["Michael Denkowski", "Alon Lavie."],
+    "venue": "Proceedings of the EACL 2014 Workshop on Statistical Machine Translation.",
+    "year": 2014
+  }, {
+    "title": "A simple, fast, and effective reparameterization of ibm model 2",
+    "authors": ["Chris Dyer", "Victor Chahuneau", "Noah A Smith."],
+    "venue": "Association for Computational Linguistics.",
+    "year": 2013
+  }, {
+    "title": "Improving attention modeling with implicit distortion and fertility for machine translation",
+    "authors": ["Shi Feng", "Shujie Liu", "Nan Yang", "Mu Li", "Ming Zhou", "Kenny Q. Zhu."],
+    "venue": "Proceedings of COLING 2016, the 26th International Conference on Computational",
+    "year": 2016
+  }, {
+    "title": "A convolutional encoder model for neural machine translation",
+    "authors": ["Jonas Gehring", "Michael Auli", "David Grangier", "Yann Dauphin."],
+    "venue": "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Pa-",
+    "year": 2017
+  }, {
+    "title": "Non-autoregressive neural machine translation",
+    "authors": ["Jiatao Gu", "James Bradbury", "Caiming Xiong", "Victor OK Li", "Richard Socher."],
+    "venue": "Proc. of International Conference on Learning Representations.",
+    "year": 2018
+  }, {
+    "title": "Opennmt: Open-source toolkit for neural machine translation",
+    "authors": ["Guillaume Klein", "Yoon Kim", "Yuntian Deng", "Jean Senellart", "Alexander M. Rush."],
+    "venue": "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics, ACL",
+    "year": 2017
+  }, {
+    "title": "Six challenges for neural machine translation",
+    "authors": ["Philipp Koehn", "Rebecca Knowles."],
+    "venue": "Proceedings of the First Workshop on Neural Machine Translation. Association for Computational Linguistics, Vancouver, pages 28–39.",
+    "year": 2017
+  }, {
+    "title": "Learning when to attend for neural machine translation",
+    "authors": ["Junhui Li", "Muhua Zhu."],
+    "venue": "arXiv preprint arXiv:1705.11160 .",
+    "year": 2017
+  }, {
+    "title": "Effective approaches to attention-based neural machine translation",
+    "authors": ["Thang Luong", "Hieu Pham", "Christopher D Manning."],
+    "venue": "Proceedings of the 2015 Conference on Empirical Methods in Natural Language Processing. pages 1412–1421.",
+    "year": 2015
+  }, {
+    "title": "From softmax to sparsemax: A sparse model of attention and multi-label classification",
+    "authors": ["Andre Martins", "Ramon Astudillo."],
+    "venue": "International Conference on Machine Learning. pages 1614–1623.",
+    "year": 2016
+  }, {
+    "title": "Learning what’s easy: Fully differentiable neural easy-first taggers",
+    "authors": ["André FT Martins", "Julia Kreutzer."],
+    "venue": "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing. pages 349–362.",
+    "year": 2017
+  }, {
+    "title": "Coverage embedding models for neural machine translation",
+    "authors": ["Haitao Mi", "Baskaran Sankaran", "Zhiguo Wang", "Abe Ittycheriah."],
+    "venue": "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing, EMNLP 2016, Austin, Texas,",
+    "year": 2016
+  }, {
+    "title": "The Kyoto free translation task",
+    "authors": ["Graham Neubig."],
+    "venue": "http://www.phontron.com/kftt.",
+    "year": 2011
+  }, {
+    "title": "An algorithm for a singly constrained class of quadratic programs subject to upper and lower bounds",
+    "authors": ["Panos M. Pardalos", "Naina Kovoor."],
+    "venue": "Mathematical Programming 46(1):321–328.",
+    "year": 1990
+  }, {
+    "title": "Neural machine translation of rare words with subword units",
+    "authors": ["Rico Sennrich", "Barry Haddow", "Alexandra Birch."],
+    "venue": "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics, ACL 2016, August 7-12, 2016, Berlin, Ger-",
+    "year": 2016
+  }, {
+    "title": "Sequence to sequence learning with neural networks",
+    "authors": ["Ilya Sutskever", "Oriol Vinyals", "Quoc V Le."],
+    "venue": "Advances in neural information processing systems. pages 3104–3112.",
+    "year": 2014
+  }, {
+    "title": "2017a. Context gates for neural machine translation",
+    "authors": ["Zhaopeng Tu", "Yang Liu", "Zhengdong Lu", "Xiaohua Liu", "Hang Li"],
+    "year": 2017
+  }, {
+    "title": "Neural machine translation with reconstruction",
+    "authors": ["Zhaopeng Tu", "Yang Liu", "Lifeng Shang", "Xiaohua Liu", "Hang Li."],
+    "venue": "AAAI. pages 3097–3103.",
+    "year": 2017
+  }, {
+    "title": "Modeling coverage for neural machine translation",
+    "authors": ["Zhaopeng Tu", "Zhengdong Lu", "Yang Liu", "Xiaohua Liu", "Hang Li."],
+    "venue": "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics.",
+    "year": 2016
+  }, {
+    "title": "Attention is all you need",
+    "authors": ["Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N Gomez", "Łukasz Kaiser", "Illia Polosukhin."],
+    "venue": "Advances in Neural Information Processing Systems. pages 6000–6010.",
+    "year": 2017
+  }],
+  "id": "SP:9e2456a5bc97ef369cddc0fde6a40a2ff888a938",
+  "authors": [{
+    "name": "Chaitanya Malaviya",
+    "affiliations": []
+  }, {
+    "name": "Pedro Ferreira",
+    "affiliations": []
+  }, {
+    "name": "André F. T. Martins",
+    "affiliations": []
+  }],
+  "abstractText": "In NMT, words are sometimes dropped from the source or generated repeatedly in the translation. We explore novel strategies to address the coverage problem that change only the attention transformation. Our approach allocates fertilities to source words, used to bound the attention each word can receive. We experiment with various sparse and constrained attention transformations and propose a new one, constrained sparsemax, shown to be differentiable and sparse. Empirical evaluation is provided in three languages pairs.",
+  "title": "Sparse and Constrained Attention for Neural Machine Translation"
+}

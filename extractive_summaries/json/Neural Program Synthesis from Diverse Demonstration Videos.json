@@ -1,0 +1,240 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Imagine you are watching others driving cars. You will easily notice many common behaviors even if you know nothing about driving. For example, cars stop when the traffic light turns to red and move again when the light turns to green. Cars also slow down when pedestrians are seen jay-walking. Through observation, humans can abstract behaviors and understand the reasoning behind behaviors – especially extracting the structural relationship between actions (e.g. start, slow down, stop) and perception (e.g. light, pedestrian).\nCan machines also reason decision making logic behind behaviors? There has been tremendous effort and success in understanding behaviors such as recognizing actions (Simonyan & Zisserman, 2014), describing activities in languages (Venugopalan et al., 2015), and predicting future\n*Equal contribution 1Department of Computer Science, University of Southern California, California, USA 2Department of Computer Science and Engineering, POSTECH, Pohang, Korea. Correspondence to: Shao-Hua Sun <shaohuas@usc.edu>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\noutcomes (Srivastava et al., 2015). Yet, interpreting reasons behind behaviors is relatively unexplored and is a crucial skill for machines to collaborate with and mimic humans. Hence, our goal is to step towards developing a method that can interpret perception-based decision making logic from diverse behaviors seen in multiple visual demonstrations.\nOur insight is to exploit declarative programs, structured in a formal language, as representations of decision making logics. The formal language is composed of action blocks, perception blocks, and control flow (e.g. if/else). Programs written in such a language can explicitly model the connection between an observation (e.g. traffic light, biker) and an action (e.g. stop). An example is shown in Figure 11. Described in a formal language, programs are logically interpretable and executable. Thus, the problem of interpreting decision making logic from visual demonstrations can be reduced to extracting an underlying program.\nIn fact, there have been many neural network frameworks proposed recently for program induction or synthesis. First, a variety of frameworks (Kaiser & Sutskever, 2016; Reed & De Freitas, 2016; Xu et al., 2018; Devlin et al., 2017a) propose to induce latent representations of underlying programs. While they can be efficient at mimicking desired behaviors, they do not explicitly yield interpretable programs, resulting\n1The illustrated environment is not tested in our experiments.\nin inexplicable failure cases. On the other hand, another line of work (Devlin et al., 2017b; Bunel et al., 2018) directly synthesize programs from input/output pairs, giving full interpretability. While successful, the limited information in the input/output pairs restricts applicability in synthesizing programs with rich expressibility. Hence, in this paper, we develop a model that synthesizes programs from visually complex and sequential inputs that demonstrate more branching conditions and long term effects, increasing the complexity of the underlying programs.\nTo this end, we develop a program synthesizer augmented with a summarizer module that is capable of encoding the interrelationship between multiple demonstrations and summarizing them into compact aggregated representations. In addition, to enable efficient end-to-end training, we introduce auxiliary tasks to encourage the model to learn the knowledge that is essential to infer an underlying program.\nWe extensively evaluate our model in two environments: a fully observable, third-person environment (Karel) and a partially observable, egocentric game (ViZDoom). Our experiments in both environments with a variety of settings present the strength of explicitly modeling programs for reasoning underlying conditions and the necessity of the proposed components (the summarizer module and the auxiliary tasks).\nIn summary, in this paper, we introduce a novel problem of program synthesis from diverse demonstration videos and a method to address it. This substantially enables machines to explicitly interpret decision making logic and interact with humans. We also demonstrate that our algorithm can synthesize programs reliably on multiple environments."
+  }, {
+    "heading": "2. Related Work",
+    "text": "Program Induction Learning to perform a specific task by inducing latent representations of underlying task-specific programs is known as program induction. Various approaches have been developed: designing end-to-end differentiable architectures (Graves et al., 2014; 2016; Zaremba & Sutskever, 2015; Kaiser & Sutskever, 2016; Joulin & Mikolov, 2015; Grefenstette et al., 2015; Neelakantan et al., 2015), learning to call subprograms using step-by-step supervision (Reed & De Freitas, 2016; Cai et al., 2017), and few-shot program induction (Devlin et al., 2017a). Contrary to our work, those method do not return explicit programs.\nProgram Synthesis The line of work in program synthesis focuses on explicitly producing programs that are restricted to certain languages. (Balog et al., 2017) train a model to predict program attributes and used external search algorithms for inductive program synthesis. (Parisotto et al., 2017; Devlin et al., 2017b) directly synthesize simple string transformation programs. (Bunel et al., 2018) employ re-\ninforcement learning to directly optimize the execution of generated programs. However, those methods are limited to synthesizing programs from input-output pairs, which substantially restricts the expressibility of the programs that are considered; instead, we address the problem of synthesizing programs from full demonstrations videos.\nImitation Learning The methods that are concerned with acquiring skills from expert demonstrations, dubbed imitation learning, can be split into behavioral cloning (Pomerleau, 1989; 1991; Ross et al., 2011) which casts the problem as a supervised learning task and inverse reinforcement learning (Ng et al., 2000) that extracts estimated reward functions given demonstrations. Recently, (Duan et al., 2017; Finn et al., 2017; Xu et al., 2018) have studied the task of mimicking given few demonstrations. This line of work can be considered as program induction, as they imitate demonstrations without explicitly modeling underlying programs. While those methods are able to mimic given few demonstrations, it is not clear if they could deal with multiple demonstrations with diverse branching conditions."
+  }, {
+    "heading": "3. Problem Overview",
+    "text": "In this section, we define our formulation for program synthesis from diverse demonstration videos. We define programs in a domain specific language (DSL) with perception primitives, action primitives, and control flows. Action primitives define the way that agents can interact with an environment, while perception primitives describe how agents can percept it. Control flow can include if/else statements, while loops, repeat statements, and simple logic operations. An example of control flow introduced in (Pattis, 1981) is shown in Figure 2. Note that we focus on perceptions with boolean types in this paper, although a more generic perception type constraint is possible.\nA program η is a deterministic function that outputs an action a ∈ A given a history of states at time step t, Ht = (s1, s2, ..., st), where s ∈ S is a state of the environment. The generation of an action given the history of states is\nrepresented as at = η (Ht). In this paper, we focus on programs that can be represented in DSL by a code C = (w1, w2, ..., wN ), which consists a sequence of tokens w.\nA demonstration τ = ((s1, a1), (s2, a2), ..., (sT , aT )) is a sequence of state and action tuples generated by an underlying program η∗ given an initial state s1. Given an initial state s1 and its corresponding state history H1, the program generates new action a1 = η∗ (H1). The following state s2 is generated by a state transition function T : s2 ∼ T (s1, a1). The newly sampled state is incorporated into the state history H2 = H1 a (s2) and this process is iterated until the end of file action EOF ∈ A is returned by the program. A set of demonstrations D = {τ1, τ2, ..., τK} can be generated by running a single program η∗ on different initial states s11, s 2 1, ..., s K 1 , where each initial state is sampled from an initial state distribution (i.e. sk1 ∼ P0(s1)).\nWhile we are interested in inferring a program η∗ from a set of demonstrations D, it is preferable to predict a code C∗ instead, because it is a more accessible representation while immediately convertible to a program. Formally, we formulate the problem as a sequence prediction where the input is a set of demonstrations D and the output is a code sequence Ĉ. Note that our objective is not about inferring a code perfectly but instead generating a code that can infer the underlying program, which models the diverse behaviors appearing in the demonstrations in an executable form."
+  }, {
+    "heading": "4. Approach",
+    "text": "Inferring a program behind a set of demonstrations requires (1) interpreting each demonstration video (2) spotting and summarizing the difference among demonstrations to infer the conditions behind the taken actions (3) describing the understanding of demonstrations in a written language, Based on this intuition, we design a neural architecture composed of three components:\n• Demonstration Encoder receives a demonstration video as input and produces an embedding that captures an agent’s actions and perception.\n• Summarizer Module discovers and summarizes where actions diverge between demonstrations and upon which branching conditions subsequent actions are taken.\n• Program Decoder represents the summarized understanding of demonstrations as a code sequence.\nThe details of the three main components are described in the Section 4.1, and the learning objective of the proposed model is described in Section 4.2. Section 4.3 introduces auxiliary tasks for encouraging the model to learn the knowledge that is essential to infer a program."
+  }, {
+    "heading": "4.1. Model Architecture",
+    "text": "Figure 3 illustrates the overall architecture of the proposed model, The details of each component are described in the following sections."
+  }, {
+    "heading": "4.1.1. DEMONSTRATION ENCODER",
+    "text": "The demonstration encoder receives a demonstration video as input and produces an latent vector that captures the actions and perception of an agent. At each time step, to interpret visual input, we employ a stack of convolutional layers, to encode a state st to its embedding as a state vector vtstate = CNNenc(st) ∈ Rd, where t ∈ [1, T ] is the time-step.\nSince the demonstration encoder needs to handle demonstrations with variable numbers of frames, we employ an LSTM (Long Short Term Memory) (Hochreiter & Schmidhuber, 1997) to encode each state vector and summarized representation at the same time.\nctenc, h t enc = LSTMenc(v t state, c t−1 enc , h t−1 enc ), (1)\nwhere, t ∈ [1, T ] is the time step, while ctenc and htenc denote the cell state and the hidden state. While final state tuples (cTenc, h T enc) encode the overall idea of the demonstration, intermediate hidden states {h1enc, h2enc, ..., hTenc} contain high level understanding of each state, which are used as an input to the following modules. Note that these operations are applied to allK demonstrations while the index k is dropped in the equations for simplicity."
+  }, {
+    "heading": "4.1.2. SUMMARIZER MODULE",
+    "text": "Inferring an underlying program from demonstrations that exhibits different behaviors requires the ability to discover and summarize where actions diverge between demonstrations and upon which branching conditions subsequent actions are taken. The summarizer module first re-encodes each demonstration with the context of all encoded demonstrations to infer branching conditions. Then, the module aggregates all encoded demonstration vectors to obtain the summarized representation. An illustration of the summarizer is shown in Figure 4.\nThe first summarization is performed by a reviewer module, an LSTM initialized with the average-pooled final state tuples of the demonstration encoder outputs, which can be written as follows:\nc0review = 1\nK K∑ k=1 cT,kenc , h 0 review = 1 K K∑ k=1 hT,kenc , (2)\nwhere (cT,kenc , h T,k enc ) is the final state tuple of the kth demonstration encoder. Then the reviewer LSTM encodes the hidden states by\nct,kreview, h t,k review = LSTMreview(h t,k enc, c t−1,k review , h t−1,k review ), (3)\nwhere the final hidden state becomes a demonstration vector vkdemo = h T,k review ∈ Rd, which includes the summarized information within a single demonstration.\nThe final summarization, which is performed across multiple demonstrations, is performed by an aggregation module, which gets K demonstration vectors and aggregates them into a single compact vector representation. To effectively model complex relations between demonstrations, we employ a relational network (RN) module (Santoro et al., 2017). The aggregation process is formally written as follows. vsummary = RN ( v1demo, ..., v K demo ) = 1\nK2 K∑ i,j gθ(v i demo, v j demo),\n(4) where vsummary ∈ Rd is the summarized demonstration vector and gθ is an MLP parameterized by θ jointly trained with the summarizer module.\nWe show that employing the summarizer module significantly alleviates the difficulty of handling multiple demon-\nstrations and improve generalization over different number of generations in Section 5 ."
+  }, {
+    "heading": "4.1.3. PROGRAM DECODER",
+    "text": "The program decoder synthesizes programs from a summarized representation of all the demonstrations. We use LSTMs similar to (Sutskever et al., 2014; Vinyals et al., 2015) as a program decoder. Initialized with the summarized vector vsummary, the LSTM at each time step gets the previous token embedding as an input and outputs a probability of the following program tokens as in the Eq. 5. During training, the previous ground truth token is fed as an input, and during inference, the predicted token in the previous steps is fed as an input."
+  }, {
+    "heading": "4.2. Learning",
+    "text": "The proposed model learns a conditional distribution between a set of demonstrations D and a corresponding code C = {w1, w2, ..., wN}. By employing the LSTM program decoder, this problem becomes an autoregressive sequence prediction (Sutskever et al., 2014). For a given demonstration and previous code token wi−1, our model is trained to predict the following ground truth token w∗i , where the cross entropy loss is optimized.\nLcode = − 1\nNM M∑ m=1 N∑ n=1 log p(w∗m,n|Wmm,n−1, Dm), (5)\nwhere M is the total number of training examples, wm,n is the nth token of the mth training example and Dm are mth training demonstrations. Wm,n = {wm,1, ..., wm,n} is the history of previous token inputs at time step n."
+  }, {
+    "heading": "4.3. Multi-task Objective",
+    "text": "To reason an underlying program from a set of demonstrations, the primary and essential step is recognizing actions and perceptions happening in each step of the demonstration. However, it can be difficult to learn meaningful representations solely from the sequence loss of programs when environments increase in visual complexity. To alleviate this issue, we propose to predict action sequences and perception vectors from the demonstrations as auxiliary tasks. An overview of the auxiliary tasks are illustrated in Figure 3.\nPredicting action sequences Given a demo vector vkdemo encoded by the summarizer, an action decoder LSTM produces a sequence of actions. During training, a sequential cross entropy loss similar to Equation 5 is optimized:\nLaction = − 1\nMKT M∑ m=1 K∑ k=1 T∑ t=1 log p(ak∗m,t|Akm,t−1, vkdemo),\n(6) where, akm,t is the t-th action token in k−th demonstration of m-th training example, Akm,t = {akm,1, ..., akm, t} is the history of previous actions at time step t.\nPredicting perceptions We denote a perception vector Φ = {φ1, ..., φL} ∈ {0, 1}L as an L dimensional binary vector obtained by executing L perception primitives e.g. frontIsClear() on a given state s. Specifically, we formulate the perception vector prediction as a sequential multi-label binary classification problem and optimizes the binary cross entropy:\nLperception =\n− 1 MKTL M∑ m=1 K∑ k=1 T∑ t=1 L∑ l=1 log p(φk∗m,t,l|P km,t−1, vkdemo),\n(7)\nwhere P km,t = {f(Φkm,1), ..., f(Φkm,t)} is the history of encoded previous perception vectors and f(·) is an encoding function.\nThe aggregated multi-task objective is as follows: L = Lcode + αLaction + βLperception, where α and β are hyperparameters controlling the importance of each loss. We set α = β = 1 to equally optimize the objectives for all the experiments."
+  }, {
+    "heading": "5. Experiments",
+    "text": "We perform experiments in different environments: Karel (Pattis, 1981) and ViZDoom (Kempka et al., 2016). We first describe the experimental setup and then present the experimental results."
+  }, {
+    "heading": "5.1. Evaluation Metric",
+    "text": "To verify whether a model is able to infer an underlying program η∗ from a given set of demonstrations D, we evaluate accuracy based on the synthesized codes and the underlying program (sequence accuracy and program accuracy) as well as the execution of the program (execution accuracy).\nSequence accuracy Comparison in the code space is based on the instantiated code C∗ of a ground truth program and the synthesized code Ĉ from a program synthesizer. The sequence accuracy counts exact match of two code sequences, which is formally written as: Accseq = 1 M ∑M m=1 1seq(C ∗ m, Ĉm), where M is the number of testing examples and 1seq(·, ·) is the indicator function of exact sequence match.\nProgram accuracy While the sequence accuracy is simple, it is a pessimistic estimation of program accuracy since it does not consider program aliasing – different codes with identical program semantics (e.g. repeat(2):(move()) and move() move()). Therefore, we measure the program accuracy by enumerating variations of codes. Specifically, we exploit the syntax of DSL to identify variations: e.g. unfolding repeat statements, decomposing if-else statement into two if statements, etc. Formally, the program accuracy is Accprogram = 1 M ∑M m=1 1prog(C ∗ m, Ĉm), where 1prog(C ∗ m, Ĉm) is an indicator function that returns 1 if any variations of Ĉm match any variations of C∗m. Note that the program accuracy is only computable when the DSL is relatively simple and some assumptions are made i.e. termination of loops. The details of computing program accuracy are presented in the supplementary material.\nExecution accuracy To evaluate how well a synthesized program can capture the behaviors of an underlying program, we compare the execution results of the synthesized program code Ĉ and the demonstrations D∗ generated by a ground truth program η∗, where both are generated from the same set of sampled initial states IK = {s11, ..., sK1 }. We formally define the execution accuracy as: Accexecution = 1M ∑M m=1 1execution(D ∗ m, D̂m), where 1execution(D ∗ m, D̂m) is the indicator function of exact sequence match. Note that when the number of sampled initial states becomes infinitely large, the execution accuracy converges to the program accuracy."
+  }, {
+    "heading": "5.2. Evaluation Setting",
+    "text": "For training and evaluation, we collect Mtrain training programs and Mtest test programs. Each program code C∗m is randomly sampled from an environment specific DSL and compiled into an executable form η∗m. The corresponding demonstrations D∗m = {τ1, ..., τK} are gener-\nated by running the program on K = Kseen + Kunseen different initial states. The seen demonstrations are used as an input to the program synthesizer, and the unseen demonstrations are used for computing execution accuracy. We train our model on the training set Ωtrain = {(C∗1 , D∗1), ..., (C∗Mtrain , D ∗ Mtrain\n)} and test them on the testing set Ωtest = {(C∗1 , D∗1), ..., (C∗Mtest , D ∗ Mtest\n)}. Note that Ωtrain and Ωtest are disjoint. Both sequence and execution accuracies are used for the evaluation. The training details are described in the supplementary material."
+  }, {
+    "heading": "5.3. Baselines",
+    "text": "We compare our proposed model (ours) against baselines to evaluate the effectiveness of: (1) explicitly modeling the underlying programs (2) our proposed model with the summarizer module and multi-task objective. To address (1), we design a program induction baseline based on (Duan et al., 2017), which bypasses synthesizing programs and directly predicts action sequences. We modified the architecture to incorporate multiple demonstrations as well as pixel inputs. The details are presented in the supplementary material. For a fair comparison with our model that gets supervision of perception primitives, we feed the perception primitive vector of every frame as an input to the induction baseline . To verify (2), we compose a program synthesis baseline simply consisting of a demonstration encoder and a program decoder without a summarizer module and multi-task loss. To integrate all the demonstration encoder outputs across demos, an average pooling layer is applied."
+  }, {
+    "heading": "5.4. Karel",
+    "text": "We first focus on a visually simple environment to verify the feasibility of program synthesis from demonstrations. We consider Karel (Pattis, 1981) featuring an agent navigating through a gridworld with walls and interacting with markers\nbased on the underlying program."
+  }, {
+    "heading": "5.4.1. ENVIRONMENT AND DATASET",
+    "text": "Karel has 5 action primitives for moving and interacting with markers and 5 perception primitives for detecting obstacles and markers. A gridworld of 8× 8 size is used for our experiments. To evaluate the generalization ability of the program synthesizer to novel programs, we randomly generate 35,000 unique programs and split them into a training set with 25,000 program, a validation set with 5,000 program, and a testing set with 5,000 programs. The maximum length of the program codes is 43. For each program, 10 seen demonstrations and 5 unseen demonstrations are generated. The maximum length of the demonstrations is 20."
+  }, {
+    "heading": "5.4.2. PERFORMANCE EVALUATION",
+    "text": "The evaluation results of our proposed model and baselines are shown in Table. 1. Comparison of execution accuracy shows relative performance of the proposed model and the baselines. Synthesis baseline outperforms induction baseline based on the execution accuracy, which shows the advantage of explicit modeling the underlying programs. Induction baseline often matches some of the Kunseen demonstration, but fails to match all of them from a single program. This observation is supported by the number in the parenthesis (69.1%), which counts the number of correct\ndemonstrations while execution accuracy counts the number of program whose demonstrations match perfectly. This finding has also been reported in (Devlin et al., 2017b).\nThe proposed model shows consistent improvement over synthesis baseline for all the evaluation metrics. The sequence accuracy for our full model is 41.0%, which is a reasonable generalization performance given that none of the test programs are seen during training. We observe that our model often synthesizes programs that do not exactly match with the ground truth program but are semantically identical. For example, given a ground truth program repeat(4):( turnLeft; turnLeft; turnLeft ), our model predicts repeat (12): ( turnLeft ). These cases are considered correct for program accuracy. Note that comparison based on the execution and sequence accuracy is consistent with the program accuracy, which justifies using them as a proxy for the program accuracy when it is not computable.\nThe qualitative success and failure cases of the proposed model are described in Figure 5. The Figure 5(a) shows a correct case where a single program is used to generate diverse action sequences. Figure 5(b) show a failure case, where part of the ground truth program tokens are not generated due to missing seen demonstration hitting that condition."
+  }, {
+    "heading": "5.4.3. EFFECT OF SUMMARIZER",
+    "text": "To verify the effectiveness of our proposed summarizer module, we conduct experiments where models are trained on varying numbers of demonstrations and compare the execution accuracy in Table. 2. As the number of demonstrations increases, both models enjoy a performance gain due to extra available information. However, the gap between our proposed model and synthesis baseline also grows, which demonstrates the effectiveness of our summarizer module."
+  }, {
+    "heading": "5.5. ViZDoom",
+    "text": "Doom is a 3D first-person shooter game where a player can move in a continuous space and interact with monsters, items and weapons. We use ViZDoom (Kempka et al., 2016), an open-source Doom-based AI platform, for our experiments. ViZDoom’s increased visual complexity and a richer DSL could test the boundary of models in state comprehension, demo summarization, and program synthesis."
+  }, {
+    "heading": "5.5.1. ENVIRONMENT AND DATASET",
+    "text": "The ViZDoom environment has 7 action primitives including diverse motions and attack as well as 6 perception primitives checking the existence of different monsters and whether they are targeted. Each state is represented by an image with 120× 160× 3 pixels. For each demonstration, initial state is sampled by randomly spawning different types of monsters and ammos in different location and placing an agent randomly. To ensure that the program behavior results in the same execution, we control the environment to be deterministic.\nWe generate 80,000 training programs and 8,000 testing programs. To encourage diverse behavior of generated program, we give a higher sampling rate to the perception primitives that has higher entropy over K different initial states. We use 25 seen demonstrations for program synthesis and 10 unseen demonstrations for execution accuracy measure. The maximum length of programs is 32 and the maximum length of demonstrations is 20."
+  }, {
+    "heading": "5.5.2. PERFORMANCE EVALUATION",
+    "text": "Table. 3 shows the result on ViZDoom environment. Synthesis baseline outperforms induction baseline in terms of the execution accuracy, which shows the strength of program synthesis for understanding diverse demonstrations. In addition, the proposed summarizer module and the multitask objective bring improvement in terms of all evaluation metrics. Also we found that the syntax of the synthesized programs is about 99.9% accurate. This tells that the program synthesizer correctly learn the syntax of the DSL.\nFigure 6 shows the qualitative result. It is shown that the generated program covers different conditional behavior in the demonstration successfully. In the example, the synthesized program does not match the underlying program in the code space, while matching the underlying program in the program space."
+  }, {
+    "heading": "5.5.3. ANALYSIS",
+    "text": "To verify the importance of inferring underlying conditions, we perform evaluation only with programs containing a single if-else statement with two branching consequences. This setting is sufficiently simple to isolate other diverse factors that might affect the evaluation result. For the experiment,\nwe use 25 seen demonstrations to understand a behavior and 10 unseen demonstrations for testing. The result is shown in Table. 4. Induction baseline has difficulty inferring the underlying condition to match all unseen demonstrations most of the times. In addition, our proposed model outperforms synthesis baseline ,2 which demonstrates the effectiveness of the summarizer module and the multi-task objective.\nFigure 7 illustrates how models trained with a fixed number (25) of seen demonstration generalize to fewer or more seen demonstrations during testing time. This shows our model and synthesis baseline are able to leverage more seen demonstrations to synthesize more accurate programs as well as achieve reasonable performance when fewer demonstrations are given. On the contrary, Induction baseline could not exploit more than 10 demonstrations well."
+  }, {
+    "heading": "5.5.4. DEBUGGING THE SYNTHESIZED PROGRAM",
+    "text": "One of the intriguing properties of the program synthesis is that synthesized programs are interpretable and interactable by human. This makes it possible to debug a synthesized program and fix minor mistakes to correct the behaviors. To verify this idea, we use edit distance between synthesized program and ground truth program as a number of minimum token that is required to get a exactly correct program. With\nthis setting, we found that fixing at most 2 program token provides 4.9% improvement in sequence accuracy and 4.1% improvement in execution accuracy."
+  }, {
+    "heading": "6. Conclusion",
+    "text": "We propose the task of synthesizing a program from diverse demonstration videos. To address this, we introduce a model augmented with a summarizer module to deal with branching conditions and a multi-task objective to induce meaningful latent representations. Our method is evaluated on a fully observable, third-person environment (Karel environment) and a partially observable, egocentric game (ViZDoom environment). The experiments demonstrate that the proposed model is able to reliably infer underlying programs and achieve satisfactory performances."
+  }, {
+    "heading": "Acknowledgments",
+    "text": "We thank the anonymous ICML reviewers for insightful comments. This project was supported by the center for super intelligence, Kakao Brain, and SKT."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Deepcoder: Learning to write programs",
+    "authors": ["Balog", "Matej", "Gaunt", "Alexander L", "Brockschmidt", "Marc", "Nowozin", "Sebastian", "Tarlow", "Daniel"],
+    "venue": "In International Conference on Learning Representations,",
+    "year": 2017
+  }, {
+    "title": "Leveraging grammar and reinforcement learning for neural program synthesis",
+    "authors": ["Bunel", "Rudy R", "Hausknecht", "Matthew", "Devlin", "Jacob", "Singh", "Rishabh", "Kohli", "Pushmeet"],
+    "venue": "In International Conference on Learning Representations,",
+    "year": 2018
+  }, {
+    "title": "Making neural programming architectures generalize via recursion",
+    "authors": ["Cai", "Jonathon", "Shin", "Richard", "Song", "Dawn"],
+    "venue": "In International Conference on Learning Representations,",
+    "year": 2017
+  }, {
+    "title": "Neural program metainduction",
+    "authors": ["Devlin", "Jacob", "Bunel", "Rudy R", "Singh", "Rishabh", "Hausknecht", "Matthew", "Kohli", "Pushmeet"],
+    "venue": "In Neural Information Processing Systems,",
+    "year": 2017
+  }, {
+    "title": "Robustfill: Neural program learning under noisy i/o",
+    "authors": ["Devlin", "Jacob", "Uesato", "Jonathan", "Bhupatiraju", "Surya", "Singh", "Rishabh", "Mohamed", "Abdel-rahman", "Kohli", "Pushmeet"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2017
+  }, {
+    "title": "One-shot imitation learning",
+    "authors": ["Duan", "Yan", "Andrychowicz", "Marcin", "Stadie", "Bradly", "Ho", "OpenAI Jonathan", "Schneider", "Jonas", "Sutskever", "Ilya", "Abbeel", "Pieter", "Zaremba", "Wojciech"],
+    "venue": "In Neural Information Processing Systems,",
+    "year": 2017
+  }, {
+    "title": "One-shot visual imitation learning via meta-learning",
+    "authors": ["Finn", "Chelsea", "Yu", "Tianhe", "Zhang", "Tianhao", "Abbeel", "Pieter", "Levine", "Sergey"],
+    "venue": "In Conference on Robot Learning,",
+    "year": 2017
+  }, {
+    "title": "Neural turing machines",
+    "authors": ["Graves", "Alex", "Wayne", "Greg", "Danihelka", "Ivo"],
+    "venue": "arXiv preprint arXiv:1410.5401,",
+    "year": 2014
+  }, {
+    "title": "Learning to transduce with unbounded memory",
+    "authors": ["Grefenstette", "Edward", "Hermann", "Karl Moritz", "Suleyman", "Mustafa", "Blunsom", "Phil"],
+    "venue": "In Neural Information Processing Systems,",
+    "year": 2015
+  }, {
+    "title": "Long short-term memory",
+    "authors": ["Hochreiter", "Sepp", "Schmidhuber", "Jürgen"],
+    "venue": "Neural computation,",
+    "year": 1997
+  }, {
+    "title": "Inferring algorithmic patterns with stack-augmented recurrent nets",
+    "authors": ["Joulin", "Armand", "Mikolov", "Tomas"],
+    "venue": "In Neural Information Processing Systems,",
+    "year": 2015
+  }, {
+    "title": "Neural gpus learn algorithms",
+    "authors": ["Kaiser", "Łukasz", "Sutskever", "Ilya"],
+    "venue": "In International Conference on Learning Representations,",
+    "year": 2016
+  }, {
+    "title": "Vizdoom: A doom-based ai research platform for visual reinforcement learning",
+    "authors": ["Kempka", "Michał", "Wydmuch", "Marek", "Runc", "Grzegorz", "Toczek", "Jakub", "Jaśkowski", "Wojciech"],
+    "venue": "In Computational Intelligence and Games,",
+    "year": 2016
+  }, {
+    "title": "Neural programmer: Inducing latent programs with gradient descent",
+    "authors": ["Neelakantan", "Arvind", "Le", "Quoc V", "Sutskever", "Ilya"],
+    "venue": "In International Conference on Learning Representations,",
+    "year": 2015
+  }, {
+    "title": "Algorithms for inverse reinforcement learning",
+    "authors": ["Ng", "Andrew Y", "Russell", "Stuart J"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2000
+  }, {
+    "title": "Neuro-symbolic program synthesis",
+    "authors": ["Parisotto", "Emilio", "Mohamed", "Abdel-rahman", "Singh", "Rishabh", "Li", "Lihong", "Zhou", "Dengyong", "Kohli", "Pushmeet"],
+    "venue": "In International Conference on Learning Representations,",
+    "year": 2017
+  }, {
+    "title": "Karel the robot: a gentle introduction to the art of programming",
+    "authors": ["Pattis", "Richard E"],
+    "year": 1981
+  }, {
+    "title": "Alvinn: An autonomous land vehicle in a neural network",
+    "authors": ["Pomerleau", "Dean A"],
+    "venue": "In Neural Information Processing Systems,",
+    "year": 1989
+  }, {
+    "title": "Efficient training of artificial neural networks for autonomous navigation",
+    "authors": ["Pomerleau", "Dean A"],
+    "venue": "Neural Computation,",
+    "year": 1991
+  }, {
+    "title": "Neural programmerinterpreters",
+    "authors": ["Reed", "Scott", "De Freitas", "Nando"],
+    "venue": "In International Conference on Learning Representations,",
+    "year": 2016
+  }, {
+    "title": "A reduction of imitation learning and structured prediction to no-regret online learning",
+    "authors": ["Ross", "Stéphane", "Gordon", "Geoffrey", "Bagnell", "Drew"],
+    "venue": "In International Conference on Artificial Intelligence and Statistics,",
+    "year": 2011
+  }, {
+    "title": "A simple neural network module for relational reasoning",
+    "authors": ["Santoro", "Adam", "Raposo", "David", "Barrett", "David G", "Malinowski", "Mateusz", "Pascanu", "Razvan", "Battaglia", "Peter", "Lillicrap", "Tim"],
+    "venue": "In Neural Information Processing Systems,",
+    "year": 2017
+  }, {
+    "title": "Two-stream convolutional networks for action recognition in videos",
+    "authors": ["Simonyan", "Karen", "Zisserman", "Andrew"],
+    "venue": "In Neural Information Processing Systems,",
+    "year": 2014
+  }, {
+    "title": "Unsupervised learning of video representations using lstms",
+    "authors": ["Srivastava", "Nitish", "Mansimov", "Elman", "Salakhudinov", "Ruslan"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2015
+  }, {
+    "title": "Sequence to sequence learning with neural networks",
+    "authors": ["Sutskever", "Ilya", "Vinyals", "Oriol", "Le", "Quoc V"],
+    "venue": "In Neural Information Processing Systems,",
+    "year": 2014
+  }, {
+    "title": "Sequence to sequence-video to text",
+    "authors": ["Venugopalan", "Subhashini", "Rohrbach", "Marcus", "Donahue", "Jeffrey", "Mooney", "Raymond", "Darrell", "Trevor", "Saenko", "Kate"],
+    "venue": "In International Conference on Computer Vision,",
+    "year": 2015
+  }, {
+    "title": "Show and tell: A neural image caption generator",
+    "authors": ["Vinyals", "Oriol", "Toshev", "Alexander", "Bengio", "Samy", "Erhan", "Dumitru"],
+    "venue": "In Conference on Computer Vision and Pattern Recognition,",
+    "year": 2015
+  }, {
+    "title": "Neural task programming: Learning to generalize across hierarchical tasks",
+    "authors": ["Xu", "Danfei", "Nair", "Suraj", "Zhu", "Yuke", "Gao", "Julian", "Garg", "Animesh", "Fei-Fei", "Li", "Savarese", "Silvio"],
+    "venue": "In International Conference on Robotics and Automation,",
+    "year": 2018
+  }, {
+    "title": "Reinforcement learning neural turing machines-revised",
+    "authors": ["Zaremba", "Wojciech", "Sutskever", "Ilya"],
+    "venue": "arXiv preprint arXiv:1505.00521,",
+    "year": 2015
+  }],
+  "id": "SP:c35f8f48f748c040c33bbe1f21c794e209341987",
+  "authors": [{
+    "name": "Shao-Hua Sun",
+    "affiliations": []
+  }, {
+    "name": "Hyeonwoo Noh",
+    "affiliations": []
+  }, {
+    "name": "Sriram Somasundaram",
+    "affiliations": []
+  }, {
+    "name": "Joseph J. Lim",
+    "affiliations": []
+  }],
+  "abstractText": "Interpreting decision making logic in demonstration videos is key to collaborating with and mimicking humans. To empower machines with this ability, we propose a neural program synthesizer that is able to explicitly synthesize underlying programs from behaviorally diverse and visually complicated demonstration videos. We introduce a summarizer module as part of our model to improve the network’s ability to integrate multiple demonstrations varying in behavior. We also employ a multi-task objective to encourage the model to learn meaningful intermediate representations for end-to-end training. We show that our model is able to reliably synthesize underlying programs as well as capture diverse behaviors exhibited in demonstrations. The code is available at https://shaohua0116.github.io/demo2program.",
+  "title": "Neural Program Synthesis from Diverse Demonstration Videos"
+}

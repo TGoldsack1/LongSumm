@@ -1,0 +1,131 @@
+{
+  "sections": [{
+    "text": "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing, pages 2313–2318, Austin, Texas, November 1-5, 2016. c©2016 Association for Computational Linguistics"
+  }, {
+    "heading": "1 Introduction",
+    "text": "Transition-based parsing, one of the most prominent dependency parsing techniques, constructs a dependency structure by reading words sequentially from the sentence, and making a series of local decisions (called transitions) which incrementally build the structure. Transition-based parsing has been shown to be both fast and accurate; the number of transitions required to fully parse the sentence is linear relative to the number of words in the sentence.\nIn recent years, the field has seen dramatic improvements in the ability to correctly predict transitions. Recent models include the greedy StackLSTM model of Dyer et al. (2015) and the globally normalized feed-forward networks of Andor et al. (2016). These models output a local decision at each transition point, so searching the space of possible paths to the predicted tree is an important component of high-accuracy parsers.\nOne common search technique is beam search. (Zhang and Clark, 2008; Zhang and Nivre, 2011; Bohnet and Nivre, 2012; Zhou et al., 2015; Weiss et al., 2015; Yazdani and Henderson, 2015) In beamsearch, a fixed number of candidate transition sequences are generated, and the highest-scoring sequence is chosen as the answer. One downside to beam search is that it often results in a significant amount of wasted predictions. A constant number of beams are explored at all points throughout the sentence, leading to some unnecessary exploration towards the beginning of the sentence, and potentially insufficient exploration towards the end.\nOne way that this problem can be mitigated is by using a dynamically-sized beam (Mejia-Lavalle and Ramos, 2013). When using this technique, at each step, prune all beams whose scores are below some value s, where s is calculated based upon the distribution of scores of available beams. Common methods for pruning are removing all beams below some percentile, or any beams which scored below some constant percentage of the highest-scoring beam.\nAnother approach to solving this issue is given by Choi and McCallum (2013). They introduced selectional branching, which involves performing an initial greedy parse, and then using confidence estimates on each prediction to spawn additional beams. Relative to standard beam-search, this reduces the average number of predictions required to parse a sentence, resulting in a speed-up.\nIn this paper, we introduce heuristic backtracking, which expands on the ideas of selectional branching by integrating a search strategy based on a heuristic function (Pearl, 1984): a function which estimates\n2313\nthe future cost of taking a particular decision. When paired with a good heuristic, heuristic backtracking maintains the property of reducing wasted predictions, but allows us to more fully explore the space of possible transition sequences (as compared to selectional branching). In this paper, we use a heuristic based on the confidence of transition predictions.\nWe also introduce a new optimization: heuristic backtracking with cutoff. Since heuristic backtracking produces results incrementally, it is possible to stop the search early if we have found an answer that we believe to be the gold parse, saving time proportional to the number of backtracks remaining.\nWe compare the performance of these various decoding algorithms with the Stack-LSTM parser (Dyer et al., 2015), and achieve slightly higher accuracy than beam search, in significantly less time."
+  }, {
+    "heading": "2 Transition-Based Parsing With Stack-LSTM",
+    "text": "Our starting point is the model described by Dyer et al. (2015).1 The parser implements the arc-standard algorithm (Nivre, 2004) and it therefore makes use of a stack and a buffer. In (Dyer et al., 2015), the stack and the buffer are encoded with Stack-LSTMs, and a third sequence with the history of actions taken by the parser is encoded with another Stack-LSTM. The three encoded sequences form the parser state pt defined as follows,\npt = max {0,W[st;bt;at] + d} , (1)\nwhere W is a learned parameter matrix, bt, st and at are the stack LSTM encoding of buffer, stack and the history of actions, and d is a bias term. The output pt (after a component-wise rectified linear unit (ReLU) nonlinearity (Glorot et al., 2011)) is then used to compute the probability of the parser action at time t as:\np(zt | pt) = exp\n( g>ztpt + qzt ) ∑\nz′∈A(S,B) exp ( g>z′pt + qz′ ) , (2)\nwhere gz is a column vector representing the (output) embedding of the parser action z, and qz is a bias term for action z. The set A(S,B) represents\n1We refer to the original work for details.\nthe valid transition actions that may be taken in the current state. The objective function is:\nLθ(w, z) = |z|∑\nt=1\nlog p(zt | pt) (3)\nwhere z refers to parse transitions."
+  }, {
+    "heading": "3 Heuristic Backtracking",
+    "text": "Using the Stack-LSTM parsing model of Dyer et al. (2015) to predict each decision greedily yields very high accuracy; however, it can only explore one path, and it therefore can be improved by conducting a larger search over the space of possible parses. To do this, we introduce a new algorithm, heuristic backtracking. We also introduce a novel cutoff approach to further increase speed."
+  }, {
+    "heading": "3.1 Decoding Strategy",
+    "text": "We model the space of possible parses as a tree, where each node represents a certain parse state (with complete values for stack, buffer, and action history). Transitions connect nodes of the tree, and leaves of the tree represent final states.\nDuring the first iteration, we start at the root of the tree, and greedily parse until we reach a leaf. That is, for each node, we use the Stack-LSTM model to calculate scores for each transition (as described in Section 2), and then execute the highest-scoring transition, generating a child node upon which we repeat the procedure. Additionally, we save an ordered list of the transition scores, and calculate the confidence of the node (as described in Section 3.2).\nWhen we reach the leaf node, we backtrack to the location that is most likely to fix a mistake. To find this, we look at all explored nodes that still have at least one unexplored child, and choose the node with the lowest heuristic confidence (see Section 3.2). We rewind our stack, buffer, and action history to that state, and execute the highest-scoring transition from that node that has not yet been explored. At this point, we are again in a fully-unexplored node, and can greedily parse just as before until we reach another leaf.\nOnce we have generated b leaves, we score them all and return the transition sequence leading up to the highest-scoring leaf as the answer. Just as in previous studies (Collins and Roark, 2004), we use the\nsum of the log probabilities of all individual transitions as the overall score for the parse."
+  }, {
+    "heading": "3.2 Calculating Error Likelihood",
+    "text": "Let n indicate a node, which consists of a state, a buffer, and an action history. We may refer to a specific node as nji , which means it has i actions in its action history and it is part of the history of the jth leaf (and possibly subsequent leaves). Let the function T (n) represent a sorted vector containing all possible transitions from n, and S(n) represent a sorted vector containing the scores of all of these transitions, in terms of log probabilities of each score. We can index the scores in order of value, so T1(n) is the highest-scoring transition and S1(n) is its score, T2(n) is the second-highest-scoring transition, etc. Here, let un indicate the ranking of the transition leading to the first unexplored child of a node n. Also, let V (n) represent the total score of all nodes in the history of n, i.e. the sum of all the scores of individual transitions that allowed us to get to n.\nTo calculate the confidence of an individual node, Choi and McCallum (2013) simply found the score margin, or difference in probability between the topscoring transition and the second-highest scoring transition: C(n) = S1(n) − S2(n). In selectional branching, the only states for which the confidence was relevant were the states in the first greedy parse, i.e. states n1i for all i. For heuristic backtracking, we wish to generalize this to any state nji for all i and j.\nWe do this in the following way:\nH(nji ) = (V (n 1 i )− V (nji )) + (S(u\nn j i\n)−1(n j i ) + S(u\nn j i\n)(n j i ))\n(4) Intuitively, this formula means that the node that will be explored first is the node that will yield a parse that scores as close to the greedy choice as possible. The first term ensures that it has a history of good choices, and the second term ensures that the new child node being explored will be nearly as good as the prior child."
+  }, {
+    "heading": "3.3 Number of Predictions",
+    "text": "As discussed earlier, we use number of predictions made by the model as a proxy for the speed; execution speed may vary based on system and algorithmic implementation, but prediction count gives a good estimate of the overall work done by the algorithm.\nConsider a sentence of length l, which requires at most 2l transitions with the greedy decoder (Nivre, 2004). The number of predictions required for heuristic backtracking for b leaves is guaranteed to be less than or equal to a beam search with b beams.\nWhen doing a beam search, the first transition will require 1 prediction, and then every subsequent transition will require 1 prediction per beam, or b predictions. This results in a total of b(2l − 1) + 1 predictions.\nWhen doing heuristic backtracking, the first greedy search will require 2l predictions. Every\nsubsequent prediction will require a number of predictions dependent on the target of the backtrack: backtracking to nji will require 2l − (i + 1) predictions. Note that 0 < i < 2l. Thus, each backtrack will require at maximum 2l − 1 predictions. Therefore, the maximum total amount of predictions is 2l + (b− 1)(2l − 1) = b(2l − 1) + 1.\nHowever, note that on average, there are significantly fewer. Assuming that all parts of a sentence have approximately equal score distributions, the average backtrack will be where i = l, and reduce predictions by 50%.\nAn intuitive understanding of this difference can be gained by viewing the graphs of various decoding methods in Figure 1. Beam search has many nodes which never yield children that reach an end-state; dynamic beam search has fewer, but still several. Selectional branching has none, but suffers from the restriction that every parse candidate can be no more than one decision away from the greedy parse. With heuristic backtracking, there is no such restriction, but yet every node explored is directly useful for generating a candidate parse."
+  }, {
+    "heading": "3.4 Early Cutoff",
+    "text": "Another inefficiency inherent to beam search is the fact that all b beams are always fully explored. Since the beams are calculated in parallel, this is inevitable. However, with heuristic backtracking, the beams are calculated incrementally; this gives us the opportunity to cut off our search at any point. In order to leverage this into more efficient parsing, we constructed a second Stack-LSTM model, which we call the cutoff model. The cutoff model uses a single Stack-LSTM2 that takes as input the sequence of parser states (see Eq 1), and outputs a boolean variable predicting whether the entire parse is correct or incorrect.\nTo train the cutoff model, we used stochastic gradient descent over the training set. For each training example, we first parse it greedily using the StackLSTM parser. Then, for as long as the parse has at least one mistake, we pass it to the cutoff model as a negative training example. Once the parse is completely correct, we pass it to the cutoff model as a positive training example. The loss function that we\n22 layers and 300 dimensions.\nuse is:\nLθ = − log p(t | s) (5)\nwhere s is the LSTM encoded vector and t is the truth (parse correct/incorrect).\nWhen decoding using early cutoff, we follow the exact same procedure as for normal heuristic backtracking, but after every candidate parse is generated, we use it as input to our cutoff model. When our cutoff model returns our selection as correct, we stop backtracking and return it as the answer. If we make b attempts without finding a correct parse, we follow the same procedure as before."
+  }, {
+    "heading": "4 Experiments and Results",
+    "text": "To test the effectiveness of heuristic backtracking, we compare it with other decoding techniques: greedy, beam search,3, dynamic beam search (Mejia-Lavalle and Ramos, 2013), and selectional branching (Choi and McCallum, 2013). We then try heuristic backtracking (see Section 3.1), and heuristic backtracking with cutoff (see Section 3.4). Note that beam search was not used for early-update training (Collins and Roark, 2004). We use the same greedy training strategy for all models, and we only change the decoding strategy.\nWe tested the performance of these algorithms on the English SD and Chinese CTB.4 A single model was trained using the techniques described in Section 2, and used as the transition model for all decoding algorithms. Each decoding technique was tested with varying numbers of beams; as b increased, both the predictions per sentence and accuracy trended upwards. The results are summarized in Table 1.5 Note that we report results for only the highestaccuracy b (in the development set) for each.\nWe also report the results of the cutoff model in Table 2. The same greedily-trained model as above was used to generate candidate parses and confidence estimates for each transition, and then the cutoff model was trained to use these confidence esti-\n3Greedy and beam-search were already explored by Dyer et al. (2015)\n4Using the exact same settings as Dyer et al. (2015) with pretrained embeddings and part-of-speech tags.\n5The development sets are used to set the model parameters; results on the development sets are similar to the ones obtained in the test sets.\nmates to discriminate between correctly-parsed and incorrectly-parsed sentences."
+  }, {
+    "heading": "5 Discussion",
+    "text": "In Table 1 we see that in both English and Chinese, the best heuristic backtracking performs approximately as well as the best beam search, while making less than half the predictions. This supports our hypothesis that heuristic backtracking can perform at the same level as beam search, but with increased efficiency.\nDynamic beam search also performed as well as full beam search, despite demonstrating a reduction in predictions on par with that of heuristic backtracking. Since the implementation of dynamic beam search is very straightforward for systems which have already implemented beam search, we believe this will prove to be a useful finding.\nHeuristic backtracking with cutoff outperformed greedy decoding, and reduced transitions by an additional 50%. However, it increased accuracy slightly less than full heuristic backtracking. We believe this difference could be mitigated with an improved cutoff model; as can be seen in Table 2, the cutoff model was only able to discriminate between correct and incorrect parses around 75% of the time. Also, note that while predictions per sentence were low, the overall runtime was increased due to running the cutoff LSTM multiple times per sentence."
+  }, {
+    "heading": "6 Related Work",
+    "text": "Heuristic backtracking is most similar to the work of Choi and McCallum (2013), but is distinguished from theirs by allowing new beams to be initialized from any point in the parse, rather than only from points in the initial greedy parse. Heuristic backtracking also bears similarity to greedy-best-firstsearch (Pearl, 1984), but is unique in that it guarantees that b candidate solutions will be found within b(2l − 1) + 1 predictions. Our work also relates to beam-search parsers (Zhang and Clark, 2008, inter alia)."
+  }, {
+    "heading": "7 Conclusions",
+    "text": "We have introduced a novel decoding algorithm, called heuristic backtracking, and presented evidence that it performs at the same level as beam search for decoding, while being significantly more efficient. We have demonstrated this for both English and Chinese, using a parser with strong results with a greedy decoder. We expect that heuristic backtracking could be applied to any other transition-based parser with similar benefits.\nWe plan on experimenting with various heuristics and cutoff models, such as adapting the attentionbased models of Bahdanau et al. (2014) to act as a guide for both the heuristic search and cutoff."
+  }, {
+    "heading": "Acknowledgments",
+    "text": "Miguel Ballesteros was supported by the European Commission under the contract numbers FP7ICT-610411 (project MULTISENSOR) and H2020RIA-645012 (project KRISTINA)."
+  }],
+  "year": 2016,
+  "references": [{
+    "title": "Globally normalized transition-based neural networks",
+    "authors": ["Daniel Andor", "Chris Alberti", "David Weiss", "Aliaksei Severyn", "Alessandro Presta", "Kuzman Ganchev", "Slav Petrov", "Michael Collins."],
+    "venue": "CoRR, abs/1603.06042.",
+    "year": 2016
+  }, {
+    "title": "Neural machine translation by jointly learning to align and translate",
+    "authors": ["Dzmitry Bahdanau", "Kyunghyun Cho", "Yoshua Bengio."],
+    "venue": "CoRR, abs/1409.0473.",
+    "year": 2014
+  }, {
+    "title": "A transitionbased system for joint part-of-speech tagging and labeled non-projective dependency parsing",
+    "authors": ["Bernd Bohnet", "Joakim Nivre."],
+    "venue": "Proceedings of the 2012 Joint Conference on Empirical Methods in Natural Language Processing and Computa-",
+    "year": 2012
+  }, {
+    "title": "Transitionbased dependency parsing with selectional branching",
+    "authors": ["Jinho D. Choi", "Andrew McCallum."],
+    "venue": "Proceedings of the 51st Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1052–1062, Sofia, Bulgaria, Au-",
+    "year": 2013
+  }, {
+    "title": "Incremental parsing with the perceptron algorithm",
+    "authors": ["Michael Collins", "Brian Roark."],
+    "venue": "Proceedings of the 42Nd Annual Meeting on Association for Computational Linguistics, ACL ’04, Stroudsburg, PA, USA. Association for Computational Linguistics.",
+    "year": 2004
+  }, {
+    "title": "Transitionbased dependency parsing with stack long short-term memory",
+    "authors": ["Chris Dyer", "Miguel Ballesteros", "Wang Ling", "Austin Matthews", "Noah A. Smith."],
+    "venue": "Proceedings of the 53rd Annual Meeting of the Association for Computational Linguistics",
+    "year": 2015
+  }, {
+    "title": "Deep sparse rectifier neural networks",
+    "authors": ["Xavier Glorot", "Antoine Bordes", "Yoshua Bengio."],
+    "venue": "Proc. AISTATS.",
+    "year": 2011
+  }, {
+    "title": "Beam search with dynamic pruning for artificial intelligence hard problems",
+    "authors": ["Manuel Mejia-Lavalle", "Cesar Geovani Pereyra Ramos."],
+    "venue": "Proceedings of the 2013 International Conference on Mechatronics, Electronics and Automotive Engineering, November.",
+    "year": 2013
+  }, {
+    "title": "Incrementality in deterministic dependency parsing",
+    "authors": ["Joakim Nivre."],
+    "venue": "Proceedings of the Workshop on Incremental Parsing: Bringing Engineering and Cognition Together.",
+    "year": 2004
+  }, {
+    "title": "Heuristics: Intelligent Search Strategies for Computer Problem Solving",
+    "authors": ["Judea Pearl."],
+    "venue": "Addison-Wesley.",
+    "year": 1984
+  }, {
+    "title": "Structured training for neural network transition-based parsing",
+    "authors": ["David Weiss", "Chris Alberti", "Michael Collins", "Slav Petrov."],
+    "venue": "Proceedings of the 53rd Annual Meeting of the Association for Computational Linguistics and the 7th International Joint Conference",
+    "year": 2015
+  }, {
+    "title": "Incremental recurrent neural network dependency parser with search-based discriminative training",
+    "authors": ["Majid Yazdani", "James Henderson."],
+    "venue": "CoNLL, pages 142–152. ACL.",
+    "year": 2015
+  }, {
+    "title": "A tale of two parsers: Investigating and combining graph-based and transition-based dependency parsing using beamsearch",
+    "authors": ["Yue Zhang", "Stephen Clark."],
+    "venue": "Proceedings of the Conference on Empirical Methods in Natural Language Processing,",
+    "year": 2008
+  }, {
+    "title": "Transition-based dependency parsing with rich non-local features",
+    "authors": ["Yue Zhang", "Joakim Nivre."],
+    "venue": "Proceedings of the 49th Annual Meeting of the Association for Computational Linguistics: Human Language Technologies: Short Papers - Volume 2, HLT",
+    "year": 2011
+  }, {
+    "title": "A neural probabilistic structured-prediction model for transition-based dependency parsing",
+    "authors": ["Hao Zhou", "Yue Zhang", "Shujian Huang", "Jiajun Chen."],
+    "venue": "Proceedings of the 53rd Annual Meeting of the Association for Computational Linguistics and the 7th Inter-",
+    "year": 2015
+  }],
+  "id": "SP:6a932c699e8cc8fb8ef66642b3db701a5fa04c8b",
+  "authors": [{
+    "name": "Jacob Buckman",
+    "affiliations": []
+  }, {
+    "name": "Miguel Ballesteros",
+    "affiliations": []
+  }, {
+    "name": "Chris Dyer",
+    "affiliations": []
+  }],
+  "abstractText": "We introduce a novel approach to the decoding problem in transition-based parsing: heuristic backtracking. This algorithm uses a series of partial parses on the sentence to locate the best candidate parse, using confidence estimates of transition decisions as a heuristic to guide the starting points of the search. This allows us to achieve a parse accuracy comparable to beam search, despite using fewer transitions. When used to augment a Stack-LSTM transition-based parser, the parser shows an unlabeled attachment score of up to 93.30% for English and 87.61% for Chinese.",
+  "title": "Transition-Based Dependency Parsing with Heuristic Backtracking"
+}

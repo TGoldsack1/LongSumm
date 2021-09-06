@@ -1,0 +1,326 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Most deep reinforcement learning (RL) methods assume that the state of the environment is fully observable at every time step. However, this assumption often does not hold in reality, as occlusions and noisy sensors may limit the agent’s perceptual abilities. Such problems can be formalised as partially observable Markov decision processes (POMDPs) (Astrom, 1965; Kaelbling et al., 1998). Because we usually do not have access to the true generative model of our environment, there is a need for reinforcement learning methods that can tackle POMDPs when only a stream of observations is given, without any prior knowledge of the latent state space or the transition and observation functions.\nPOMDPs are notoriously hard to solve: since the current ob-\n1University of Oxford, United Kingdom 2University of British Columbia, Canada. Correspondence to: Maximilian Igl <maximilian.igl@eng.ox.ac.uk>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\n(a) RNN-based approach. The RNN acts as an encoder for the action-observation history, on which actor and critic are conditioned. The networks are updated end-to-end with an RL loss.\n(b) DVRL. The agent learns a generative model which is used to update a belief distribution. Actor and critic now condition on the belief. The generative model is learned to optimise both the ELBO and the RL loss.\nFigure 1: Comparison of RNN and DVRL encoders.\nservation does in general not carry all relevant information for choosing an action, information must be aggregated over time and in general, the entire history must be taken into account.\nThis history can be encoded either by remembering features of the past (McCallum, 1993) or by performing inference to determine the distribution over possible latent states (Kaelbling et al., 1998). However, the computation of this belief state requires knowledge of the model.\nMost previous work on deep learning in POMDPs relies on training a recurrent neural network (RNN) to summarise the past. Examples are the deep recurrent Q-network (DRQN) (Hausknecht & Stone, 2015) and the action-specific deep recurrent Q-network (ADRQN) (Zhu et al., 2017). Because these approaches are completely model-free, they place a heavy burden on the RNN. Since performing inference implicitly requires a known or learned model, they are likely to summarise the history either by only remembering features of the past or by computing simple heuristics instead of actual belief states. This is often suboptimal in complex tasks. Generalisation is also often easier over beliefs than\nover trajectories since distinct histories can lead to similar or identical beliefs.\nThe premise of this work is that deep policy learning for POMDPs can be improved by taking less of a black box approach than DRQN and ADRQN. While we do not want to assume prior knowledge of the transition and observation functions or the latent state representation, we want to allow the agent to learn models of them and infer the belief state using these learned models.\nTo this end, we propose DVRL, which implements this approach by providing a helpful inductive bias to the agent. In particular, we develop an algorithm that can learn an internal generative model and use it to perform approximate inference to update the belief state. Crucially, the generative model is not only learned based on an ELBO objective, but also by how well it enables maximisation of the expected return. This ensures that, unlike in an unsupervised application of variational autoencoders (VAEs), the latent state representation and the inference performed on it are suitable for the ultimate control task. Specifically, we develop an approximation to the ELBO based on autoencoding sequential Monte Carlo (AESMC) (Le et al., 2018), allowing joint optimisation with the n-step policy gradient update. Uncertainty in the belief state is captured by a particle ensemble. A high-level overview of our approach in comparison to previous RNN-based methods is shown in Figure 1.\nWe evaluate our approach on Mountain Hike and several flickering Atari games. On Mountain Hike (a low dimensional, continuous environment), we can show that DVRL is better than an RNN based approach at inferring the required information from past observations for optimal action selection in a simple setting. Our results on flickering Atari show that this advantage extends to complex environments with high dimensional observation spaces. Here, partial observability is introduced by (1) using only a single frame as input at each time step and (2) returning a blank screen instead of the true frame with probability 0.5."
+  }, {
+    "heading": "2. Background",
+    "text": "In this section, we formalise POMDPs and provide background on recent advances in VAEs that we use. Lastly, we describe the policy gradient loss based on n-step learning and A2C."
+  }, {
+    "heading": "2.1. Partially Observable Markov Decision Processes",
+    "text": "A partially observable Markov decision process (POMDP) is a tuple (S,A,O, F, U,R, b0), where S is the state space, A the action space, and O the observation space. We denote as st ∈ S the latent state at time t, and the distribution over initial states s0 as b0, the initial belief state. When an action at ∈ A is executed, the state changes accord-\ning to the transition distribution, st+1 ∼ F (st+1|st, at). Subsequently, the agent receives a noisy or partially occluded observation ot+1 ∈ O according to the distribution ot+1 ∼ U(ot+1|st+1, at), and a reward rt+1 ∈ R according to the distribution rt+1 ∼ R(rt+1|st+1, at).\nAn agent acts according to its policy π(at|o≤t, a<t) which returns the probability of taking action at at time t, and where o≤t = (o1, . . . , ot) and a<t = (a0, . . . , at−1) are the observation and action histories, respectively. The agent’s goal is to learn a policy π that maximises the expected future return\nJ = Ep(τ) [ T∑ t=1 γt−1rt ] , (1)\nover trajectories τ = (s0, a0, . . . , aT−1, sT ) induced by its policy1, where 0 ≤ γ < 1 is the discount factor. We follow the convention of setting a0 to no-op (Zhu et al., 2017).\nIn general, a POMDP agent must condition its actions on the entire history (o≤t, a<t) which grows exponentially in t. This can be accomplished by memory based approaches, for example by using suffix trees (McCallum & Ballard, 1996; Shani et al., 2005; Bellemare et al., 2014; Bellemare, 2015; Messias & Whiteson, 2017). However, those approaches are only suitable for small discrete observation spaces and suffer from large memory requirements.\nAlternatively, it is possible to infer the filtering distribution p(st|o≤t, a<t) =: bt, called the belief state. This is a sufficient statistic of the history that can be used as input to an optimal policy π?(at|bt). The belief space does not grow exponentially, but the belief update step requires knowledge of a model:\nbt+1 =\n∫ btU(ot+1|st+1, at)F (st+1|st, at)dst∫ ∫\nbtU(ot+1|st+1, at)F (st+1|st, at) dst dst+1 .\n(2)"
+  }, {
+    "heading": "2.2. Variational Autoencoder",
+    "text": "We define a family of priors pθ(s) over some latent state s and decoders pθ(o|s) over observations o, both parameterised by θ. A variational autoencoder (VAE) learns θ by maximising the sum of log marginal likelihood terms∑N n=1 log pθ(o\n(n)) for a dataset (o(n))Nn=1 where pθ(o) =∫ pθ(o|s)pθ(s) ds (Rezende et al., 2014; Kingma & Welling, 2014)) . Since evaluating the log marginal likelihood is intractable, the VAE instead maximises a sum of ELBOs where each individual ELBO term is a lower bound on the log marginal likelihood,\nELBO(θ, φ, o) = Eqφ(s|o)\n[ log\npθ(o|s)pθ(s) qφ(s|o)\n] , (3)\n1The trajectory length T is stochastic and depends on the time at which the agent-environment interaction ends.\nfor a family of encoders qφ(s|o) parameterised by φ. This objective also forces qφ(s|o) to approximate the posterior pθ(s|o) under the learned model. Gradients of (3) are estimated by Monte Carlo sampling with the reparameterisation trick (Kingma & Welling, 2014; Rezende et al., 2014)."
+  }, {
+    "heading": "2.3. VAE for Time Series",
+    "text": "For sequential data, we assume that a series of latent states s≤T gives rise to a series of observations o≤T . We consider a family of generative models parameterised by θ that consists of the initial distribution pθ(s0), transition distribution pθ(st|st−1) and observation distribution pθ(ot|st). Given a family of encoder distributions qφ(st|st−1, ot), we can also estimate the gradient of the ELBO term in the same manner as in (3), noting that:\npθ(s≤T , o≤T ) = pθ(s0) T∏ t=1 pθ(st|st−1)pθ(ot|st), (4)\nqφ(s≤T |o≤T ) = pθ(s0) T∏ t=1 qφ(st|st−1, ot), (5)\nwhere we slightly abuse notation for qφ by ignoring the fact that we sample from the model pθ(s0) for t = 0. Le et al. (2018), Maddison et al. (2017) and Naesseth et al. (2018) introduce a new ELBO objective based on sequential Monte Carlo (SMC) (Doucet & Johansen, 2009) that allows faster learning in time series:\nELBOSMC(θ, φ, o≤T ) = E [ T∑ t=1 log ( 1 K K∑ k=1 wkt )] , (6)\nwhere K is the number of particles and wkt is the weight of particle k at time t. Each particle is a tuple containing a weight wkt and a value s k t which is obtained as follows. Let sk0 be samples from pθ(s0) for k = 1, . . . ,K. For t = 1, . . . , T , the weights wkt are obtained by resampling the particle set (skt−1) K k=1 proportionally to the previous weights and computing\nwkt = pθ(s\nk t |s ukt−1 t−1 )pθ(ot|skt )\nqφ(skt |s ukt−1 t−1 , ot)\n, (7)\nwhere skt corresponds to a value sampled from qφ(·|s ukt−1 t−1 , ot) and s ukt−1 t−1 corresponds to the resampled particle with the ancestor index uk0 = k and ukt−1 ∼ Discrete((wkt−1/ ∑K j=1 w j t−1) K k=1) for t = 2, . . . , T ."
+  }, {
+    "heading": "2.4. A2C",
+    "text": "One way to learn the parameters ρ of an agent’s policy πρ(at|st) is to use n-step learning with A2C (Wu et al.,\n2017), the synchronous simplification of asynchronous advantage actor-critic (A3C) (Mnih et al., 2016). An actorcritic approach can cope with continuous actions and avoids the need to draw state-action sequences from a replay buffer. The method proposed in this paper is however equally applicable to other deep RL algorithms.\nFor n-step learning, starting at time t, the current policy performs ns consecutive steps in ne parallel environments. The gradient update is based on this mini-batch of size ne × ns. The target for the value-function Vη(st+i), i = 0, . . . , ns − 1, parameterised by η, is the appropriately discounted sum of on-policy rewards up until time t+ ns and the off-policy bootstrapped value V −η (st+ns). The minus sign denotes that no gradients are propagated through this value. Defining the advantage function as\nAt,iη (st+i, at+i) := ns−i−1∑ j=0 γjrt+i+j  + γns−iV −η (st+ns)− Vη(st+i) , (8)\nthe A2C loss for the policy parameters ρ at time t is\nLAt (ρ) = − 1\nnens ne∑\nenvs ns−1∑ i=0 log πρ(at+i|st+i)At,i,−η (st+i, at+i) , (9)\nand the value function loss to learn η can be written as\nLVt (η) = 1\nnens ne∑ envs ns−1∑ i=0 At,iη (st+i, at+i) 2. (10)\nLastly, an entropy loss is added to encourage exploration:\nLHt (ρ) = − 1\nnens ne∑ envs ns−1∑ i=0 H(πρ(·|st+i)), (11)\nwhere H(·) is the entropy of a distribution."
+  }, {
+    "heading": "3. Deep Variational Reinforcement Learning",
+    "text": "Fundamentally, there are two approaches to aggregating the history in the presence of partial observability: remembering features of the past or maintaining beliefs.\nIn most previous work, including ADRQN (Zhu et al., 2017), the current history (a≤t, o<t) is encoded by an RNN, which leads to the recurrent update equation for the latent state ht:\nht = RNNUpdateφ(ht−1, at−1, ot) . (12)\nSince this approach is model-free and does not make use of any generative model of the environment, it is unlikely to\napproximate belief update steps, instead relying on memory or simple heuristics.\nInspired by the premise that a good way to solve many POMDPs involves (1) estimating the transition and observation model of the environment, (2) performing inference under this model, and (3) choosing an action based on the inferred belief state, we propose deep variational reinforcement learning (DVRL). It extends the RNN-based approach to explicitly support belief inference. Training everything end-to-end shapes the learned model to be useful for the RL task at hand, and not only for predicting observations.\nWe first explain our baseline architecture and training method in Section 3.1. For a fair comparison, we modify the original architecture of Zhu et al. (2017) in several ways. We find that our new baseline outperforms their reported results in the majority of cases.\nIn Sections 3.2 and 3.3, we explain our new latent belief state b̂t and the recurrent update function\nb̂t = BeliefUpdateθ,φ(b̂t−1, at−1, ot) (13)\nwhich replaces Equation (12). Lastly, in Section 3.4, we describe our modified loss function, which allows learning the model jointly with the policy."
+  }, {
+    "heading": "3.1. Baseline Architecture",
+    "text": "We will compare DVRL to an RNN based encoder as shown in Figure 1. While previous work often used Q-learning to train the policy (Hausknecht & Stone, 2015; Zhu et al., 2017; Foerster et al., 2016; Narasimhan et al., 2015), we use n-step A2C. This avoids drawing entire trajectories from a replay buffer and allows continuous actions.\nFurthermore, since A2C interleaves unrolled trajectories and performs a parameter update only every ns steps, it makes it feasible to maintain an approximately correct latent state. A small bias is introduced by not recomputing the latent state after each gradient update step.\nWe also modify the implementation of backpropagationthrought-time (BPTT) for n-step A2C in the case of policies with latent states. Instead of backpropagating gradients only through the computation graph of the current update involving ns steps, we set the size of the computation graph independently to involve ng steps. This leads to an average BPTT-length of (ng − 1)/2.2 This decouples the biasvariance tradeoff of choosing ns from the bias-runtime tradeoff of choosing ng. Our experiments show that choosing ng > ns greatly improves the agent’s performance.\n2This is implemented in PyTorch using the retain graph=True flag in the backward() function."
+  }, {
+    "heading": "3.2. Extending the Latent State",
+    "text": "For DVRL, we extend the latent state to be a set of K particles, capturing the uncertainty in the belief state (Thrun, 2000; Silver & Veness, 2010). Each particle consists of the triplet (hkt , z k t , w k t ) (Chung et al., 2015). The value h k t of particle k is the latent state of an RNN; zkt is an additional stochastic latent state that allows us to learn stochastic transition models; and wkt assigns each particle an importance weight.\nOur belief state b̂t is thus an approximation of the posterior distribution in our learned model\npθ(h≤T , z≤T , o≤T |a<T ) = pθ(h0) T∏ t=1 ( pθ(zt|ht−1, at−1)\npθ(ot|ht−1, zt, at−1)δψRNNθ (ht−1,zt,at−1,ot)(ht) ) , (14)\nwith stochastic transition model pθ(zt|ht−1, at−1), decoder pθ(ot|ht−1, zt, at−1), and deterministic transition function ht = ψ RNN θ (ht−1, zt, at−1, ot) which is denoted using the Dirac delta distribution δ and for which we use an RNN. The model is trained to jointly optimise the ELBO and the expected return."
+  }, {
+    "heading": "3.3. Recurrent Latent State Update",
+    "text": "To update the latent state, we proceed as follows:\nukt−1 ∼ Discrete ( wkt−1∑K j=1 w j t−1 ) (15)\nzkt ∼ qφ(zkt |h ukt−1 t−1 , at−1, ot) (16)\nhkt = ψ RNN θ (h ukt−1 t−1 , z k t , at−1, ot) (17)\nwkt = pθ(z\nk t |h ukt−1 t−1 , at−1)pθ(ot|h ukt−1 t−1 , z k t , at−1)\nqφ(zkt |h ukt−1 t−1 , at−1, ot)\n. (18)\nFirst, we resample particles based on their weight by drawing ancestor indices ukt−1. This improves model learning (Le et al., 2018; Maddison et al., 2017) and allows us to train the model jointly with the n-step loss (see Section 3.4).\nFor k = 1, . . . ,K, new values for zkt are sampled from the encoder qφ(zkt |h ukt−1 t−1 , at−1, ot) which conditions on the resampled ancestor values h ukt−1 t−1 as well as the last actions at−1 and current observation ot. Latent variables zt are sampled using the reparameterisation trick. The values zkt , together with h ukt−1 t−1 , at−1 and ot, are then passed to the transition function ψRNNθ to compute h k t .\nThe weights wkt measure how likely each new latent state value (zkt , h k t ) is under the model and how well it explains the current observation.\nt−1 and use it to sample a new stochastic latent state z\nk\nt from the\nencoder qφ (Eq. 16). Compute hkt (Eq. 17) and wkt (Eq. 18). Aggregate all K values into the new belief b̂t and summarise them into a vector representation ĥt using a second RNN. Actor and critic can now condition on ĥt and b̂t is used as input for the next timestep. Red arrows denote random sampling, green arrows the aggregation of K values. Black solid arrows denote the passing of a value as argument to a function and black dashed ones the evaluation of a value under a distribution. Boxes indicate neural networks. Distributions are normal or Bernoulli distributions whose parameters are outputs of the neural network.\nTo condition the policy πρ and value function Vη on the belief b̂t = (zkt , h k t , w k t ) K k=1, we need to summarise the set of particles into a single vector representation ĥt. One option would be to copmute a weighted average over K policies and value functions that each take in a single particle value (zkt , h k t ) – this however would ignore the uncertainty in the latent state after the next action (Littman et al., 1995). Instead, we use a (second) RNN that sequentially takes in each tuple (zkt , h k t , w k t ) and outputs ĥt as its last latent state.\nAdditional encoders are used for at, ot and zt; see Appendix A for details. Figure 2 summarises the entire update step."
+  }, {
+    "heading": "3.4. Loss Function",
+    "text": "To encourage learning a model, we include the term\nLELBOt (θ, φ) = − 1\nnens ne∑ envs ns−1∑ i=0 log\n( 1\nK K∑ k=1 wkt+i ) (19)\nin each gradient update every ns steps. This leads to the overall loss:\nLDVRLt (ρ, η, θ, φ) = LAt (ρ, θ, φ) + λHLHt (ρ, θ, φ)+ λV LVt (η, θ, φ) + λELELBOt (θ, φ) . (20)\nCompared to (9), (10) and (11), the losses now also depend on the encoder parameters φ and model parameters θ, since the policy and value function now condition on the latent\nstates instead of st. By introducing the n-step approximation LELBOt , we can learn θ and φ to jointly optimise LELBOt and the RL loss LAt + λHLHt + λV LVt .\nIf we assume that observations and actions are drawn from the stationary state distribution induced by the policy πρ, then −LELBOt is a stochastic approximation to the actionconditioned ELBO:\n1 T Ep(τ) ELBOSMC(o≤T |a<T ) =\n1 T Ep(τ)E [ T∑ t=1 log ( 1 K K∑ k=1 wkt )∣∣∣∣∣ a≤T ] , (21)\nwhich is a conditional extension of Equation (6), similar to the extension of VAEs by Sohn et al. (2015). To make Equation (21) tractable, we approximate the expectation over p(τ) by using sampled trajectories from ne environments. Furthermore, because we assume a stationary state distribution, we can take the sum ∑T t=1 outside of both expectations. This allows us to perform a stochastic gradient update that is based on only ns summands instead of all T , leading to Equation (19) which includes an additional minus sign to account for its minimisation.\nThe importance of the resampling step (15) in allowing this approximation becomes clear if we compare (21) with the alternative ELBO for the importance weighted autoencoder (IWAE) (Doucet & Johansen, 2009; Burda et al., 2016) that\ndoes not include resampling:\nELBOIWAE(o≤T |a<T ) = E [ log ( 1\nK K∑ k=1 T∏ t=1 wkt )∣∣∣∣∣ a≤T ] .\n(22) Here, the product over time and summation over particles are swapped. Because this loss is not additive over time anymore, we cannot approximate it with shorter parts of the trajectory. This prevents joint optimisation with the RL loss."
+  }, {
+    "heading": "4. Related Work",
+    "text": "Most existing POMDP literature focusses on planning algorithms, where the transition and observation functions, as well as a representation of the latent state space, are known (Barto et al., 1995; McAllester & Singh, 1999; Pineau et al., 2003; Ross et al., 2008; Oliehoek et al., 2008; Roijers et al., 2015). In most realistic domains however, these are not known a priori.\nThere are several approaches that utilise RNNs in POMDPs (Bakker, 2002; Wierstra et al., 2007; Zhang et al., 2015; Heess et al., 2015), including multi-agent settings (Foerster et al., 2016), learning text-based fantasy games (Narasimhan et al., 2015) or, most recently, applied to Atari (Hausknecht & Stone, 2015; Zhu et al., 2017). As discussed in Section 3, our algorithm extends those approaches by enabling the policy to explicitly reason about a model and the belief state.\nAnother more specialised approach called QMDP-Net (Karkus et al., 2017) learns a value iteration network (VIN) (Tamar et al., 2016) end-to-end and uses it as a transition model for planning. However, a VIN makes strong assumptions about the transition function and in QMDP-Net the belief update must be performed analytically.\nThe idea to learn a particle filter based policy that is trained using policy gradients was previously proposed by Coquelin et al. (2009). However, they assume a known model and rely on finite differences for gradient estimation.\nInstead of optimising an ELBO to learn a maximumlikelihood approximation for the latent representation and corresponding transition and observation model, previous work also tried to learn those dynamics using spectral methods (Azizzadenesheli et al., 2016), a Bayesian approach (Ross et al., 2011; Katt et al., 2017), or nonparametrically (Doshi-Velez et al., 2015). However, these approaches do not scale to large or continuous state and observation spaces. For continuous states, actions, and observations with Gaussian noise, a Gaussian process model can be learned (Deisenroth & Peters, 2012). An alternative to learning an (approximate) transition and observation model is to learn a model over trajectories (Willems et al., 1995). However, this is again only possible for small, discrete observation spaces.\nDue to the complexity of the learning in POMDPs, previous work already found benefits to using auxiliary losses. Unlike the losses proposed by Lample & Chaplot (2017), we do not require additional information from the environment. The UNREAL agent (Jaderberg et al., 2016) is, similarly to our work, motivated by the idea to improve the latent representation by utilising all the information already obtained from the environment. While their work focuses on finding unsupervised auxiliary losses that provide good training signals, our goal is to use the auxiliary loss to better align the network computations with the task at hand by incorporating prior knowledge as an inductive bias.\nThere is some evidence from recent experiments on the dopamine system in mice (Babayan et al., 2018) showing that their response to ambiguous information is consistent with a theory operating on belief states."
+  }, {
+    "heading": "5. Experiments",
+    "text": "We evaluate DVRL on Mountain Hike and on flickering Atari. We show that DVRL deals better with noisy or partially occluded observations and that this scales to high dimensional and continuous observation spaces like images and complex tasks. We also perform a series of ablation studies, showing the importance of using many particles, including the ELBO training objective in the loss function, and jointly optimising the ELBO and RL losses.\nMore details about the environments and model architectures can be found in Appendix A together with additional results and visualisations. All plots and reported results are smoothed over time and parallel executed environments. We average over five random seeds, with shaded areas indicating the standard deviation. All RNNs are gated recurrent units (GRUs) (Cho et al., 2014)."
+  }, {
+    "heading": "5.1. Mountain Hike",
+    "text": "In this task, the agent has to navigate along a mountain ridge, but only receives noisy measurements of its current location. Specifically, we have S = O = A = R2 where st = [xt, yt]\nT ∈ S and ot = [x̂t, ŷt]T ∈ O are true and observed coordinates respectively and at = [∆xt,∆yt]T ∈ A is the desired step. Transitions are given by st+1 = st+ ãt+ s,t with s,t ∼ N (·|0, 0.25 ·I) and ãt is the vector at with length capped to ‖ãt‖ ≤ 0.5. Observations are noisy with ot = st+ o,t with o,t ∼ N (·|0, σo ·I) and σo ∈ {0, 1.5, 3}. The reward at each timestep isRt = r(xt, yt)− 0.01‖at‖ where r(xt, yt) is shown in Figure 3. The starting position is sampled from s0 ∼ N (·|[−8.5,−8.5]T , I) and each episode ends after 75 steps.\nDVRL used 30 particles and we set ng = 25 for both RNN and DVRL. The latent state h for the RNN-encoder architecture was of dimension 256 and 128 for both z and h for\nDVRL. Lastly, λE = 1 and ns = 5 were used, together with RMSProp with a learning rate of 10−4 for both approaches.\nThe main difficulty in Mountain Hike is to correctly estimate the current position. Consequently, the achieved return reflects the capability of the network to do so. DVRL outperforms RNN based policies, especially for higher levels of observation noise σo (Figure 4). In Figure 3 we compare the different trajectories for RNN and DVRL encoders for the same noise, i.e. RNNs,t = DVRL s,t and RNN o,t = DVRL o,t for all t and σo = 3. DVRL is better able to follow the mountain ridge, indicating that its inference based history aggregation is superior to a largely memory/heuristics based one.\nThe example in Figure 3 is representative but selected for clarity: The shown trajectories have ∆J(σo = 3) = 20.7 compared to an average value of ∆J̄(σo = 3) = 11.43 (see Figure 4)."
+  }, {
+    "heading": "5.2. Atari",
+    "text": "We chose flickering Atari as evaluation benchmark, since it was previously used to evaluate the performance of ADRQN (Zhu et al., 2017) and DRQN (Hausknecht & Stone, 2015). Atari environments (Bellemare et al., 2013) provide a wide set of challenging tasks with high dimensional observation spaces. We test our algorithm on the same subset of games on which DRQN and ADRQN were evaluated.\nPartial observability is introduced by flickering, i.e., by a probability of 0.5 of returning a blank screen instead of the actual observation. Furthermore, only one frame is used as the observation. This is in line with previous work (Hausknecht & Stone, 2015). We use a frameskip of four3\n3A frameskip of one is used for Asteroids due to known ren-\nand for the stochastic Atari environments there is a 0.25 chance of repeating the current action for a second time at each transition.\nDVRL used 15 particles and we set ng = 50 for both agents. The dimension of h was 256 for both architectures, as was the dimension of z. Larger latent states decreased the performance for the RNN encoder. Lastly, λE = 0.1 and ns = 5 was used with a learning rate of 10−4 for RNN and 2 · 10−4 for DVRL, selected out of a set of 6 different rates based on the results on ChopperCommand.\nTable 1 shows the results for the more challenging stochastic, flickering environments. Results for the deterministic environments, including returns reported for DRQN and ADRQN, can be found in Appendix A. DVRL significantly outperforms the RNN-based policy on five out of ten games and narrowly underperforms significantly on only one. This shows that DVRL is viable for high dimensional observation spaces with complex environmental models."
+  }, {
+    "heading": "5.3. Ablation Studies",
+    "text": "Using more than one particle is important to accurately approximate the belief distribution over the latent state (z, h). Consequently, we expect that higher particle numbers provide better information to the policy, leading to higher returns. Figure 5a shows that this is indeed the case. This is an important result for our architecture, as it also implies that the resampling step is necessary, as detailed in Section 3.4. Without resampling, we cannot approximate the ELBO on only ns observations.\ndering issues with this environment\n0 2 4\nFrames ×107\n2000\n4000\n6000\nR et\nu rn\n1 Particle 3 Particles 10 Particles 30 Particles\n(a) Influence of the particle number on performance for DVRL. Only using one particle is not sufficient to encode enough information in the latent state.\n0 2 4\nFrames ×107\n2000\n4000\n6000\nR et\nu rn\nDVRL No joint optim No ELBO\n(b) Performance of the full DVRL algorithm compared to setting λE = 0 (”No ELBO”) or not backpropagating the policy gradients through the encoder (”No joint optim”).\n0 2 4\nFrames ×107\n2000\n4000\n6000\n8000\nR et\nu rn\nDVRL RNN ng = 5 ng = 50 ng = 150\n(c) Influence of the maximum backpropagation length ng on performance. Note that RNN suffers most from very short lengths. This is consistent with our conjecture that RNN relies mostly on memory, not inference.\nFigure 5: Ablation studies on flickering ChopperCommand (Atari).\nSecondly, Figure 5b shows that the inclusion of LELBO to encourage model learning is required for good performance. Furthermore, not backpropagating the policy gradients through the encoder and only learning it based on the ELBO (“No joint optim”) also deteriorates performance.\nLastly, we investigate the influence of the backpropagation length ng on both the RNN and DVRL based policies. While increasing ng universally helps, the key insight here is that a short length ng = 5 (for an average BPTT-length of 2 timesteps) has a stronger negative impact on RNN than on DVRL. This is consistent with our notion that RNN is mainly performing memory based reasoning, for which longer backpropagation-through-time is required: The belief update (2) in DVRL is a one-step update from bt to bt+1, without the need to condition on past actions and observa-\ntions. The proposal distribution can benefit from extended backpropagation lengths, but this is not necessary. Consequently, this result supports our notion that DVRL relies more on inference computations to update the latent state."
+  }, {
+    "heading": "6. Conclusion",
+    "text": "In this paper we proposed DVRL, a method for solving POMDPs given only a stream of observations, without knowledge of the latent state space or the transition and observation functions operating in that space. Our method leverages a new ELBO-based auxiliary loss and incorporates an inductive bias into the structure of the policy network, taking advantage of our prior knowledge that an inference step is required for an optimal solution.\nWe compared DVRL to an RNN-based architecture and found that we consistently outperform it on a diverse set of tasks, including a number of Atari games modified to have partial observability and stochastic transitions.\nWe also performed several ablation studies showing the necessity of using an ensemble of particles and of joint optimisation of the ELBO and RL objective. Furthermore, the results support our claim that the latent state in DVRL approximates a belief distribution in a learned model.\nAccess to a belief distribution opens up several interesting research directions. Investigating the role of better generalisation capabilities and the more powerful latent state representation on the policy performance of DVRL can give rise to further improvements. DVRL is also likely to benefit from more powerful model architectures and a disentangled latent state. Furthermore, uncertainty in the belief state and access to a learned model can be used for curiosity driven exploration in environments with sparse rewards."
+  }, {
+    "heading": "Acknowledgements",
+    "text": "We would like to thank Wendelin Boehmer and Greg Farquhar for useful discussions and feedback. The NVIDIA DGX-1 used for this research was donated by the NVIDIA corporation. M. Igl is supported by the UK EPSRC CDT in Autonomous Intelligent Machines and Systems. L. Zintgraf is supported by the Microsoft Research PhD Scholarship Program. T. A. Le is supported by EPSRC DTA and Google (project code DF6700) studentships. F. Wood is supported by DARPA PPAML through the U.S. AFRL under Cooperative Agreement FA8750-14-2-0006; Intel and DARPA D3M, under Cooperative Agreement FA8750-17-2-0093. S. Whiteson is supported by the European Research Council (ERC) under the European Union’s Horizon 2020 research and innovation programme (grant agreement number 637713)."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Optimal control of markov decision processes with incomplete state estimation",
+    "authors": ["K.J. Astrom"],
+    "venue": "Journal of mathematical analysis and applications,",
+    "year": 1965
+  }, {
+    "title": "Reinforcement learning of pomdps using spectral methods",
+    "authors": ["K. Azizzadenesheli", "A. Lazaric", "A. Anandkumar"],
+    "venue": "In Proceedings of the 29th Annual Conference on Learning Theory (COLT2016),",
+    "year": 2016
+  }, {
+    "title": "Belief state representation in the dopamine system",
+    "authors": ["B.M. Babayan", "N. Uchida", "S.J. Gershman"],
+    "venue": "Nature communications,",
+    "year": 2018
+  }, {
+    "title": "Reinforcement learning with long short-term memory",
+    "authors": ["B. Bakker"],
+    "venue": "In Advances in neural information processing systems,",
+    "year": 2002
+  }, {
+    "title": "Learning to act using real-time dynamic programming",
+    "authors": ["A.G. Barto", "S.J. Bradtke", "S.P. Singh"],
+    "venue": "Artificial intelligence,",
+    "year": 1995
+  }, {
+    "title": "Skip context tree switching",
+    "authors": ["M. Bellemare", "J. Veness", "E. Talvitie"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2014
+  }, {
+    "title": "Count-based frequency estimation with bounded memory",
+    "authors": ["M.G. Bellemare"],
+    "venue": "In Twenty-Fourth International Joint Conference on Artificial Intelligence,",
+    "year": 2015
+  }, {
+    "title": "The arcade learning environment: An evaluation platform for general agents",
+    "authors": ["M.G. Bellemare", "Y. Naddaf", "J. Veness", "M. Bowling"],
+    "venue": "Journal of Artificial Intelligence Research,",
+    "year": 2013
+  }, {
+    "title": "Importance weighted autoencoders",
+    "authors": ["Y. Burda", "R. Grosse", "R. Salakhutdinov"],
+    "venue": "In ICLR,",
+    "year": 2016
+  }, {
+    "title": "On the properties of neural machine translation: Encoderdecoder approaches",
+    "authors": ["K. Cho", "B. Van Merriënboer", "D. Bahdanau", "Y. Bengio"],
+    "venue": "arXiv preprint arXiv:1409.1259,",
+    "year": 2014
+  }, {
+    "title": "A recurrent latent variable model for sequential data",
+    "authors": ["J. Chung", "K. Kastner", "L. Dinh", "K. Goel", "A.C. Courville", "Y. Bengio"],
+    "venue": "In Advances in neural information processing systems,",
+    "year": 2015
+  }, {
+    "title": "Particle filterbased policy gradient in pomdps",
+    "authors": ["Coquelin", "P.-A", "R. Deguest", "R. Munos"],
+    "venue": "In NIPS,",
+    "year": 2009
+  }, {
+    "title": "Solving nonlinear continuous state-action-observation pomdps for mechanical systems with gaussian noise",
+    "authors": ["M.P. Deisenroth", "J. Peters"],
+    "year": 2012
+  }, {
+    "title": "Bayesian nonparametric methods for partially-observable reinforcement learning",
+    "authors": ["F. Doshi-Velez", "D. Pfau", "F. Wood", "N. Roy"],
+    "venue": "IEEE transactions on pattern analysis and machine intelligence,",
+    "year": 2015
+  }, {
+    "title": "A tutorial on particle filtering and smoothing",
+    "authors": ["A. Doucet", "A.M. Johansen"],
+    "venue": "Fifteen years later. Handbook of nonlinear filtering,",
+    "year": 2009
+  }, {
+    "title": "Learning to communicate to solve riddles with deep distributed recurrent q-networks",
+    "authors": ["J.N. Foerster", "Y.M. Assael", "N. de Freitas", "S. Whiteson"],
+    "venue": "arXiv preprint 1602.02672,",
+    "year": 2016
+  }, {
+    "title": "Deep recurrent q-learning for partially observable MDPs",
+    "authors": ["M. Hausknecht", "P. Stone"],
+    "venue": "In 2015 AAAI Fall Symposium Series,",
+    "year": 2015
+  }, {
+    "title": "Memorybased control with recurrent neural networks",
+    "authors": ["N. Heess", "J.J. Hunt", "T.P. Lillicrap", "D. Silver"],
+    "venue": "arXiv preprint 1512.04455,",
+    "year": 2015
+  }, {
+    "title": "Reinforcement learning with unsupervised auxiliary tasks",
+    "authors": ["M. Jaderberg", "V. Mnih", "W.M. Czarnecki", "T. Schaul", "J.Z. Leibo", "D. Silver", "K. Kavukcuoglu"],
+    "venue": "arXiv preprint 1611.05397,",
+    "year": 2016
+  }, {
+    "title": "Planning and acting in partially observable stochastic domains",
+    "authors": ["L.P. Kaelbling", "M.L. Littman", "A.R. Cassandra"],
+    "venue": "Artificial intelligence,",
+    "year": 1998
+  }, {
+    "title": "Qmdp-net: Deep learning for planning under partial observability",
+    "authors": ["P. Karkus", "D. Hsu", "W.S. Lee"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2017
+  }, {
+    "title": "Learning in pomdps with monte carlo tree search",
+    "authors": ["S. Katt", "F.A. Oliehoek", "C. Amato"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2017
+  }, {
+    "title": "Auto-encoding variational Bayes",
+    "authors": ["D.P. Kingma", "M. Welling"],
+    "venue": "In ICLR,",
+    "year": 2014
+  }, {
+    "title": "Playing fps games with deep reinforcement learning",
+    "authors": ["G. Lample", "D.S. Chaplot"],
+    "venue": "In AAAI,",
+    "year": 2017
+  }, {
+    "title": "Autoencoding sequential Monte Carlo",
+    "authors": ["T.A. Le", "M. Igl", "T. Jin", "T. Rainforth", "F. Wood"],
+    "venue": "In ICLR,",
+    "year": 2018
+  }, {
+    "title": "Learning policies for partially observable environments: Scaling up",
+    "authors": ["M.L. Littman", "A.R. Cassandra", "L.P. Kaelbling"],
+    "venue": "In Machine Learning Proceedings",
+    "year": 1995
+  }, {
+    "title": "Filtering variational objectives",
+    "authors": ["C.J. Maddison", "J. Lawson", "G. Tucker", "N. Heess", "M. Norouzi", "A. Mnih", "A. Doucet", "Y. Teh"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2017
+  }, {
+    "title": "Approximate planning for factored pomdps using belief state simplification",
+    "authors": ["D.A. McAllester", "S. Singh"],
+    "venue": "In Proceedings of the Fifteenth conference on Uncertainty in artificial intelligence,",
+    "year": 1999
+  }, {
+    "title": "Reinforcement learning with selective perception and hidden state",
+    "authors": ["A.K. McCallum", "D. Ballard"],
+    "venue": "PhD thesis, University of Rochester. Dept. of Computer Science,",
+    "year": 1996
+  }, {
+    "title": "Overcoming incomplete perception with utile distinction memory",
+    "authors": ["R.A. McCallum"],
+    "venue": "In Proceedings of the Tenth International Conference on Machine Learning,",
+    "year": 1993
+  }, {
+    "title": "Dynamic-depth context tree weighting",
+    "authors": ["J.V. Messias", "S. Whiteson"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2017
+  }, {
+    "title": "Asynchronous methods for deep reinforcement learning",
+    "authors": ["V. Mnih", "A.P. Badia", "M. Mirza", "A. Graves", "T. Lillicrap", "T. Harley", "D. Silver", "K. Kavukcuoglu"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2016
+  }, {
+    "title": "Variational sequential monte carlo",
+    "authors": ["C.A. Naesseth", "S.W. Linderman", "R. Ranganath", "D.M. Blei"],
+    "venue": "In AISTATS (To Appear),",
+    "year": 2018
+  }, {
+    "title": "Language understanding for text-based games using deep reinforcement learning",
+    "authors": ["K. Narasimhan", "T. Kulkarni", "R. Barzilay"],
+    "venue": "arXiv preprint 1506.08941,",
+    "year": 2015
+  }, {
+    "title": "Exploiting locality of interaction in factored dec-pomdps",
+    "authors": ["F.A. Oliehoek", "M.T. Spaan", "S. Whiteson", "N. Vlassis"],
+    "venue": "In Proceedings of the 7th international joint conference on Autonomous agents and multiagent systems-Volume",
+    "year": 2008
+  }, {
+    "title": "Point-based value iteration: An anytime algorithm for pomdps",
+    "authors": ["J. Pineau", "G. Gordon", "S Thrun"],
+    "venue": "In IJCAI,",
+    "year": 2003
+  }, {
+    "title": "Stochastic backpropagation and approximate inference in deep generative models",
+    "authors": ["D.J. Rezende", "S. Mohamed", "D. Wierstra"],
+    "venue": "In ICML,",
+    "year": 2014
+  }, {
+    "title": "Pointbased planning for multi-objective pomdps",
+    "authors": ["D.M. Roijers", "S. Whiteson", "F.A. Oliehoek"],
+    "venue": "In IJCAI, pp",
+    "year": 2015
+  }, {
+    "title": "Online planning algorithms for pomdps",
+    "authors": ["S. Ross", "J. Pineau", "S. Paquet", "B. Chaib-Draa"],
+    "venue": "Journal of Artificial Intelligence Research,",
+    "year": 2008
+  }, {
+    "title": "A bayesian approach for learning and planning in partially observable markov decision processes",
+    "authors": ["S. Ross", "J. Pineau", "B. Chaib-draa", "P. Kreitmann"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2011
+  }, {
+    "title": "Model-based online learning of pomdps",
+    "authors": ["G. Shani", "R.I. Brafman", "S.E. Shimony"],
+    "venue": "In European Conference on Machine Learning,",
+    "year": 2005
+  }, {
+    "title": "Monte-carlo planning in large pomdps",
+    "authors": ["D. Silver", "J. Veness"],
+    "venue": "In Advances in neural information processing systems,",
+    "year": 2010
+  }, {
+    "title": "Learning structured output representation using deep conditional generative models",
+    "authors": ["K. Sohn", "H. Lee", "X. Yan"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2015
+  }, {
+    "title": "Value iteration networks",
+    "authors": ["A. Tamar", "Y. Wu", "G. Thomas", "S. Levine", "P. Abbeel"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2016
+  }, {
+    "title": "Monte carlo pomdps",
+    "authors": ["S. Thrun"],
+    "venue": "In Advances in neural information processing systems,",
+    "year": 2000
+  }, {
+    "title": "Solving deep memory pomdps with recurrent policy gradients",
+    "authors": ["D. Wierstra", "A. Foerster", "J. Peters", "J. Schmidhuber"],
+    "venue": "In International Conference on Artificial Neural Networks,",
+    "year": 2007
+  }, {
+    "title": "The context-tree weighting method: basic properties",
+    "authors": ["F.M. Willems", "Y.M. Shtarkov", "T.J. Tjalkens"],
+    "venue": "IEEE Transactions on Information Theory,",
+    "year": 1995
+  }, {
+    "title": "Scalable trust-region method for deep reinforcement learning using Kronecker-factored approximation",
+    "authors": ["Y. Wu", "E. Mansimov", "R.B. Grosse", "S. Liao", "J. Ba"],
+    "venue": "In Advances in neural information processing systems,",
+    "year": 2017
+  }, {
+    "title": "Policy learning with continuous memory states for partially observed robotic control",
+    "authors": ["M. Zhang", "S. Levine", "Z. McCarthy", "C. Finn", "P. Abbeel"],
+    "year": 2015
+  }, {
+    "title": "On improving deep reinforcement learning for POMDPs",
+    "authors": ["P. Zhu", "X. Li", "P. Poupart"],
+    "venue": "arXiv preprint 1704.07978,",
+    "year": 2017
+  }],
+  "id": "SP:ad0a1b0991a9150b765c2a45eb2b368702b35cd1",
+  "authors": [{
+    "name": "Maximilian Igl",
+    "affiliations": []
+  }, {
+    "name": "Luisa Zintgraf",
+    "affiliations": []
+  }, {
+    "name": "Tuan Anh Le",
+    "affiliations": []
+  }, {
+    "name": "Frank Wood",
+    "affiliations": []
+  }, {
+    "name": "Shimon Whiteson",
+    "affiliations": []
+  }],
+  "abstractText": "Many real-world sequential decision making problems are partially observable by nature, and the environment model is typically unknown. Consequently, there is great need for reinforcement learning methods that can tackle such problems given only a stream of rewards and incomplete and noisy observations. In this paper, we propose deep variational reinforcement learning (DVRL), which introduces an inductive bias that allows an agent to learn a generative model of the environment and perform inference in that model to effectively aggregate the available information. We develop an n-step approximation to the evidence lower bound (ELBO), allowing the model to be trained jointly with the policy. This ensures that the latent state representation is suitable for the control task. In experiments on Mountain Hike and flickering Atari we show that our method outperforms previous approaches relying on recurrent neural networks to encode the past.",
+  "title": "Deep Variational Reinforcement Learning for POMDPs"
+}

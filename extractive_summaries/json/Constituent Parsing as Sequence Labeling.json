@@ -1,0 +1,235 @@
+{
+  "sections": [{
+    "heading": "1 Introduction",
+    "text": "Constituent parsing is a core problem in NLP where the goal is to obtain the syntactic structure of sentences expressed as a phrase structure tree.\nTraditionally, constituent-based parsers have been built relying on chart-based, statistical models (Collins, 1997; Charniak, 2000; Petrov et al., 2006), which are accurate but slow, with typical speeds well below 10 sentences per second on modern CPUs (Kummerfeld et al., 2012).\nSeveral authors have proposed more efficient approaches which are helpful to gain speed while preserving (or even improving) accuracy. Sagae and Lavie (2005) present a classifier for constituency parsing that runs in linear time by relying on a shift-reduce stack-based algorithm, instead of a grammar. It is essentially an extension of transition-based dependency parsing\n1This is a revision with improved results of our paper originally published in EMNLP 2018. The previous version contained a bug where the script EVALB was not considering the COLLINS.prm parameter file.\n(Nivre, 2003). This line of research has been polished through the years (Wang et al., 2006; Zhu et al., 2013; Dyer et al., 2016; Liu and Zhang, 2017; Fernández-González and GómezRodrı́guez, 2018).\nWith an aim more related to our work, other authors have reduced constituency parsing to tasks that can be solved faster or in a more generic way. Fernández-González and Martins (2015) reduce phrase structure parsing to dependency parsing. They propose an intermediate representation where dependency labels from a head to its dependents encode the nonterminal symbol and an attachment order that is used to arrange nodes into constituents. Their approach makes it possible to use off-the-shelf dependency parsers for constituency parsing. In a different line, Vinyals et al. (2015) address the problem by relying on a sequence-to-sequence model where trees are linearized in a depth-first traversal order. Their solution can be seen as a machine translation model that maps a sequence of words into a parenthesized version of the tree. Choe and Charniak (2016) recast parsing as language modeling. They train a generative parser that obtains the phrasal structure of sentences by relying on the Vinyals et al. (2015) intuition and on the Zaremba et al. (2014) model to build the basic language modeling architecture.\nMore recently, Shen et al. (2018) propose an architecture to speed up the current state-of-theart chart parsers trained with deep neural networks (Stern et al., 2017; Kitaev and Klein, 2018). They introduce the concept of syntactic distances, which specify the order in which the splitting points of a sentence will be selected. The model learns to predict such distances, to then recursively partition the input in a top-down fashion.\nContribution We propose a method to transform constituent parsing into sequence labeling.\n1314 Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 1314–1324\nBrussels, Belgium, October 31 - November 4, 2018. c©2018 Association for Computational Linguistics\nThis reduces it to the complexity of tasks such as part-of-speech (PoS) tagging, chunking or namedentity recognition. The contribution is two-fold.\nFirst, we describe a method to linearize a tree into a sequence of labels (§2) of the same length of the sentence minus one.2 The label generated for each word encodes the number of common ancestors in the constituent tree between that word and the next, and the nonterminal symbol associated with the lowest common ancestor. We prove that the encoding function is injective for any tree without unary branchings. After applying collapsing techniques, the method can parse unary chains.\nSecond, we use such encoding to present different baselines that can effectively predict the structure of sentences (§3). To do so, we rely on a recurrent sequence labeling model based on BILSTM’s (Hochreiter and Schmidhuber, 1997; Yang and Zhang, 2018). We also test other models inspired in classic approaches for other tagging tasks (Schmid, 1994; Sha and Pereira, 2003). We use the Penn Treebank (PTB) and the Penn Chinese Treebank (CTB) as testbeds.\nThe comparison against Vinyals et al. (2015), the closest work to ours, shows that our method is able to train more accurate parsers. This is in spite of the fact that our approach addresses constituent parsing as a sequence labeling problem, which is simpler than a sequence-to-sequence problem, where the output sequence has variable/unknown length. Despite being the first sequence labeling method for constituent parsing, our baselines achieve decent accuracy results in comparison to models coming from mature lines of research, and their speeds are the fastest reported to our knowledge.\n2 Linearization of n-ary trees\nNotation and Preliminaries In what follows, we use bold style to refer to vectors and matrices (e.g x and W). Let w=[w1, w2, ..., w|w|] be an input sequence of words, where wi ∈ V . Let T|w| be the set of constituent trees with |w| leaf nodes that have no unary branches. For now, we will assume that the constituent parsing problem consists in mapping each sentence w to a tree in T|w|, i.e., we assume that correct parses have no unary branches. We will deal with unary branches later.\nTo reduce the problem to a sequence labeling\n2A last dummy label is generated to fulfill the properties of sequence labeling tasks.\ntask, we define a set of labels L that allows us to encode each tree in T|w| as a unique sequence of labels in L(|w|−1), via an encoding function Φ|w| : T|w| → L(|w|−1). Then, we can reduce the constituent parsing problem to a sequence labeling task where the goal is to predict a function F|w|,θ : V\n|w| → L|w|−1, where θ are the parameters to be learned. To parse a sentence, we label it and then decode the resulting label sequence into a constituent tree, i.e., we apply F|w|,θ ◦ Φ−1|w|.\nFor the method to be correct, we need the encoding of trees to be complete (every tree in T|w| must be expressible as a label sequence, i.e., Φ|w| must be a function, so we have full coverage of constituent trees) and injective (so that the inverse function Φ−1|w| is well-defined). Surjectivity is also desirable, so that the inverse is a function on L|w|−1, and the parser outputs a tree for any sequence of labels that the classifier can generate.\nWe now define our Φ|w| and show that it is total and injective. Our encoding is not surjective per se. We handle ill-formed label sequences in §2.3."
+  }, {
+    "heading": "2.1 The Encoding",
+    "text": "Let wi be a word located at position i in the sentence, for 1 ≤ i ≤ |w| − 1. We will assign it a 2-tuple label li = (ni, ci), where: ni is an integer that encodes the number of common ancestors between wi and wi+1, and ci is the nonterminal symbol at the lowest common ancestor.\nBasic encodings The number of common ancestors may be encoded in several ways.\n1. Absolute scale: The simplest encoding is to make ni directly equal to the number of ancestors in common between wi and wi+1.\n2. Relative scale: A second and better variant consists in making ni represent the difference with respect to the number of ancestors encoded in ni−1. Its main advantage is that the size of the label set is reduced considerably.\nFigure 1 shows an example of a tree linearized according to both absolute and relative scales.\nEncoding for trees with exactly k children For trees where all branchings have exactly k children, it is possible to obtain a even more efficient linearization in terms of number of labels. To do so, we take the relative scale encoding as our starting\npoint. If we build the tree incrementally in a leftto-right manner from the labels, if we find a negative ni, we will need to attach the word wi+1 (or a new subtree with that word as its leftmost leaf) to the (−ni + 2)th node in the path going from wi to the root. If every node must have exactly k children, there is only one valid negative value of ni: the one pointing to the first node in said path that has not received its kth child yet. Any smaller value would leave this node without enough children (which cannot be fixed later due to the leftto-right order in which we build the tree), and any larger value would create a node with too many children. Thus, we can map negative values to a single label. Figure 2 shows an example for the case of binarized trees (k = 2).\nLinks to root Another variant emerged from the empirical observation that some tokens that are\nusually linked to the root node (such as the final punctuation in Figure 1) were particularly difficult to learn for the simpler baselines. To successfully deal with these cases in practice, it makes sense to consider a simplified annotation scheme where a node is assigned a special tag (ROOT, ci) when it is directly linked to the root of the tree.\nFrom now on, unless otherwise specified, we use the relative scale without the simplification for exactly k children. This will be the encoding used in the experiments (§4), because the size of the label set is significantly lower than the one obtained by relying on the absolute one. Also, it works directly with non-binarized trees, in contrast to the encoding that we introduce for trees with exactly k children, which is described only for completeness and possible interest for future work. For the experiments (§4), we also use the special tag (ROOT, ci) to further reduce the size of the label set and to simplify the classification of tokens connected to the root, where |ni| is expected to be large."
+  }, {
+    "heading": "2.2 Theoretical correctness",
+    "text": "We now prove that Φ|w| is a total function and injective for any tree in T|w|. We remind that trees in this set have no unary branches. Later (in §2.3) we describe how we deal with unary branches. To prove correctness, we use the relative scale. Correctness for the other scales follows trivially.\nCompleteness Every pair of nodes in a rooted tree has at least one common ancestor, and a unique lowest common ancestor. Hence, for any tree in T|w|, the label li = (ni, ci) defined in Section 2.1 is well-defined and unique for each word wi, 1 ≤ i ≤ |w| − 1; and thus Φ|w| is a total function from T|w| to L(|w|−1).\nInjectivity The encoding method must ensure that any given sequence of labels corresponds to exactly one tree. Otherwise, we have to deal with ambiguity, which is not desirable.\nFor simplicity, we will prove injectivity in two steps. First, we will show that the encoding is injective if we ignore nonterminals (i.e., equivalently, that the encoding is injective for the set of trees resulting from replacing all the nonterminals in trees in T|w| with a generic nonterminal X). Then, we will show that it remains injective when we take nonterminals into account.\nFor the first part, let τ ∈ T|w| be a tree where\nnonterminals take a generic value X . We represent the label of the ith leaf node as •i. Consider the representation of τ as a bracketed string, where a single-node tree with a node labeled A is represented by (A), and a tree rooted at R with child subtrees C1 . . . Cn is represented as (R(C1 . . . Cn)).\nEach leaf node will appear in this string as a substring (•i). Thus, the parenthesized string has the form α0(•1)α1(•2) . . . α|w|−1(•|w|)αw, where the αis are strings that can only contain brackets and nonterminals, as by construction there can be no leaf nodes between (•i) and (•i+1).\nWe now observe some properties of this parenthesized string. First, note that each of the substrings αi must necessarily be composed of zero or more closing parentheses followed by zero or more opening parentheses with their corresponding nonterminal, i.e., it must be of the form [)]∗[(X]∗. This is because an opening parenthesis followed by a closing parenthesis would represent a leaf node, and there are no leaf nodes between (•i) and (•i+1) in the tree.\nThus, we can write αi as αi)αi(, where αi) is a string matching the expression [)]∗ and αi( a string matching the expression [(X]∗. With this, we can write the parenthesized string for τ as\nα0)α0((•1)α1)α1((•2)α2)α2( . . . (•|w|)α|w|)α|w|(.\nLet us now denote by βi the string αi−1((•i)αi). Then, and taking into account that α0) and αw( are trivially empty in the previous expression due to bracket balancing, the expression for the tree becomes simply β1β2 . . . β|w|, where we know, by construction, that each βi is of the form [(X]∗(•i)[)]∗.\nSince we have shown that each tree in T|w| uniquely corresponds to a string β1β2 . . . β|w|, to show injectivity of the encoding, it suffices to show that different values for a βi generate different label sequences.\nTo show this, we can say more about the form of βi: it must be either of the form [(X]∗(•i) or of the form (•i)[)]∗, i.e., it is not possible that βi contains both opening parenthesis before the leaf node and closing parentheses after the leaf node. This could only happen if the tree had a subtree of the form (X(•i)), but this is not possible since we are forbidding unary branches.\nHence, we can identify each βi with an integer number δ(βi): 0 if βi has neither opening nor closing parentheses outside the leaf node,\n+k if it has k opening parentheses, and −k if it has k closing parentheses. It is easy to see that δ(β1)δ(β2) . . . δ(β|w|−1) corresponds to the values ni in the relative-scale label encoding of the tree τ . To see this, note that the number of unclosed parentheses at the point right after βi in the string exactly corresponds to the number of common ancestors between the ith and (i + 1)th leaf nodes. A positive δ(βi) = k corresponds to opening k parentheses before βi, so the number of common ancestors of wi and wi+1 will be k more than that of wi−1 and wi. A negative δ(βi) = −k corresponds to closing k parentheses after βi, so the number of common ancestors will conversely decrease by k. A value of zero means no opening or closing parentheses, and no change in the number of common ancestors.\nThus, different parenthesized strings β1β2 . . . β|w| generate different label sequences, which proves injectivity ignoring nonterminals (note that δ(β|w|) does not affect injectivity as it is uniquely determined by the other values: it corresponds to closing all the parentheses that remain unclosed at that point).\nIt remains to show that injectivity still holds when nonterminals are taken into account. Since we have already proven that trees with different structure produce different values of ni in the labels, it suffices to show that trees with the same structure, but different nonterminals, produce different values of ci. Essentially, this reduces to showing that every nonterminal in the tree is mapped into a concrete ci. That said, consider a tree τ ∈ T|w|, and some nonterminal X in τ . Since trees in Tw do not have unary branches, X has at least two children. Consider the rightmost word in the first child subtree, and call it wi. Then, wi+1 is the leftmost word in the second child subtree, and X is the lowest common ancestor of wi and wi+1. Thus, ci = X , and a tree with identical structure but a different nonterminal at that position will generate a label sequence with a different value of ci. This concludes the proof of injectivity."
+  }, {
+    "heading": "2.3 Limitations",
+    "text": "We have shown that our proposed encoding is a total, injective function from trees without unary branches with yield of length |w| to sequences of |w| − 1 labels. This will serve as the basis for our reduction of constituent parsing to sequence labeling. However, to go from theory to practice, we\nneed to overcome two limitations of the theoretical encoding: non-surjectivity and the inability to encode unary branches. Fortunately, both can be overcome with simple techniques.\nHandling of unary branches The encoding function Φ|w| cannot directly assign the nonterminal symbols of unary branches, as there is not any pair of words (wi, wi+1) that have those in common. Figure 3 illustrates it with an example.\nIt is worth remarking that this is not a limitation of our encoding, but of any encoding that would facilitate constituent parsing as sequence labeling, as the number of nonterminal nodes in a tree with unary branches is not bounded by any function of |w|. The fact that our encoding works for trees without unary branches owes to the fact that such a tree cannot have more than |w|−1 non-leaf nodes, and therefore it is always possible to encode all of them in labels associated with |w| − 1 leaf nodes.\nTo overcome this issue, we follow a collapsing approach, as is common in parsers that need special treatment of unary chains (Finkel et al., 2008; Narayan and Cohen, 2016; Shen et al., 2018). For clarity, we use the name intermediate unary chains\nto refer to unary chains that end up into a nonterminal symbol (e.g. X → Y in Figure 3) and leaf unary chains to name those that yield a PoS tag (e.g. Z → T5). Intermediate unary chains are collapsed into a chained single symbol, which can be encoded by Φ|w| as any other nonterminal symbol. On the other hand, leaf unary chains are collapsed together with the PoS tag, but these cannot be encoded and decoded by relying on Φ|w|, as our encoding assumes a fixed sequence of leaf nodes and does not encode them explicitly. To overcome this, we propose two methods:\n1. To use an extra function to enrich the PoS tags before applying our main sequence labeling function. This function is of the form Ψ|w| : V\n|w| → U |w|, where U is the set of labels of the leaf unary chains (without including the PoS tags) plus a dummy label ∅. Ψ|w| maps wi to ∅ if there is no leaf unary chain at wi, or to the collapsed label otherwise.\n2. To extend our encoding function to predict them as a part of our labels li, by transforming them into 3-tuples (ni, ci, ui) where ui encodes the leaf unary chain collapsed label for wi, if there is any, or none otherwise. We call this extended encoding function Φ ′|w|.\nThe former requires to run two passes of sequence labeling to deal with leaf unary chains. The latter avoids this, but the number of labels is larger and sparser. In §4 we discuss how these two approaches behave in terms of accuracy and speed.\nNon-surjectivity Our encoding, as defined formally in Section 2.1, is injective but not surjective, i.e., not every sequence of |w| − 1 labels of the form (ni, ci) corresponds to a tree in T|w|. In particular, there are two situations where a label sequence formally has no tree, and thus Φ−1|w| is not formally defined and we have to use extra heuristics or processing to define it:\n• Sequences with conflicting nonterminals. A nonterminal can be the lowest common ancestor of more than two pairs of contiguous words when branches are non-binary. For example, in the tree in Figure 1, the lowest common ancestor of both “the” and “red” and of “red” and “toy” is the same NP node. This translates into c4 = NP , c5 = NP in the label sequence. If we take that sequence and set c5 = VP , we obtain a label sequence that\ndoes not strictly correspond to the encoding of any tree, as it contains a contradiction: two elements referencing the same node indicate different nonterminal labels. In practice, this problem is trivial to solve: when a label sequence encodes several conflicting nonterminals at a given position in the tree, we compute Φ−1|w| using the first such nonterminal and ignoring the rest.\n• Sequences that produce unary structures. There are sequences of values ni that do not correspond to a tree in T|w| because the only tree structure satisfying the common ancestor conditions of their values (the one built by generating the string of βis in the injectivity proof) contains unary branchings, causing the problem described above where we do not have a specification for every nonterminal. An example of this is the sequence (1, S), (3, Y ), (1, S), (1, S) in absolute scaling, that was introduced in Figure 3. In practice, as unary chains have been previously collapsed, any generated unary node is considered as not valid and removed."
+  }, {
+    "heading": "3 Sequence Labeling",
+    "text": "Sequence labeling is an structured prediction task that generates an output label for every token in an input sequence (Rei and Søgaard, 2018). Examples of practical tasks that can be formulated under this framework in natural language processing are PoS tagging, chunking or named-entity recognition, which are in general fast. However, to our knowledge, there is no previous work on sequence labeling methods for constituent parsing, as an encoding allowing it was lacking so far.\nIn this work, we consider a range of methods ranging from traditional models to state-of-theart neural models for sequence labeling, to test whether they are valid to train constituency-based parsers following our approach. We give the essential details needed to comprehend the core of each approach, but will mainly treat them as black boxes, referring the reader to the references for a careful and detailed mathematical analysis of each method. Appendix ?? specifies additional hyperparameters for the tested models.\nPreprocessing We add to every sentence both beginning and end tokens."
+  }, {
+    "heading": "3.1 Traditional Sequence Labeling Methods",
+    "text": "We consider two baselines to train our prediction function F|w|,θ, based on popular sequence labeling methods used in NLP problems, such as PoS tagging or shallow parsing (Schmid, 1994; Sha and Pereira, 2003).\nConditional Random Fields (Lafferty et al., 2001) Let CRF|w|,θ be its prediction function, a CRF model computes conditional probability distributions of the form p(l,w) such that CRFθ(w) = l = arg maxl′ p(l\n′,w). In our work, the inputs to the CRF are words and PoS tags. To represent a word wi, we are using information of the word itself and also contextual information from w[i−1:i+1].3 In particular:\n• We extract the word form (lowercased), the PoS tag and its prefix of length 2, from w[i−1:i+1]. For these words we also include binary features: whether it is the first word, the last word, a number, whether the word is capitalized or uppercased.\n• Additionally, for wi we look at the suffixes of both length 3 and 2 (i.e. wi[−3:] and wi[−2:]).\nTo build our CRF models, we relied on the sklearn-crfsuite library4.\nMultiLayer Perceptron (Rosenblatt, 1958) We use one hidden layer. Let MLP|w|,θ be its prediction function, it treats sequence labeling as a set of independent predictions, one per word. The prediction for a word is computed as softmax(W2 · relu(W1 · x + b1) + b2), where x is the input vector and Wi and bi the weights and biases to be learned at layer i. We consider both a discrete (MLPd) and an embedded (MLPe) perceptron. For the former, we use as inputs the same set of features as for the CRF. For the latter, the vector x for wi is defined as a concatenation of word and PoS tag embeddings from w[i−2:i+2].5\nTo build our MLPs, we relied on keras.6"
+  }, {
+    "heading": "3.2 Sequence Labeling Neural Models",
+    "text": "We are using NCRFpp7, a sequence labeling framework based on recurrent neural networks (RNN)\n3We tried contextual information beyond the immediate previous and next word, but the performance was similar.\n4https://sklearn-crfsuite.readthedocs.io/en/latest/ 5In contrast to the discrete input, larger contextual infor-\nmation was useful. 6https://keras.io/ 7https://github.com/jiesutd/NCRFpp, with PyTorch.\n(Yang and Zhang, 2018), and more specifically on bidirectional short-term memory networks (Hochreiter and Schmidhuber, 1997), which have been successfully applied to problems such as PoS tagging or dependency parsing (Plank et al., 2016; Kiperwasser and Goldberg, 2016). Let LSTM(x) be an abstraction of a standard long short-term memory network that processes the sequence x = [x1, ...,x|x|], then a BILSTM encoding of its ith element, BILSTM(x, i) is defined as:\nBILSTM(x, i) = hi = hli ◦ hri = LSTMl(x[1:i]) ◦ LSTMr(x[|x|:i])\nIn the case of multilayer BILSTM’S, the timestep outputs of the BILSTMm are fed as input to the BILSTMm+1. The output label for each wi is finally predicted as softmax(W · hi + b).\nGiven a sentence [w1, w2, ..., w|w|], the input to the sequence model is a sequence of embeddings [w1,w2, ...,w|w|] where each wi = wi ◦ pi ◦ chi, such that wi and pi are a word and a PoS tag embedding, and chi is a word embedding obtained from an initial character embedding layer, also based on a BILSTM. Figure 4 shows the architecture of the network."
+  }, {
+    "heading": "4 Experiments",
+    "text": "We report results on models trained using the relative scale encoding and the special tag (ROOT,ci). As a reminder, to deal also with leaf unary chains, we proposed two methods in §2.3: to predict them relying both on the encoding functions Φ|w| and Ψ|w|, or to predict them as a part of an enriched label predicted by the function Φ ′|w|. For clarity, we are naming these models with the superscripts Ψ,Φ and Φ ′ , respectively.\nDatasets We use the Penn Treebank (Marcus et al., 1994) and its official splits: Sections 2 to 21\nfor training, 22 for development and 23 for testing. For the Chinese Penn Treebank (Xue et al., 2005): articles 001- 270 and 440-1151 are used for training, articles 301-325 for development, and articles 271-300 for testing. We use the version of the corpus with the predicted PoS tags of Dyer et al. (2016). We train the Φ models based on the predicted output by the corresponding Ψ model.\nMetrics We use the F-score from the EVALB script using COLLINS.prm as the parameter file. Speed is measured in sentences per second. We briefly comment on the accuracy (percentage of correctly predicted labels, no symbol excluded here) of our baselines.\nSource code It can be found at https:// github.com/aghie/tree2labels\nHardware The models are run on a single thread of a CPU8 and on a consumer-grade GPU9. In sequence-to-sequence work (Vinyals et al., 2015) the authors use a multi-core CPU (the number of threads was not specified), while we provide results on a single core for easier comparability. Parsing sentences on a CPU can be framed as an “embarrassingly parallel” problem (Hall et al., 2014), so speed can be made to scale linearly with the number of cores. We use the same batch size as Vinyals et al. (2015) for testing (128).10"
+  }, {
+    "heading": "4.1 Results",
+    "text": "Table 1 shows the performance of our baselines on the PTB development set. It is worth noting that since we are using different libraries to train the models, these might show some differences in terms of performance/speed beyond those expected in theory. For the BILSTM model we test:\n• BILSTMm=1: It does not use pretrained word embeddings nor character embeddings. The number of layers m is set to 1.\n• BILSTMm=1,e: It adds pretrained word embeddings from GloVe (Pennington et al., 2014) for English and from the Gigaword corpus for Chinese (Liu and Zhang, 2017).\n• BILSTMm=1,e,ch: It includes character embeddings processed through a BILSTM.\n8An Intel(R) Core(TM) i7-7700 CPU @ 3.60GHz. 9A GeForce GTX 1080.\n10A larger batch will likely result in faster parsing when executing the model on a GPU, but not necessarily on a CPU.\n• BILSTMm=2,e: m is set to 2. No character embeddings.\n• BILSTMm=2,e,ch: m is set to 2.\nThe Ψ,Φ and the Φ ′ models obtain similar Fscores. When it comes to speed, the BILSTMsΦ ′ are notably faster than the BILSTMsΨ,Φ. Φ ′ models are expected to be more efficient, as leaf unary chains are handled implicitly. In practice, Φ ′ is a more expensive function to compute than the original Φ, since the number of output labels is significantly larger, which reduces the expected gains with respect to the Ψ,Φ models. It is worth noting that our encoding is useful to train an MLPe with a decent sense of phrase structure, while being very fast. Paying attention to the differences between F-score and Accuracy for each baseline, we notice the gap between them is larger for CRFs and MLPs. This shows the difficulties that these methods have, in comparison to the BILSTM approaches, to predict the correct label when a word wi+1 has few common ancestors with wi. For example, let -10X be the right (relative scale) label between wi and wi+1, and let l1=-1X and l2=-9X be two possible wrong labels. In terms of accuracy it is the same that a model predicts l1 or l2, but in terms of constituent F-score, the first will be much worse, as many closed parentheses will remain unmatched.\nTables 2 and 3 compare our best models against the state of the art on the PTB and CTB test sets. The performance corresponds to models without reranking strategies, unless otherwise specified."
+  }, {
+    "heading": "5 Discussion",
+    "text": "We are not aware of work that reduces constituency parsing to sequence labeling. The work that can be considered as the closest to ours is that of Vinyals et al. (2015), who address it as a sequence-to-sequence problem, where the output sequence has variable/unknown length. In this context, even a one hidden layer perceptron outperforms their 3-layer LSTM model without attention, while parsing hundreds of sentences per second. Our best models also outperformed their 3-layer LSTM model with attention and even a simple BILSTM model with pretrained GloVe embeddings obtains a similar performance. In terms of F-score, the proposed sequence labeling baselines still lag behind mature shift-reduce and chart parsers. In terms of speed, they are clearly faster than both CPU and GPU chart parsers and are at least on par with the fastest shift-reduce ones. Although with significant loss of accuracy, if phrase-representation is needed in large-scale tasks where the speed of current systems makes parsing infeasible (Gómez-Rodrı́guez, 2017; Gómez-Rodrı́guez et al., 2017), we can use the simpler, less accurate models to get speeds well above any parser reported to date.\nIt is also worth noting that in their recent work, published while this manuscript was under review, Shen et al. (2018) developed a mapping of binary trees with n leaves to sequences of n− 1 integers (Shen et al., 2018, Algorithm 1). This encoding is different from the ones presented here, as it is based on the height of lowest common ancestors in the tree, rather than their depth. While their purpose is also different from ours, as they use this mapping to generate training data for a parsing algorithm based on recursive partitioning using realvalued distances, their encoding could also be applied with our sequence labeling approach. However, it has the drawback that it only supports binarized trees, and some of its theoretical properties are worse for our goal, as the way to define the inverse of an arbitrary label sequence can be highly ambiguous: for example, a sequence of n−1 equal labels in this encoding can represent any binary tree with n leaves."
+  }, {
+    "heading": "6 Conclusion",
+    "text": "We presented a new parsing paradigm, based on a reduction of constituency parsing to sequence labeling. We first described a linearization function\nto transform a constituent tree (with n leaves) into a sequence of n − 1 labels that encodes it. We proved that this encoding function is total and injective for any tree without unary branches. We also discussed its limitations: how to deal with unary branches and non-surjectivity, and showed how these can be solved. We finally proposed a set of fast and strong baselines."
+  }, {
+    "heading": "Acknowledgments",
+    "text": "This work has received funding from the European Research Council (ERC), under the European Union’s Horizon 2020 research and innovation programme (FASTPARSE, grant agreement No 714150), from the TELEPARESUDC project (FFI2014-51978-C2-2-R) and the ANSWER-ASAP project (TIN2017-85160-C2-1R) from MINECO, and from Xunta de Galicia\n(ED431B 2017/01). We gratefully acknowledge NVIDIA Corporation for the donation of a GTX Titan X GPU."
+  }],
+  "year": 2020,
+  "references": [{
+    "title": "A multi-teraflop constituency parser using GPUs",
+    "authors": ["John Canny", "David Hall", "Dan Klein."],
+    "venue": "Proceedings of the 2013 Conference on Empirical Methods in Natural Language Processing, pages 1898–1907.",
+    "year": 2013
+  }, {
+    "title": "A maximum-entropy-inspired parser",
+    "authors": ["Eugene Charniak."],
+    "venue": "Proceedings of the 1st North American chapter of the Association for Computational Linguistics conference, pages 132–139. Association for Computational Linguistics.",
+    "year": 2000
+  }, {
+    "title": "Parsing as language modeling",
+    "authors": ["Do Kook Choe", "Eugene Charniak."],
+    "venue": "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing, pages 2331–2336, Austin, Texas. Association for Computational Linguistics.",
+    "year": 2016
+  }, {
+    "title": "Three generative, lexicalised models for statistical parsing",
+    "authors": ["Michael Collins."],
+    "venue": "Proceedings of the eighth conference on European chapter of the Association for Computational Linguistics, pages 16–23. Association for Computational Linguistics.",
+    "year": 1997
+  }, {
+    "title": "Recurrent neural network grammars",
+    "authors": ["Chris Dyer", "Adhiguna Kuncoro", "Miguel Ballesteros", "Noah A. Smith."],
+    "venue": "Proceedings of the 2016 Conference of the North American Chapter of the Association for Computational Linguistics: Human Lan-",
+    "year": 2016
+  }, {
+    "title": "Faster Shift-Reduce Constituent Parsing with a Non-Binary, Bottom-Up Strategy. ArXiv e-prints",
+    "authors": ["Daniel Fernández-González", "Carlos GómezRodrı́guez"],
+    "year": 2018
+  }, {
+    "title": "Parsing as reduction",
+    "authors": ["Daniel Fernández-González", "André F.T. Martins."],
+    "venue": "Proceedings of the 53rd Annual Meeting of the Association for Computational Linguistics and the 7th International Joint Conference on Natural Language Processing (Vol-",
+    "year": 2015
+  }, {
+    "title": "Efficient, feature-based, conditional random field parsing",
+    "authors": ["Jenny Rose Finkel", "Alex Kleeman", "Christopher D Manning."],
+    "venue": "Proceedings of ACL08: HLT, pages 959–967.",
+    "year": 2008
+  }, {
+    "title": "How important is syntactic parsing accuracy? An empirical evaluation on rulebased sentiment analysis",
+    "authors": ["Carlos Gómez-Rodrı́guez", "Iago Alonso-Alonso", "David Vilares"],
+    "venue": "Artificial Intelligence Review",
+    "year": 2017
+  }, {
+    "title": "Sparser, better, faster GPU parsing",
+    "authors": ["David Hall", "Taylor Berg-Kirkpatrick", "Dan Klein."],
+    "venue": "Proceedings of the 52nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), volume 1, pages 208–217.",
+    "year": 2014
+  }, {
+    "title": "Long short-term memory",
+    "authors": ["Sepp Hochreiter", "Jürgen Schmidhuber."],
+    "venue": "Neural computation, 9(8):1735–1780.",
+    "year": 1997
+  }, {
+    "title": "Simple and accurate dependency parsing using bidirectional LSTM feature representations",
+    "authors": ["Eliyahu Kiperwasser", "Yoav Goldberg."],
+    "venue": "Transactions of the Association for Computational Linguistics, 4:313–327.",
+    "year": 2016
+  }, {
+    "title": "Constituency parsing with a self-attentive encoder",
+    "authors": ["Nikita Kitaev", "Dan Klein."],
+    "venue": "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), Melbourne, Australia. Association for Com-",
+    "year": 2018
+  }, {
+    "title": "Parser showdown at the Wall Street corral: An empirical investigation of error types in parser output",
+    "authors": ["Jonathan K. Kummerfeld", "David Hall", "James R. Curran", "Dan Klein."],
+    "venue": "Proceedings of the 2012 Joint Conference on Empirical Methods",
+    "year": 2012
+  }, {
+    "title": "Conditional random fields: Probabilistic models for segmenting and labeling sequence data",
+    "authors": ["John D. Lafferty", "Andrew McCallum", "Fernando C.N. Pereira."],
+    "venue": "Proceedings of the Eighteenth International Conference on Machine Learning, ICML",
+    "year": 2001
+  }, {
+    "title": "In-Order Transition-based Constituent Parsing",
+    "authors": ["J. Liu", "Y. Zhang."],
+    "venue": "ArXiv e-prints.",
+    "year": 2017
+  }, {
+    "title": "The Penn Treebank: Annotating predicate argument structure",
+    "authors": ["Mitchell Marcus", "Grace Kim", "Mary Ann Marcinkiewicz", "Robert MacIntyre", "Ann Bies", "Mark Ferguson", "Karen Katz", "Britta Schasberger."],
+    "venue": "Proceedings of",
+    "year": 1994
+  }, {
+    "title": "Optimizing spectral learning for parsing",
+    "authors": ["Shashi Narayan", "Shay B. Cohen."],
+    "venue": "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1546–1556, Berlin, Germany. Association for Com-",
+    "year": 2016
+  }, {
+    "title": "An efficient algorithm for projective dependency parsing",
+    "authors": ["Joakim Nivre."],
+    "venue": "Proceedings of the 8th International Workshop on Parsing Technologies (IWPT), pages 149–160. 1323",
+    "year": 2003
+  }, {
+    "title": "Glove: Global vectors for word representation",
+    "authors": ["Jeffrey Pennington", "Richard Socher", "Christopher Manning."],
+    "venue": "Proceedings of the 2014 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 1532–1543.",
+    "year": 2014
+  }, {
+    "title": "Deep contextualized word representations",
+    "authors": ["Matthew Peters", "Mark Neumann", "Mohit Iyyer", "Matt Gardner", "Christopher Clark", "Kenton Lee", "Luke Zettlemoyer."],
+    "venue": "Proceedings of the 2018 Conference of the North American Chapter of the Association",
+    "year": 2018
+  }, {
+    "title": "Learning accurate, compact, and interpretable tree annotation",
+    "authors": ["Slav Petrov", "Leon Barrett", "Romain Thibaux", "Dan Klein."],
+    "venue": "Proceedings of the 21st International Conference on Computational Linguistics and the 44th annual meeting of the Associa-",
+    "year": 2006
+  }, {
+    "title": "Improved inference for unlexicalized parsing",
+    "authors": ["Slav Petrov", "Dan Klein."],
+    "venue": "Human Language Technologies 2007: The Conference of the North American Chapter of the Association for Computational Linguistics; Proceedings of the Main Confer-",
+    "year": 2007
+  }, {
+    "title": "Multilingual part-of-speech tagging with bidirectional long short-term memory models and auxiliary loss",
+    "authors": ["Barbara Plank", "Anders Søgaard", "Yoav Goldberg."],
+    "venue": "Proceedings of the 54th Annual Meeting of the Association for Computational",
+    "year": 2016
+  }, {
+    "title": "Zero-shot sequence labeling: Transferring knowledge from sentences to tokens",
+    "authors": ["Marek Rei", "Anders Søgaard."],
+    "venue": "Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Linguistics: Human Lan-",
+    "year": 2018
+  }, {
+    "title": "The perceptron: a probabilistic model for information storage and organization in the brain",
+    "authors": ["Frank Rosenblatt."],
+    "venue": "Psychological review, 65(6):386.",
+    "year": 1958
+  }, {
+    "title": "A classifier-based parser with linear run-time complexity",
+    "authors": ["Kenji Sagae", "Alon Lavie."],
+    "venue": "Proceedings of the Ninth International Workshop on Parsing Technology, pages 125–132. Association for Computational Linguistics.",
+    "year": 2005
+  }, {
+    "title": "Part-of-speech tagging with neural networks",
+    "authors": ["Helmut Schmid."],
+    "venue": "Proceedings of the 15th Conference on Computational Linguistics - Volume 1, COLING ’94, pages 172–176, Stroudsburg, PA, USA. Association for Computational Linguistics.",
+    "year": 1994
+  }, {
+    "title": "Shallow parsing with conditional random fields",
+    "authors": ["Fei Sha", "Fernando Pereira."],
+    "venue": "Proceedings of the 2003 Conference of the North American Chapter of the Association for Computational Linguistics on Human Language Technology-Volume 1, pages 134–",
+    "year": 2003
+  }, {
+    "title": "Straight to the tree: Constituency parsing with neural syntactic distance",
+    "authors": ["Yikang Shen", "Zhouhan Lin", "Athul Paul Jacob", "Alessandro Sordoni", "Aaron Courville", "Yoshua Bengio."],
+    "venue": "Proceedings of the 56th Annual Meeting of the Association for Compu-",
+    "year": 2018
+  }, {
+    "title": "A minimal span-based neural constituency parser",
+    "authors": ["Mitchell Stern", "Jacob Andreas", "Dan Klein."],
+    "venue": "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 818–827, Vancouver, Canada.",
+    "year": 2017
+  }, {
+    "title": "Grammar as a foreign language",
+    "authors": ["Oriol Vinyals", "Łukasz Kaiser", "Terry Koo", "Slav Petrov", "Ilya Sutskever", "Geoffrey Hinton."],
+    "venue": "Advances in Neural Information Processing Systems, pages 2773–2781.",
+    "year": 2015
+  }, {
+    "title": "A fast, accurate deterministic parser for chinese",
+    "authors": ["Mengqiu Wang", "Kenji Sagae", "Teruko Mitamura."],
+    "venue": "Proceedings of the 21st International Conference on Computational Linguistics and the 44th Annual Meeting of the Association for Com-",
+    "year": 2006
+  }, {
+    "title": "The Penn Chinese Treebank: Phrase structure annotation of a large corpus",
+    "authors": ["Naiwen Xue", "Fei Xia", "Fu-Dong Chiou", "Marta Palmer."],
+    "venue": "Natural language engineering, 11(2):207–238.",
+    "year": 2005
+  }, {
+    "title": "NCRF++: An opensource neural sequence labeling toolkit",
+    "authors": ["Jie Yang", "Yue Zhang."],
+    "venue": "Proceedings of ACL 2018, System Demonstrations, pages 74–79, Melbourne, Australia. Association for Computational Linguistics.",
+    "year": 2018
+  }, {
+    "title": "Recurrent neural network regularization",
+    "authors": ["Wojciech Zaremba", "Ilya Sutskever", "Oriol Vinyals."],
+    "venue": "arXiv preprint arXiv:1409.2329.",
+    "year": 2014
+  }, {
+    "title": "Fast and accurate shiftreduce constituent parsing",
+    "authors": ["Muhua Zhu", "Yue Zhang", "Wenliang Chen", "Min Zhang", "Jingbo Zhu."],
+    "venue": "Proceedings of the 51st Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), vol-",
+    "year": 2013
+  }],
+  "id": "SP:2e7e533cfe0616db59827225f7d5cc6a6c3c57a4",
+  "authors": [{
+    "name": "Carlos Gómez-Rodrı́guez",
+    "affiliations": []
+  }, {
+    "name": "David Vilares",
+    "affiliations": []
+  }],
+  "abstractText": "We introduce a method to reduce constituent parsing to sequence labeling. For each word wt, it generates a label that encodes: (1) the number of ancestors in the tree that the words wt andwt+1 have in common, and (2) the nonterminal symbol at the lowest common ancestor. We first prove that the proposed encoding function is injective for any tree without unary branches. In practice, the approach is made extensible to all constituency trees by collapsing unary branches. We then use the PTB and CTB treebanks as testbeds and propose a set of fast baselines. We achieve 90.7% F-score on the PTB test set, outperforming the Vinyals et al. (2015) sequence-to-sequence parser. In addition, sacrificing some accuracy, our approach achieves the fastest constituent parsing speeds reported to date on PTB by a wide margin.1",
+  "title": "Constituent Parsing as Sequence Labeling"
+}

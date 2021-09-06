@@ -1,0 +1,267 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Visual recognition is undergoing a period of transformative progress, due in large part to the success of deep architectures trained on massive datasets with supervision. While visual data is in ready supply, high-quality supervised labels are not. One attractive solution is the exploration of unsupervised learning. However, regardless how they are trained, one still needs to evaluate accuracy of the resulting systems. Given the importance of rigorous, empirical benchmarking, it appears impossible to avoid the costs of assembling high-quality, human-annotated test data for test evaluation.\nUnfortunately, manually annotating ground-truth for largescale test datasets is often prohibitively expensive, particu-\n1University of California, Irvine 2Carnegie Mellon University. Correspondence to: Phuc Nguyen <nguyenpx@uci.edu>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\nlarly for rich annotations required to evaluate object detection and segmentation. Even simple image tag annotations pose an incredible cost at scale 1. In contrast, obtaining noisy or partial annotations is often far cheaper or even free. For example, numerous social media platforms produce image and video data that are dynamically annotated with user-provided tags (Flickr, Vine, Snapchat, Facebook, YouTube). While much work has explored the use of such massively-large “webly-supervised” data sources for learning (Wu et al., 2015; Yu et al., 2014; Li et al., 2017; Veit et al., 2017), we instead focus on them for evaluation.\nHow can we exploit such partial or noisy labels during testing? With a limited budget for vetting noisy groundtruth labels, one may be tempted to simply evaluate performance on a small set of clean data, or alternately just trust the cheap-but-noisy labels on the whole dataset. However, such approaches can easily give an inaccurate impression of system performance. We show in our experiments that these naive approaches can produce alarmingly-incorrect estimates of comparative model performance. Even with a significant fraction of vetted data, naive performance esti-\n1For example, NUS-WIDE, (Chua et al., 2009) estimated 3000 man-hours to semi-manually annotate a relatively small set of 81 concepts across 270K images\nmates can incorrectly rank two algorithms in 15% of trials, while our active testing approach significantly reduces this misranking error to 3%.\nThe problem of label noise even exists for “expertly” annotated datasets, whose construction involves manual selection of a test set which is deemed representative in combination with crowd-sourced labeling by multiple experts (Rashtchian et al., 2010; Khattak & Salleb-Aouissi, 2011). Preserving annotation quality is an area of intense research within the HCI/crowdsourcing community (Kamar et al., 2012; Sheshadri & Lease, 2013). In practice, annotation errors are often corrected incrementally through multiple rounds of interactive error discovery and visual inspection of algorithm test results over the lifetime of the dataset. For example, in evaluating object detectors, the careful examination of detector errors on the test set (Hoiem et al., 2012) often reveals missing annotations in widelyused benchmarks (Lin et al., 2014; Everingham et al., 2015; Dollar et al., 2012) and may in turn invoke further iterations of manual corrections (e.g., (Mathias et al., 2014)). In this work, we formalize such ad-hoc practices in a framework we term active testing, and show that significantly improved estimates of accuracy can be made through simple statistical models and active annotation strategies."
+  }, {
+    "heading": "2. Related Work",
+    "text": "Benchmarking: Empirical benchmarking is now widely considered to be an integral tool in the development of vision and learning algorithms. Rigorous evaluation, often in terms of challenge competitions (Russakovsky et al., 2015; Everingham et al., 2010) on held-out data, serves to formally codify proxies for scientific or application goals and provides quantitative ways to characterize progress towards them. The importance and difficulties of test dataset construction and annotation are now readily appreciated (Ponce et al., 2006; Torralba & Efros, 2011).\nBenchmark evaluation can be framed in terms of the well-known empirical risk minimization approach to learning (Vapnik, 1992). Benchmarking seeks to estimate the risk, defined as the expected loss of an algorithm under the true data distribution. Since the true distribution is unknown, the expected risk is estimated by computing loss a finite sized sample test set. Traditional losses (such as 0-1 error) decompose over test examples, but we are often interested in multivariate ranking-based metrics that do not decompose (such as Precision@K and Average Precision (Joachims, 2005)). Defining and estimating expected risk for such metrics is more involved (e.g., Precision@K should be replaced by precision at a specified quantile (Boyd et al., 2012)) but generalization bounds are known (Agarwal et al., 2005; Hill et al., 2002). For simplicity, we focus on the problem of estimating the empirical risk on a fixed, large but finite\ntest set.\nSemi-supervised testing: To our knowledge, there have only been a handful of works specifically studying the problem of estimating recognition performance on partially labeled test data. Anirudh et al. (Anirudh & Turaga, 2014) study the problem of ’test-driving’ a detector to allow the users to get a quick sense of the generalizability of the system. Closer to our approach is that of Welinder et al. (Welinder et al., 2013), who estimate the performance curves using a generative model for the classifier’s confidence scores. Their approach leverages ideas from the semi-supervised learning literature while our approach builds on active learning.\nThe problem of estimating benchmark performance from sampled relevance labels has been explored more extensively in the information retrieval literature where complete annotation was acknowledged as infeasible. Initial work focused on deriving labeling strategies that produce lowvariance and unbiased estimates (Yilmaz & Aslam, 2006; Aslam et al., 2006) and identifying performant retrieval systems (Moffat et al., 2007). (Sabharwal & Sedghi, 2017) give error bounds for estimating PR and ROC curves by choosing samples to label based on the system output ranking. (Gao et al., 2014) estimate performance using an EM algorithm to integrate relevance judgements. (Li & Kanoulas, 2017) and (Rahman et al., 2018) take a strategy similar to ours in actively selecting test items to label as well as estimating performance on remaining unlabeled data.\nActive learning: Our proposed formulation of active testing is closely related to active learning. From a theoretical perspective, active learning can provide strong guarantees of efficiency under certain restrictions (Balcan & Urner, 2016). Human-in-the-loop active learning approaches have been well explored for addressing training data collection in visual recognition systems (Branson et al., 2010; Wah et al., 2011; Vijayanarasimhan & Grauman, 2014). One\ncan view active testing as a form of active learning where the actively-trained model is a statistical predictor of performance on a test set. Active learning is typically cast within the standard machine-learning paradigm, where the goal is to (interactively) learn a model that makes accurate per-example predictions on held-out i.i.d data. In this case, generalization is of paramount importance. On the other hand, active-testing interactively learns a model that makes aggregate statistical predictions over a fixed dataset. This means that models learned for active-testing (that say, predict average precision) need not generalize beyond the test set of interest. This suggests that one can be much more aggressive in overfitting to the statistics of the data at hand."
+  }, {
+    "heading": "3. Framework for Active Testing",
+    "text": "In this section, we introduce the general framework for active testing. Figure 1 depicts the overall flow of our approach. Our evaluation database initially contains test examples with inaccurate (noisy) annotations. We select a batch of data items whose labels will be manually vetted by an oracle (e.g., in-house annotators or a crowd-sourced platform such as Mechanical Turk). Figure 2 shows examples of such noisy labels and queries to Oracle. The evaluation database is then updated with these vetted labels to improve estimates of test performance. Active testing consists of two key components: a metric estimator that estimates model performance from test data with a mix of noisy and vetted labels, and a vetting strategy which selects the subset of test data to be labeled in order to achieve the best possible estimate of the true performance."
+  }, {
+    "heading": "3.1. Performance Metric Estimators",
+    "text": "We first consider active testing for a simple binary prediction problem and then extend this idea to more complex benchmarking tasks such as multi-label tag prediction and instance segmentation. As a running example, assume that we are evaluating an system that classifies an image (e.g., as containing a cat or not). The system returns of confidence score si ∈ R for each test example i ∈ {1 . . . N}. Let yi denote a “noisy” binary label for example i (specifying if a cat is present), where the noise could arise from labeling the test set using some weak-but-cheap annotation technique (e.g., user-provided tags, search engine results, or approximate annotations). Finally, let zi be the true latent binary label whose value can be obtained by rigorous human inspection of the test data item.\nTypical benchmark performance metrics can be written as a function of the true ground-truth labels and system confidences. We focus on metrics that only depend on the rank ordering of the confidence scores and denote such a metric generically as Q({zi}) where for simplicity we hide the dependence on s by assuming that the indices are always\nsorted according to si so that s1 ≥ · · · ≥ sN . For example, commonly-used metrics for binary labeling include precision@K and average precision (AP):\nPrec@K({z1, . . . , zN}) = 1\nK ∑ i≤K zi (1)\nAP ({z1, . . . , zN}) = 1\nNp ∑ k zk k ∑ i≤k zi (2)\nwhereNp is the number of positives. We include derivations in supplmental material.\nEstimation with partially vetted data: In practice, not all the data in our test set will be vetted. Let us divide the test set into two components, the unvetted set U for which we only know the approximate noisy labels yi and the vetted set V , for which we know the ground-truth label. With a slight abuse of notation, we henceforth treat the true label zi as a random variable, and denote its observed realization (on the vetted set) as z̃i. The simplest strategy for estimating the true performance is to ignore unvetted data and only measure performance Q on the vetted subset:\nQ({z̃i : i ∈ V }) [Vetted Only] (3)\nThis represents the traditional approach to empirical evaluation in which we collect a single, vetted test dataset and ignore other available test data. This has the advantage that it is unbiased and converges to the true empirical performance as the whole dataset is vetted. The limitation is that it makes use of only fully-vetted data and the variance in the estimate can be quite large when the vetting budget is limited.\nA natural alternative is to incorporate the unvetted examples by simply substituting yi as a “best guess” of the true zi. We specify this naive assumption in terms of a distribution over all labels z = {z1, . . . , zN}:\npnaive(z) = ∏ i∈U δ(zi = yi) ∏ i∈V δ(zi = z̃i) (4)\nwhere z̃i is the label assigned during vetting. Under this assumption we can then compute an expected benchmark performance:\nEpnaive(z)\n[ Q(z) ] [Naive Estimator] (5)\nwhich amounts to simply substituting z̃i for vetted examples and yi for unvetted examples.\nUnfortunately, the above performance estimate may be greatly affected by noise in the nosiy labels yi. For example, if there are systematic biases in the yi, the performance estimate will similarly be biased. We also consider more general scenarios where side information such as features\nAlgorithm 1 Active Testing Algorithm Input: unvetted set U , vetted set V , total budget T , vetting strategy V S, system scores S = {si}, estimator pest(z) while T ≥ 0 do\nof the test items and distribution of scores of the classifier under test may also be informative. We thus propose computing the expected performance under a more sophisticated estimator:\npest(z) = ∏ i∈U p(zi|O) ∏ i∈V δ(zi = z̃i) (6)\nwhere O is the total set of all observations available to the benchmark system (e.g. noisy labels, vetted labels, classifier scores, data features). We make the plausible assumption that the distribution of unvetted labels factors conditioned on O.\nOur proposed active testing framework (see Alg 1) estimates this distribution pest(z) based on available observations and predicts expected benchmark performance under this distribution:\nEpest(z)\n[ Q(z) ] [Learned Estimator] (7)\nComputing expected performance: Given posterior estimates p(zi|O) we can always compute the expected performance metric Q by generating samples from these distributions, computing the metric for each joint sample, and average over samples. Here we introduce two applications (studied in our experiments) where the metric is linear or quadratic in z, allowing us to compute the expected performance in closed-form.\nMulti-label Tags: Multi-label tag prediction is a common task in video/image retrieval. Following recent work (Joulin et al., 2016; Gong et al., 2013; Izadinia et al., 2015; Guillaumin et al., 2009), we measure accuracy with Precision@K - e.g., what fraction of the topK search results contain the tag of interest? In this setting, noisy labels yi come from user provided tags which may contain errors and are typically incomplete. Conveniently, we can write expected performance Eq. 7 for Precision@K for a single tag in closed form:\nE[Prec@K] = 1\nK ( ∑ i∈VK z̃i + ∑ i∈UK p(zi = 1|O) ) (8)\nwhere we write VK and UK to denote the vetted and unvetted subsets of K highest-scoring examples in the total set V ∪ U . Some benchmarks compute an aggregate mean precision over all tags under consideration, but since this average is linear, one again obtains a closed form estimate.\nInstance segmentation: Instance segmentation is another natural task for which to apply active testing. It is well known that human annotation is prohibitively expensive – (Cordts et al., 2016) reports that an average of more than 1.5 hours is required to annotate a single image. Widely used benchmarks such as (Cordts et al., 2016) release small fraction of images annotated with high quality, along with a larger set of noisy or “coarse”-quality annotations. Other instance segmentation datasets such as COCO (Lin et al., 2014) are constructed stage-wise by first creating a detection dataset which only indicates rectangular bounding boxes around each object which are subsequently refined into a precise instance segmentations. Fig. 3 shows an example of a partially vetted image in which some instances are only indicated by a bounding box (noisy), while others have a detailed mask (vetted).\nWhen computing Average Precision, a predicted instance segmentation is considered a true positive if it has sufficient intersection-over-union (IoU) overlap with a ground-truth instance. In this setting, we let the variable zi indicate that predicted instance i is matched to a ground-truth instance and has an above threshold overlap. Assuming independence of zi’s, the expected AP can be written as (see supplement for proof):\nE[AP ] = 1\nNp (∑ k∈V z̃kE[Prec@k]\n+ ∑ k∈U p(zk = 1|O)E[Prec@k] )\n(9)\nIn practice, standard instance segmentation benchmarks are somewhat more complicated. In particular, they enforce one-to-one matching between detections and ground-truth. For example, if two detections overlap a ground-truth instance, only one is counted as a true positive while the other\nis scored as a false positive. This also holds for multi-class detections - if a detection is labeled as a dog (by matching to a ground-truth dog), it can no longer be labeled as cat. While this interdependence can in principle be modeled by the conditioning variables O which could include information about which class detections overlap, in practice our estimators for p(zi = 1|O) do not take this into account. Nevertheless, we show that such estimators provide remarkably good estimates of performance.\nFitting estimators to partially vetted data: We alternate between vetting small batches of data and refitting the estimator to the vetted set. For multi-label tagging, we update estimates for the prior probability that a noisy tag for a particular category will be flipped when vetted p(z̃i 6= yi). For instance segmentation, we train a per-category classifier that uses sizes of the predicted and unvetted ground-truth bounding box to predict whether a detected instance will overlap the ground-truth. We discuss the specifics of fitting these particular estimators in the experimental results."
+  }, {
+    "heading": "3.2. Vetting Strategies",
+    "text": "The second component of the active testing system is a strategy for choosing the “next” data samples to vet. The goal of such a strategy is to produce accurate estimates of benchmark performance with fewest number of vettings. An alternate, but closely related goal, is to determine the benchmark rankings of a set of recognition systems being compared. The success of a given strategy depends on the distribution of the data, the chosen estimator, and the system(s) under test. We consider several selection strategies, motivated by existing data collection practice and modeled after active learning, which adapt to these statistics in order to improve efficiency.\nRandom Sampling: The simplest vetting strategy is to choose test examples to vet at random. The distribution of examples across categories often follows a long-tail distribution. To achieve faster uniform convergence of performance\nestimates across all categories, we use a hierarchical sampling approach in which we first sample a category and then select a sub-batch of test examples to vet from that category. This mirrors the way, e.g. image classification and detection datasets are manually curated to assure a minimum number of examples per category.\nMost-Confident Mistake (MCM): This strategy selects unvetted examples for which the system under test reports a high-confidence detection/classification score, but which are considered a mistake according to the current metric estimator. Specifically, we focus on the strategy of selecting Most-confident Negative which is applicable to image/video tagging where the set of user-provided tags are often incomplete. The intuition is that, if a high-performance system believes that the current sample is a positive with high probability, it’s likely that the noisy label is at fault. This strategy is motivated by experience with object detection benchmarks where, e.g., visualizing high-confident false positive face detections often reveals missing annotations in the test set (Mathias et al., 2014).\nMaximum Expected Estimator Change (MEEC): In addition to utilizing the confidence scores produced by the system under test, it is natural to also consider the uncertainty in the learned estimator pest(z). Exploiting the analogy of active testing with active learning, it is natural to vet samples that are most confusing to the current estimator (e.g., with largest entropy), or ones that will likely generate a large update to the estimator (e.g., largest information gain).\nSpecifically, we explore a active selection strategy based on maximum expected model change (Settles, 2010), which in our case corresponds to selecting a sample that yields the largest expected change in our estimate of Q. Let Ep(z|V )[Q(z)] be the expected performance based on the distribution p(z|V ) estimated from the current vetted set V . Ep(z|V,zi)[Q(z)] be the expected performance after vetting example i and updating the estimator based on the outcome. The actual change in the estimate of Q depends on the\nrealization of the random variable zi:\n∆i(zi) = ∣∣∣Ep(z|V,zi)[Q(z)]− Ep(z|V )[Q(z)]∣∣∣ (10)\nWe can choose the example i with the largest expected change, using the current estimate of the distribution over zi ∼ p(zi|V ) to compute the expected change Ep(zi|V ) [∆i(zi)].\nFor Prec@K, this expected change is given by:\nEp(zi|V ) [∆i(zi)] = 2\nK pi(1− pi) (11)\nwhere we write pi = p(zi = 1|O). Interestingly, selecting the sample yielded the maximum expected change in the estimator corresponds to a standard maximum entropy selection criteria for active learning. Similarly, in the supplement we show that for AP :\nEp(zi|V ) [∆i(zi)] = 1\nNp ripi(1− pi) (12)\nwhere ri is the proportion of unvetted examples scoring higher than example i. In this case, we select an example to vet which has high-entropy and for which there is a relatively small proportion of higher-scoring unvetted examples."
+  }, {
+    "heading": "4. Experiments",
+    "text": "We validate our active testing framework on two specific applications, multi-label classification and instance segmentation. For each of these applications, we describe the datasets and systems evaluated and the specifics of the estimators and vetting strategies used."
+  }, {
+    "heading": "4.1. Active Testing for Multi-label Classification",
+    "text": "NUS-WIDE: This dataset contains 269,648 Flickr images with 5018 unique tags. The authors also provide a ’semi-\ncomplete’ ground-truth via manual annotations for 81 concepts. We removed images that are no longer available and images that doesn’t contain one of the 81 tags. We are left with around 100K images spanning across 81 concepts. (Izadinia et al., 2015) analyzed the noisy and missing label statistics for this dataset. Given that the tag is relevant to the image, there is only 38% chance that it will appear in the noisy tag list. If the tag does not apply, there’s 1% chance that it appears anyway. They posited that the missing tags are either non-entry level categories (e.g., person) or they are not important in the scene (e.g., clouds and buildings).\nMicro-videos: Micro-videos have recently become a prevalent form of media on many social platforms, such as Vine, Instagram, and Snapchat. (Nguyen et al., 2016) formulated a multi-label video-retrieval/annotation task for a large collection of Vine videos. They introduce a micro-video dataset, MV-85k containing 260K videos with 58K tags. This dataset, however, only provides exhaustive vetting for a small subset of tags on a small subset of videos. We vetted 26K video-tag pairs from this dataset, spanning 17503 videos and 875 tags. Since tags provided by users have little constraints, this dataset suffers from both under-tagging and over-tagging. Under-tagging comes from not-yet popular concepts, while over-tagging comes from the spamming of extra tags In our experiments we use a subset of 75 tags.\nRecognition systems: To obtain the classification results, we implement two multi-label classification algorithms for images (NUSWIDE) and videos (Microvideos). For NUSWIDE, we trained a multi-label logistic regression model built on the pretrained ResNet-50 (He et al., 2016) features. For Micro-videos, we follow the state-of-the-art video action recognition framework (Wang et al., 2016) modified for the multi-label setting to use multiple logistic cross-entropy losses.\nLearned Estimators: We use Precision@48 as a evaluation metric. For tagging, we estimate the posterior over unvetted tags, p(zi|O), based on two pieces of observed information: the statistics of noisy labels yi on vetted examples, and the system confidence score, si. This posterior probability can be derived as (see supplement for proof):\np(zi|si, yi) = p(yi|zi)p(zi|si)∑\nv∈{0,1} p(yi|zi = v)p(zi = v|si) (13)\nGiven some vetted data, we fit the tag-flipping priors p(yi|zi) by standard maximum likelihood estimation (counting frequencies). The posterior probabilities of the true label given the classifier confidence score, p(zi|si), is fit using logistic regression."
+  }, {
+    "heading": "4.2. Object Instance Detection and Segmentation",
+    "text": "COCO Minival: For instance segmentation, we use ‘minival2014’ subset of the COCO dataset (Lin et al., 2014). This subset contains 5k images spanning over 80 categories. We report the standard COCO metric: Average Precision (averaged over all IoU thresholds).\nTo systematically analyze the impact of evaluation on noise and vetting, we focus evaluation efforts on the high quality test set, but simulate noisy annotations by replacing actual instance segmentation masks by their tight-fitting bounding box (the unvetted “noisy” set). We then simulate active testing where certain instances are vetted, meaning the bounding-box is replaced by the true segmentation mask.\nDetection Systems: We did not implement instance segmentation algorithms ourselves, but instead utilized three sets of detection mask results produced by the authors of Mask R-CNN (He et al., 2017). These were produced by variants of the instance segmentation systems proposed in (Xie et al., 2017; Lin et al., 2017; He et al., 2017).\nLearned Estimators: To compute the probability whether a detection will pass the IoU threshold with a bounding box unvetted ground-truth instance (p(zi|O) in Eq. 9), we train a χ2-SVM using the vetted portion of the database. The features for an example includes the category id, the ‘noisy’ IoU estimate, the size of the bounding box containing the detection mask and the size of ground-truth bounding box. The training label is true whether the true IoU estimate, computed using the vetted ground-truth mask and the detection masks, is above a certain input IoU threshold."
+  }, {
+    "heading": "4.3. Efficiency of active testing estimates",
+    "text": "We measure the estimation accuracy of different combination of vetting strategies and estimators at different amount of vetting efforts. We compute the absolute error between the estimated metric and the true (fully vetted) metric and average over all classes. Averaging the absolute estimation error across classes prevents over-estimation for one class\ncanceling out under-estimation from another class. We plot the mean and the standard deviation over 50 simulation runs of each active testing approach.\nPerformance estimation: Figure 5 shows the results for estimating Prec@48 for NUSWIDE and Microvideos. The x-axis indicates the percentage of the top-k lists that are vetted. For the Prec@K metric, it is only necessary to vet 100% of the top-k lists rather than 100% of the whole test set2. A ’random’ strategy with a ‘naive’ estimator follows a\n2The “vetted only” estimator is not applicable in this domain until at least K examples in each short list have been vetted and hence doesn’t appear in the plots.\nlinear trend since each batch of vetted examples contributes on average the same reduction in estimation error. The most confident mistake (mcm) heuristic works very well for Microvideos due to the substantial amount of undertagging. However, in more reasonable balanced settings such as NUS-WIDE, this heuristic does not perform as well. The MCM vetting strategy does not pair well with a learned estimator due to its biased sampling which quickly results in priors that overestimate the number missing tags. In contrast, the random and active MEEC vetting strategies offer good samples for learning a good estimator. At 50% vetting effort, MEEC sampling with a learned estimator on average can achieve within 2-3% of the real estimates.\nFigure 6 highlights the relative value of establishing the true vetted label versus the value of vetted data in updating the estimator. In some sense, traditional active learning is concerned primarily with the vertical drop (i.e. a better model/estimator), while active testing also takes direct advantage of the slope (i.e. more vetted labels). The initial learned estimates have larger error due to small sample size, but the fitting during the first few vetting batches rapidly improves the estimator quality. Past 40% vetting effort, the estimator model parameters stabilize and remaining vetting serves to correct labels whose true value can’t be predicted given the low-complexity of the estimator.\nFigure 7 shows similar results for estimating the mAP for instance segmentation on COCO. The current ‘gold standard’ approach of estimating performance based only on the vetted subset of images leads to large errors in estimation accuracy and high variance from from small sample sizes. In the active testing framework, input algorithms are tested using the whole dataset (vetted and unvetted). Naive estimation is noticeably more accurate than vetted only and the learned estimator with uncertainty sampling further reduces\nboth the absolute error and the variance.\nModel ranking: The benefits of active testing are highlighted further when we consider the problem of ranking system performance. We are often interested not in the absolute performance number, but rather in the performance gap between different systems. We find that active testing is also valuable in this setting. Figure 8 shows the error in estimating the performance gap between two different instance segmentation systems as a function of the amount data vetted. This follows a similar trend as the single model performance estimation plot. Importantly, it highlights that only evaluating vetted data, though unbiased, typically produces a large error in in performance gap between models to high variance in the estimate of each individual models performance. In particular, if we use these estimates to rank two models, we will often make errors in model ranking even when relatively large amounts of the data have been vetted. Using stronger estimators, actively guided by MEEC sampling provide accurate rankings with substantially less vetting effort. With 50% of the data vetted, standard approaches that evaluate on only vetted data (black curve) incorrectly rank algorithms 15% of the time, while our learned estimators with active vetting (red curve) reduce this error to 3% of the time.\nConclusions We have introduced a general framework for active testing that minimizes human vetting effort by actively selecting test examples to label and using performance estimators that adapt to the statistics of the test data and the systems under test. Simple implementations of this concept demonstrate the potential for radically decreasing the human labeling effort needed to evaluate system performance for standard computer vision tasks. We anticipate this will have substantial practical value in the ongoing construction of such benchmarks.\nAcknowledgement We thank Piotr Dollar and Ross Girshick for providing the instance segmentation results for the COCO dataset. This project was supported in part by NSF grants IIS-1618806 and IIS-1253538."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Generalization bounds for the area under the roc curve",
+    "authors": ["S. Agarwal", "T. Graepel", "R. Herbrich", "S. Har-Peled", "D. Roth"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2005
+  }, {
+    "title": "Interactively test driving an object detector: Estimating performance on unlabeled data",
+    "authors": ["R. Anirudh", "P. Turaga"],
+    "venue": "In WACV,",
+    "year": 2014
+  }, {
+    "title": "A statistical method for system evaluation using incomplete judgments",
+    "authors": ["J.A. Aslam", "V. Pavlu", "E. Yilmaz"],
+    "venue": "In ACM SIGIR. ACM,",
+    "year": 2006
+  }, {
+    "title": "Active learning–modern learning theory",
+    "authors": ["Balcan", "M.-F", "R. Urner"],
+    "venue": "Encyclopedia of Algorithms,",
+    "year": 2016
+  }, {
+    "title": "Accuracy at the top",
+    "authors": ["S. Boyd", "C. Cortes", "M. Mohri", "A. Radovanovic"],
+    "venue": "In Advances in neural information processing systems,",
+    "year": 2012
+  }, {
+    "title": "Visual recognition with humans in the loop",
+    "authors": ["S. Branson", "C. Wah", "F. Schroff", "B. Babenko", "P. Welinder", "P. Perona", "S. Belongie"],
+    "venue": "In ECCV,",
+    "year": 2010
+  }, {
+    "title": "Nus-wide: a real-world web image database from national university of singapore",
+    "authors": ["Chua", "T.-S", "J. Tang", "R. Hong", "H. Li", "Z. Luo", "Y. Zheng"],
+    "venue": "In ACM international conference on image and video retrieval,",
+    "year": 2009
+  }, {
+    "title": "The cityscapes dataset for semantic urban scene understanding",
+    "authors": ["M. Cordts", "M. Omran", "S. Ramos", "T. Rehfeld", "M. Enzweiler", "R. Benenson", "U. Franke", "S. Roth", "B. Schiele"],
+    "year": 2016
+  }, {
+    "title": "Pedestrian detection: An evaluation of the state of the art",
+    "authors": ["P. Dollar", "C. Wojek", "B. Schiele", "P. Perona"],
+    "year": 2012
+  }, {
+    "title": "The pascal visual object classes (voc) challenge",
+    "authors": ["M. Everingham", "L. Van Gool", "C.K. Williams", "J. Winn", "A. Zisserman"],
+    "venue": "International journal of computer vision,",
+    "year": 2010
+  }, {
+    "title": "The pascal visual object classes challenge: A retrospective",
+    "authors": ["M. Everingham", "S.A. Eslami", "L. Van Gool", "C.K. Williams", "J. Winn", "A. Zisserman"],
+    "year": 2015
+  }, {
+    "title": "Reducing reliance on relevance judgments for system comparison by using expectation-maximization",
+    "authors": ["N. Gao", "W. Webber", "D.W. Oard"],
+    "venue": "In European Conference on Information Retrieval. Springer,",
+    "year": 2014
+  }, {
+    "title": "Deep convolutional ranking for multilabel image annotation",
+    "authors": ["Y. Gong", "Y. Jia", "T. Leung", "A. Toshev", "S. Ioffe"],
+    "venue": "arXiv preprint arXiv:1312.4894,",
+    "year": 2013
+  }, {
+    "title": "Tagprop: Discriminative metric learning in nearest neighbor models for image auto-annotation",
+    "authors": ["M. Guillaumin", "T. Mensink", "J. Verbeek", "C. Schmid"],
+    "venue": "In Computer Vision, International Conference on,",
+    "year": 2009
+  }, {
+    "title": "Deep residual learning for image recognition",
+    "authors": ["K. He", "X. Zhang", "S. Ren", "J. Sun"],
+    "year": 2016
+  }, {
+    "title": "Average precision and the problem of generalisation",
+    "authors": ["S.I. Hill", "H. Zaragoza", "R. Herbrich", "P.J. Rayner"],
+    "venue": "In ACM SIGIR Workshop on Mathematical and Formal Methods in Information Retrieval,",
+    "year": 2002
+  }, {
+    "title": "Diagnosing error in object detectors",
+    "authors": ["D. Hoiem", "Y. Chodpathumwan", "Q. Dai"],
+    "venue": "In ECCV,",
+    "year": 2012
+  }, {
+    "title": "Deep classifiers from image tags in the wild",
+    "authors": ["H. Izadinia", "B.C. Russell", "A. Farhadi", "M.D. Hoffman", "A. Hertzmann"],
+    "venue": "In Workshop on Community-Organized Multimodal Mining: Opportunities for Novel Solutions,",
+    "year": 2015
+  }, {
+    "title": "A support vector method for multivariate performance measures",
+    "authors": ["T. Joachims"],
+    "venue": "In Proceedings of the 22nd international conference on Machine learning,",
+    "year": 2005
+  }, {
+    "title": "Learning visual features from large weakly supervised data",
+    "authors": ["A. Joulin", "L. van der Maaten", "A. Jabri", "N. Vasilache"],
+    "venue": "In European Conference on Computer Vision,",
+    "year": 2016
+  }, {
+    "title": "Combining human and machine intelligence in large-scale crowdsourcing",
+    "authors": ["E. Kamar", "S. Hacker", "E. Horvitz"],
+    "venue": "In 11th International Conference on Autonomous Agents and Multiagent Systems-Volume",
+    "year": 2012
+  }, {
+    "title": "Quality control of crowd labeling through expert evaluation",
+    "authors": ["F.K. Khattak", "A. Salleb-Aouissi"],
+    "venue": "In NIPS 2nd Workshop on Computational Social Science and the Wisdom of Crowds,",
+    "year": 2011
+  }, {
+    "title": "Active sampling for large-scale information retrieval evaluation",
+    "authors": ["D. Li", "E. Kanoulas"],
+    "venue": "In ACM on Conference on Information and Knowledge Management",
+    "year": 2017
+  }, {
+    "title": "Learning from noisy labels with distillation",
+    "authors": ["Y. Li", "J. Yang", "Y. Song", "L. Cao", "J. Luo", "J. Li"],
+    "venue": "arXiv preprint arXiv:1703.02391,",
+    "year": 2017
+  }, {
+    "title": "Feature pyramid networks for object detection",
+    "authors": ["Lin", "T.-Y", "P. Dollár", "R. Girshick", "K. He", "B. Hariharan", "S. Belongie"],
+    "year": 2017
+  }, {
+    "title": "Face detection without bells and whistles",
+    "authors": ["M. Mathias", "R. Benenson", "M. Pedersoli", "L. Van Gool"],
+    "venue": "In ECCV. Springer,",
+    "year": 2014
+  }, {
+    "title": "Strategic system comparisons via targeted relevance judgments",
+    "authors": ["A. Moffat", "W. Webber", "J. Zobel"],
+    "venue": "In ACM SIGIR conference on Research and development in information retrieval. ACM,",
+    "year": 2007
+  }, {
+    "title": "The open world of micro-videos",
+    "authors": ["P.X. Nguyen", "G. Rogez", "C. Fowlkes", "D. Ramanan"],
+    "venue": "arXiv preprint arXiv:1603.09439,",
+    "year": 2016
+  }, {
+    "title": "Dataset issues in object recognition",
+    "authors": ["J. Ponce", "T.L. Berg", "M. Everingham", "D.A. Forsyth", "M. Hebert", "S. Lazebnik", "M. Marszalek", "C. Schmid", "B.C. Russell", "A Torralba"],
+    "venue": "In Toward category-level object recognition,",
+    "year": 2006
+  }, {
+    "title": "Efficient test collection construction via active learning",
+    "authors": ["M.M. Rahman", "M. Kutlu", "T. Elsayed", "M. Lease"],
+    "venue": "arXiv preprint arXiv:1801.05605,",
+    "year": 2018
+  }, {
+    "title": "Collecting image annotations using amazon’s mechanical turk",
+    "authors": ["C. Rashtchian", "P. Young", "M. Hodosh", "J. Hockenmaier"],
+    "venue": "In Proceedings of the NAACL HLT 2010 Workshop on Creating Speech and Language Data with Amazon’s Mechanical Turk,",
+    "year": 2010
+  }, {
+    "title": "Imagenet large scale visual recognition challenge",
+    "authors": ["O. Russakovsky", "J. Deng", "H. Su", "J. Krause", "S. Satheesh", "S. Ma", "Z. Huang", "A. Karpathy", "A. Khosla", "M Bernstein"],
+    "venue": "International Journal of Computer Vision,",
+    "year": 2015
+  }, {
+    "title": "How good are my predictions? efficiently approximating precision-recall curves for massive datasets",
+    "authors": ["A. Sabharwal", "H. Sedghi"],
+    "venue": "In UAI,",
+    "year": 2017
+  }, {
+    "title": "Active learning literature survey",
+    "authors": ["B. Settles"],
+    "venue": "University of Wisconsin, Madison, pp",
+    "year": 2010
+  }, {
+    "title": "Square: A benchmark for research on computing crowd consensus",
+    "authors": ["A. Sheshadri", "M. Lease"],
+    "venue": "In AAAI Conference on Human Computation and Crowdsourcing,",
+    "year": 2013
+  }, {
+    "title": "Unbiased look at dataset bias",
+    "authors": ["A. Torralba", "A.A. Efros"],
+    "venue": "In CVPR,",
+    "year": 2011
+  }, {
+    "title": "Principles of risk minimization for learning theory",
+    "authors": ["V. Vapnik"],
+    "venue": "In Advances in neural information processing systems,",
+    "year": 1992
+  }, {
+    "title": "Learning from noisy large-scale datasets with minimal supervision",
+    "authors": ["A. Veit", "N. Alldrin", "G. Chechik", "I. Krasin", "A. Gupta", "S. Belongie"],
+    "venue": "arXiv preprint arXiv:1701.01619,",
+    "year": 2017
+  }, {
+    "title": "Large-scale live active learning: Training object detectors with crawled data and crowds",
+    "authors": ["S. Vijayanarasimhan", "K. Grauman"],
+    "year": 2014
+  }, {
+    "title": "Multiclass recognition and part localization with humans in the loop",
+    "authors": ["C. Wah", "S. Branson", "P. Perona", "S. Belongie"],
+    "venue": "In ICCV,",
+    "year": 2011
+  }, {
+    "title": "Temporal segment networks: Towards good practices for deep action recognition",
+    "authors": ["L. Wang", "Y. Xiong", "Z. Wang", "Y. Qiao", "D. Lin", "X. Tang", "L. Van Gool"],
+    "year": 2016
+  }, {
+    "title": "A lazy man’s approach to benchmarking: Semisupervised classifier evaluation and recalibration",
+    "authors": ["P. Welinder", "M. Welling", "P. Perona"],
+    "venue": "In CVPR,",
+    "year": 2013
+  }, {
+    "title": "Ml-mg: multi-label learning with missing labels using a mixed graph",
+    "authors": ["B. Wu", "S. Lyu", "B. Ghanem"],
+    "venue": "In ICCV,",
+    "year": 2015
+  }, {
+    "title": "Aggregated residual transformations for deep neural networks",
+    "authors": ["S. Xie", "R. Girshick", "P. Dollár", "Z. Tu", "K. He"],
+    "year": 2017
+  }, {
+    "title": "Estimating average precision with incomplete and imperfect judgments",
+    "authors": ["E. Yilmaz", "J.A. Aslam"],
+    "venue": "In ACM international conference on Information and knowledge management",
+    "year": 2006
+  }, {
+    "title": "Large-scale multi-label learning with missing labels",
+    "authors": ["Yu", "H.-F", "P. Jain", "P. Kar", "I.S. Dhillon"],
+    "venue": "In ICML,",
+    "year": 2014
+  }],
+  "id": "SP:fbb9cdd699baf86e9d616b259ada02449c2322ca",
+  "authors": [{
+    "name": "Phuc Nguyen",
+    "affiliations": []
+  }, {
+    "name": "Deva Ramanan",
+    "affiliations": []
+  }, {
+    "name": "Charless Fowlkes",
+    "affiliations": []
+  }],
+  "abstractText": "Much recent work on visual recognition aims to scale up learning to massive, noisily-annotated datasets. We address the problem of scalingup the evaluation of such models to large-scale datasets with noisy labels. Current protocols for doing so require a human user to either vet (reannotate) a small fraction of the test set and ignore the rest, or else correct errors in annotation as they are found through manual inspection of results. In this work, we re-formulate the problem as one of active testing, and examine strategies for efficiently querying a user so as to obtain an accurate performance estimate with minimal vetting. We demonstrate the effectiveness of our proposed active testing framework on estimating two performance metrics, Precision@K and mean Average Precision, for two popular computer vision tasks, multi-label classification and instance segmentation. We further show that our approach is able to save significant human annotation effort and is more robust than alternative evaluation protocols.",
+  "title": "Active Testing: An Efficient and Robust Framework for Estimating Accuracy"
+}

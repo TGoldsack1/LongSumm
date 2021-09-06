@@ -1,0 +1,263 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "The past few years have seen exciting developments in the use of deep neural networks to synthesize natural-sounding human speech (Zen et al., 2016; van den Oord et al., 2016; Wang et al., 2017a; Arik et al., 2017; Taigman et al., 2017; Shen et al., 2017). As text-to-speech (TTS) models have rapidly improved, there is a growing opportunity for a number of applications, such as audiobook narration, news readers, and conversational assistants. Neural models show the potential to robustly synthesize expressive long-form speech, and yet research in this area is still in its infancy.\nTo deliver true human-like speech, a TTS system must learn to model prosody. Prosody is the confluence of a number of phenomena in speech, such as paralinguistic information, intonation, stress, and style. In this work we focus\n1Google, Inc.. Correspondence to: Yuxuan Wang <yxwang@google.com>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\non style modeling, the goal of which is to provide models the capability to choose a speaking style appropriate for the given context. While difficult to define precisely, style contains rich information, such as intention and emotion, and influences the speaker’s choice of intonation and flow. Proper stylistic rendering affects overall perception (see e.g. “affective prosody” in (Taylor, 2009)), which is important for applications such as audiobooks and newsreaders.\nStyle modeling presents several challenges. First, there is no objective measure of “correct” prosodic style, making both modeling and evaluation difficult. Acquiring annotations for large datasets can be costly and similarly problematic, since human raters often disagree. Second, the high dynamic range in expressive voices is difficult to model. Many TTS models, including recent end-to-end systems, only learn an averaged prosodic distribution over their input data, generating less expressive speech – especially for long-form phrases. Furthermore, they often lack the ability to control the expression with which speech is synthesized.\nThis work1 attempts to address the above issues by introducing “global style tokens” (GSTs) to Tacotron (Wang et al., 2017a; Shen et al., 2017), a state-of-the-art end-to-end TTS model. GSTs are trained without any prosodic labels, and yet uncover a large range of expressive styles. The internal architecture itself produces soft interpretable “labels” that can be used to perform various style control and transfer tasks, leading to significant improvements for expressive long-form synthesis. GSTs can be directly applied to noisy, unlabeled found data, providing a path towards highly scalable but robust speech synthesis."
+  }, {
+    "heading": "2. Model Architecture",
+    "text": "Our model is based on Tacotron (Wang et al., 2017a; Shen et al., 2017), a sequence-to-sequence (seq2seq) model that predicts mel spectrograms directly from grapheme or phoneme inputs. These mel spectrograms are converted to waveforms either by a low-resource inversion algorithm\n1Sound demos can be found at https://google. github.io/tacotron/publications/global_ style_tokens/\n(Griffin & Lim, 1984) or a neural vocoder such as WaveNet (van den Oord et al., 2016). We point out that, for Tacotron, the choice of vocoder does not affect prosody, which is modeled by the seq2seq model.\nOur proposed GST model, illustrated in Figure 1, consists of a reference encoder, style attention, style embedding, and sequence-to-sequence (Tacotron) model."
+  }, {
+    "heading": "2.1. Training",
+    "text": "During training, information flows through the model as follows:\n• The reference encoder, proposed in (Skerry-Ryan et al., 2018), compresses the prosody of a variablelength audio signal into a fixed-length vector, which we call the reference embedding. During training, the reference signal is the ground-truth audio.\n• The reference embedding is passed to a style token layer, where it is used as the query vector to a contentbased attention module. Here, attention is not used to learn an alignment. Instead, it learns a similarity measure between the reference embedding and each token in a bank of trainable embeddings. This set of embeddings, which we alternately call global style tokens, GSTs, or token embeddings, are shared across all training examples.\n• The attention module outputs a set of combination weights that represent the contribution of each style token to the encoded reference embedding. The weighted sum of the GSTs, which we call the style embedding, is passed to the text encoder for conditioning at every timestep.\n• The style token layer weights (including token em-\nbeddings) are jointly trained with the rest of the model, driven only by the reconstruction loss from the Tacotron decoder. GSTs thus do not require any explicit style or prosody labels."
+  }, {
+    "heading": "2.2. Inference",
+    "text": "The GST architecture is designed for powerful and flexible control at inference time. In this mode, information can flow through the model in one of two ways:\n1. We can directly condition the text encoder outputs on certain tokens. This allows for style control and manipulation without a reference signal, or,\n2. We can feed a different audio signal (whose transcript does not need to match the text to be synthesized) to achieve style transfer.\nThese will be discussed in more detail in Section 6."
+  }, {
+    "heading": "3. Model Details",
+    "text": ""
+  }, {
+    "heading": "3.1. Tacotron Architecture",
+    "text": "For our baseline and GST-augmented Tacotron systems, we use the same architecture and hyperparameters as (Wang et al., 2017a) except for a few details. We use phoneme inputs to speed up training, and slightly change the decoder, replacing GRU cells with two layers of 256-cell LSTMs; these are regularized using zoneout (Krueger et al., 2017) with probability 0.1. The decoder outputs 80-channel logmel spectrogram energies, two frames at a time, which are run through a dilated convolution network that outputs linear spectrograms. We run these through Griffin-Lim for fast waveform reconstruction. It is straightforward to replace Griffin-Lim by a WaveNet vocoder to improve the audio fidelity (Shen et al., 2017).\nThe baseline model achieves a 4.0 mean opinion score (MOS), outperforming the 3.82 MOS reported in (Wang et al., 2017a) on the same evaluation set. It is thus a very strong baseline."
+  }, {
+    "heading": "3.2. Style Token Architecture",
+    "text": ""
+  }, {
+    "heading": "3.2.1. REFERENCE ENCODER",
+    "text": "The reference encoder is made up of a convolutional stack, followed by an RNN. It takes as input a log-mel spectrogram, which is first passed to a stack of six 2-D convolutional layers with 3×3 kernel, 2×2 stride, batch normalization and ReLU activation function. We use 32, 32, 64, 64, 128 and 128 output channels for the 6 convolutional layers, respectively. The resulting output tensor is then shaped back to 3 dimensions (preserving the output time resolution) and fed to a single-layer 128-unit unidirectional GRU. The last GRU state serves as the reference embedding, which is then fed as input to the style token layer."
+  }, {
+    "heading": "3.2.2. STYLE TOKEN LAYER",
+    "text": "The style token layer is made up of a bank of trainable embeddings and an attention module. Unless stated otherwise, our experiments use 10 tokens with dimension 256 (to match that of each text encoder state); we found this sufficient to represent a small but rich variety of prosodic dimensions in the training data. Since each Tacotron text encoder state is the output of a (tanh activation) GRU, we also pass raw GST values through a tanh before computing attention scores. We found this led to greater token diversity.\nWhile we use content-based additive attention as a similarity measure, it is trivial to substitute alternatives. Dot-product attention, location-based attention, or even combinations of attention mechanisms may learn different types of style tokens. In our experiments, we found that using multi-head attention (Vaswani et al., 2017) significantly improves style transfer performance, and is more effective than simply increasing the number of tokens. When using h attention heads, we set the token embedding size to be 256/h and concatenate the attention outputs, such that the final style embedding size remains the same. Unlike in (Vaswani et al., 2017), we use MLP-based attention instead of dot-product attention for each attention head in our experiments.\nWe experimented with different combinations of conditioning sites; the best-performing configuration simply adds the replicated style embedding to every text encoder state."
+  }, {
+    "heading": "4. Model Interpretation",
+    "text": ""
+  }, {
+    "heading": "4.1. End-to-End Clustering/Quantization",
+    "text": "Intuitively, the GST model can be thought of as an end-toend method for decomposing the reference embedding into\na set of basis vectors or soft clusters – i.e. the style tokens. As mentioned above, the contribution of each style token is represented by an attention score, but can be replaced with any desired similarity measure. The GST layer is conceptually somewhat similar to the VQ-VAE encoder (van den Oord et al., 2017), in that it learns a quantized representation of its input. We also experimented with replacing the GST layer with a discrete, VQ-like lookup table layer, but have not seen comparable results yet.\nThis decomposition concept can also be generalized to other models, e.g. the factorized variational latent model in (Hsu et al., 2017), which exploits the multi-scale nature of a speech signal by explicitly formulating it within a factorized hierarchical graphical model. GSTs could potentially reduce the dimension of the sequence-dependent prior embeddings; rather than storing one embedding per sequence, the model would simply represent each prior embedding as a weighted combination of GSTs."
+  }, {
+    "heading": "4.2. Memory-Augmented Neural Network",
+    "text": "GST embeddings can also be viewed as an external memory that stores style information extracted from training data. The reference signal guides memory writes at training time, and memory reads at inference time. We may leverage recent advances from memory-augmented networks (Graves et al., 2014) to further improve GST learning."
+  }, {
+    "heading": "5. Related Work",
+    "text": "Prosody and speaking style models have been studied for decades in the TTS community. However, most existing models require explicit labels, such as emotion or speaker codes (Luong et al., 2017). While a small amount of research has explored automatic labeling, learning is still supervised, requiring expensive annotations for model training. AuToBI, for example, (Rosenberg, 2010) aims to produce ToBI (Silverman et al., 1992) labels that can be used by other TTS models. However, AuToBI still needs annotations for training, and ToBI, as a hand-designed label system, is known to have limited performance (Wightman, 2002).\nCluster-based modeling (Eyben et al., 2012; Jauk, 2017) is related to our work. Jauk (2017), for example, uses i-vectors (Dehak et al., 2011) and other acoustic features to cluster the training set and train models in different partitions. These methods rely on a complex set of hand-designed features, however, and require training a neutral voice model in a separate step.\nAs mentioned previously, (Skerry-Ryan et al., 2018) introduces the reference embedding used in this work, and shows that it can be used to transfer prosody from a reference signal. This embedding does not enable interpretable style control, however, and we show in Section 6 that it\ngeneralizes poorly on some style transfer tasks.\nOur work substantially extends the research in (Wang et al., 2017b), but there are several fundamental differences. First, (Wang et al., 2017b) uses a single frame from the Tacotron decoder as the query to learn tokens. It thus only models “local” variations that primarily correspond to F0. GSTs instead use a summary of the entire reference signal as input, and are thus able to uncover both local and global attributes that are essential for expressive synthesis. Second, in contrast to the decoder-side conditioning in (Wang et al., 2017b), the design of GSTs allows textual input to be conditioned on a disentangled style embedding. We show crucial implications of this for style control and transfer in Section 6.2. Finally, GSTs can be applied to both clean recordings and noisy found data. We discuss this and its significance in detail in Section 7."
+  }, {
+    "heading": "6. Experiments: Style Control and Transfer",
+    "text": "In this section, we measure the ability of GSTs to control and transfer speaking style, using the inference methods from Section 2.2.\nWe train models using 147 hours of American English audiobook data. These are read by the 2013 Blizzard Challenge speaker, Catherine Byers, in an animated and emotive storytelling style. Some books contain very expressive character voices with high dynamic range, which are challenging to model.\nAs is common for generative models, objective metrics often do not correlate well with perception (Theis et al., 2015). While we use visualizations for some experiments below, we strongly encourage readers to listen to the samples provided on our demo page."
+  }, {
+    "heading": "6.1. Style Control",
+    "text": "The experiments in this section use single-head GST attention."
+  }, {
+    "heading": "6.1.1. STYLE SELECTION",
+    "text": "The simplest method of control is conditioning the model on an individual token. At inference time, we simply replace the style embedding with a specific, optionally scaled token.\nConditioning in this manner has several benefits. First, it allows us to examine which style attributes each token encodes. Empirically, we find that each token can represent not just pitch and intensity, but also a variety of other attributes, such as speaking rate and emotion. This can be seen in Figure 2, which shows two sentences synthesized with three different style tokens (scale=0.3) from a 10-token GST model. The plots show that F0 and C0 (energy) curves are quite different across style tokens. However, the F0\nand C0 contours generated by each token follow a clear relative trend, despite the fact that input sentences A and B are completely different. Indeed, perceptually, the red token corresponds to a lower-pitch voice, the green token to a decreasing pitch, and the blue token to a faster speaking rate (note the total audio duration in both plots).\nSingle-token conditioning also reveals that not all tokens capture single attributes: while one token may learn to represent speaking rate, others may learn a mixture of attributes that reflect stylistic co-occurrence in the training data (a low-pitched token, for example, can also encode a slower speaking rate). Encouraging more independent style attribute learning is an important focus of ongoing work.\nIn addition to providing interpretability, style token conditioning can also improve synthesis quality. Consider the problem of long-form synthesis on training data with lots of prosodic variation. Many TTS models learn to generate the “average” prosodic style, which can be problematic for expressive datasets, since the very variation that characterizes them is collapsed. This can also lead to undesirable side effects, such as pitch continuously declining towards the end of each sentence. We find that conditioning on “lively”-sounding tokens can address both of these problems, significantly improving the prosodic variation."
+  }, {
+    "heading": "6.1.2. STYLE SCALING",
+    "text": "Another method for controlling style token output is via scaling. We find that multiplying a token embedding by a scalar value intensifies its style effect. (Note that large scaling values may lead to unintelligible speech, which suggests future work on improving stability.) This is illustrated in Figure 3, which shows spectrograms of utterances synthesized by two different tokens. Perceptually, these tokens encode\n0 50 100 150 200 250 300 350 400\nFrame\n0\n10\n20\n30\n40\n50\n60\n70\nC h a n n e l\n0 50 100 150 200 250 300 350 400\nFrame\n0\n10\n20\n30\n40\n50\n60\n70\nC h a n n e l\n0 50 100 150 200 250 300 350 400\nFrame\n0\n10\n20\n30\n40\n50\n60\n70\nC h a n n e l\n0 50 100 150 200 250 300 350 400\nFrame\n0\n10\n20\n30\n40\n50\n60\n70\nC h a n n e l\n(a) Token A (speed)\n0 50 100 150 200 250 300 350 400\n0\n10\n20\n30\n40\n50\n60\n70\nC h a n n e l\n0 50 100 150 200 250 300 350 400\n0\n10\n20\n30\n40\n50\n60\n70\nC h a n n e l\n0 50 100 150 200 250 300 350 400\n0\n10\n20\n30\n40\n50\n60\n70\nC h a n n e l\n0 50 100 150 200 250 300 350 400\n0\n10\n20\n30\n40\n50\n60\n70\nC h a n n e l\ntwo different speaking styles: a faster speaking rate (3(a)), and more animated speech (3(b)). Figure 3(a) shows that increasing the scaling factor of the faster speaking rate token causes a gradual compression of the spectrogram in the time domain. Similarly, Figure 3(b) shows that increasing the scaling factor of the animated speech token yields commensurate increases in pitch variation. These style scaling effects hold even for negative values (speaking rate becomes slower, and speech becomes calmer), despite the fact that the model only sees positive (softmax) values during training."
+  }, {
+    "heading": "6.1.3. STYLE SAMPLING",
+    "text": "We can also control synthesis during inference by modifying the attention module weights inside the style token layer. Since the GST attention produces a set of combination weights, these may be refined manually to yield a desired interpolation. We can also use randomly generated softmax weights to sample the style space. The sampling diversity can be controlled by tuning the softmax temperature."
+  }, {
+    "heading": "6.1.4. TEXT-SIDE STYLE CONTROL/MORPHING",
+    "text": "While the same style embedding is added to all text encoder states during training, this doesn’t need to be the case in inference mode. As our audio samples demonstrate, this allows us to do piecewise style control or morphing by conditioning on one or more tokens for different segments of input text."
+  }, {
+    "heading": "6.2. Style Transfer",
+    "text": "Style transfer is an active area of research that aims to synthesize a phrase in the prosodic style of a reference signal (Wu et al., 2013; Nakashika et al., 2016; Kinnunen et al., 2017). The property that a GST model can be conditioned on any convex combination of style tokens lends itself well to this task; at inference time (method 2 of Section 2.2), we can simply feed a reference signal to guide the choice of token combination weights. The experiments below use 4-head GST attention."
+  }, {
+    "heading": "6.2.1. PARALLEL STYLE TRANSFER",
+    "text": "Figure 4 shows spectrograms for a parallel transfer task, where the text to synthesize matches the text of the reference signal. The GST model spectrogram is at the bottom right, compared to three other baselines: (a) the ground-truth input signal (i.e. the reference); (b) inference performed by a baseline Tacotron model (which infers acoustics only from text); and (c) inference as performed by (Skerry-Ryan et al., 2018), a Tacotron system which conditions the text encoder directly on an 128-D reference embedding.\nWe see that, given only text input, the baseline Tacotron model does not closely match the prosodic style of the reference signal. By contrast, the direct conditioning method of (Skerry-Ryan et al., 2018) results in nearly time-aligned\nfine prosody transfer. The GST model is somewhere in between: while its output duration and formant transitions don’t precisely match those of the reference, the overall spectrotemporal envelopes do. Perceptually, the GST model resembles the prosodic style of the reference signal, regardless of its style, and even when it comes from an unseen speaker. This also indicates that the model isn’t merely learning to copy the reference."
+  }, {
+    "heading": "6.2.2. NON-PARALLEL STYLE TRANSFER",
+    "text": "We next show results for a non-parallel transfer task, in which a TTS system must synthesize arbitrary text in the prosodic style of a reference signal. We chose three different reference signals for this task, and tested how well a GST model replicated each style when synthesizing the same target phrase. Since long-form synthesis can benefit significantly from proper stylistic rendering, we used a long (258-character) target phrase. We chose source phrases of varying lengths (10, 96, and 321 characters, respectively). Figure 5 shows alignment matrices for synthesis conditioned on each source signal.\nThe top row shows a 10-token GST model. This model robustly generalizes to all three conditioning inputs, as evidenced by the good alignment plots. The bottom row shows a 256-token GST model exhibiting the same behavior; we include this model to show that GSTs remain robust even when the number of tokens (256) is larger than the reference embedding dimensionality (128).\nThe middle row shows a model with direct reference embedding conditioning. The attention matrices show that this\nmodel fails when conditioned on the shorter source phrases, since it tries to squeeze its synthesis into the same time interval as that of the reference. While the model successfully aligns when conditioned on the longest input, intelligibility is poor for some words: the per-utterance embedding captures too much information (such as timing and phonetics) from the source, hurting generalization.\nTo evaluate the quality of this method at scale, we ran sideby-side subjective tests of non-parallel GST style transfer against a Tacotron baseline. We used an evaluation set of 60 audiobook sentences, including many long phrases. We generated two sets of GST output by conditioning the model on two different narrative-style reference signals, unseen during training. A side-by-side subjective test indicated that raters preferred both sets of GST synthesis against a Tacotron baseline, as shown in Table 1.\nThe performance of GSTs on non-parallel style transfer is significant, since it allows using a source signal to guide robust stylistic synthesis of arbitrary text."
+  }, {
+    "heading": "7. Experiments: Unlabeled Noisy Found Data",
+    "text": "Studio-quality data can be both expensive and time consuming to record. While the internet holds vast amounts of rich real-life expressive speech, it is often noisy and difficult to label.\nIn this section, we demonstrate how GSTs can be used to train robust models directly from noisy found data, without modifications."
+  }, {
+    "heading": "7.1. Artificial Noisy Data",
+    "text": "As a first experiment, we artificially generate training sets by adding noise to clean speech. The motivation here is to\nsimulate real noisy data while performing controlled experiments. To achieve this, we pass a single-speaker US English dataset into a room simulator (Kim et al., 2017), which adds varying types of background noise and room reverberations. The signal-to-noise ratio (SNR) ranges from 5-25 dB, and the T60s of room reverberation range from 100-900 ms. We create four different training sets where 50%, 75%, 90% and 95% of the input is noisified, respectively.\nAfter training a GST-augmented Tacotron on these datasets, we run inference in the first mode described in Section 2.2. Instead of providing a reference signal, we condition the model on each individual style token, which gives us an interpretable, audible sense of what each token has learned. Interestingly, we find that different noises are treated as styles and “absorbed” into different tokens. We illustrate the spectrograms from a few tokens in Figure 6. We can see (and hear) that these tokens clearly correspond to different interference types, such as music, reverberation and general background noise. Importantly, this method reveals that a subset of the learned tokens also correspond to completely clean speech. This means that we can synthesize clean speech for arbitrary text input by conditioning the model on a single, clean style token.\nTo demonstrate this, we run inference using a manuallyidentified clean style token (scaled to 0.3), and then evaluate the output using MOS naturalness tests. We use the same 100-phrase evaluation set as (Wang et al., 2017a), collecting 8 ratings each from crowdsourced native speakers. Table 2 shows MOS results for both a baseline Tacotron and a “clean-token\" GST model. While the baseline Tacotron achieves a 4.0 MOS when the dataset is 100% clean, MOS decreases as interference increases, dropping to a low score of 1.353. Because the model has no prior knowledge of speech or noise, it blindly models all statistics in the training set, resulting in substantial amounts of noise during synthesis.\nBy contrast, the GST model achieves about 4.0 MOS in all noise conditions. Note that the number of tokens needs to increase along with the percentage of noise to achieve this result. For example, a 10-token GST model yields clean tokens when trained on a 50% noise dataset, but the noisier datasets required a 20-token model. Future work may explore how to adapt the number of tokens automatically to a given data distribution."
+  }, {
+    "heading": "7.2. Real Multi-Speaker Found Data",
+    "text": "Our second experiment uses real data. This dataset is made up of audio tracks mined from 439 official TED YouTube channel videos. The tracks contain significant acoustic variations, including channel variation (near- and far-field speech), noise (e.g. laughs), and reverberation. We use an endpointer to segment the audio tracks into short clips, followed by an ASR model to create <text, audio> training pairs. Despite the fact that the ASR model generates a significant number of transcription and misalignment errors, we perform no other preprocessing. The final training set is about 68 hours long and contains about 439 speakers.\nWithout using any metadata as labels, we train a baseline Tacotron and a 1024-token GST model for comparison. As expected, the baseline fails to learn, since the multi-speaker data is too varied. The GST model results are presented in Figure 7. This shows spectrograms for the same phrase overlaid with F0 tracks, generated by conditioning the model on two randomly chosen tokens. Examining the trained GSTs, we find that different tokens correspond to different speakers. This means that, to synthesize with a specific speaker’s voice, we can simply feed audio from that speaker as a reference signal. See Section 7.3 for more quantitative evaluations.\nFinally, we exploit the fact that most of the talks are in English, but a small fraction are in Spanish. For this experiment, we compare baseline and GST-enabled noisy data models on a cross-lingual style transfer task. For a baseline, we train a multi-speaker Tacotron similar to (Ping et al., 2017), using video IDs as a proxy for speaker labels. Conditioned on a Spanish speaker label, we then synthesize 100 English phrases for which we have ground-truth transcriptions. For the GST system, we feed a reference signal from the same Spanish speaker and synthesize the same 100 English phrases. While the Spanish accent from the speaker is not preserved, we find that the GST model produces completely intelligible English speech with a similar pitch range as the speaker. By contrast, the multi-speaker Tacotron output is much less intelligible.\nTo evaluate this result objectively, we compute word error rates (WER) of an English ASR model on the synthesized speech. As shown in Table 3, the WER of the GST utterances is much lower than that of the multi-speaker model.\nThe results strongly corroborate that GSTs learn embeddings disentangled from text content. Though this is an exciting early result, an in-depth study of using GST for prosody-preserving language transfer is in order."
+  }, {
+    "heading": "7.3. Quantitative Evaluations",
+    "text": "We use t-SNE (Maaten & Hinton, 2008) to visualize the style embeddings learned from both the artificial noise and TED datasets. Figure 8(a) shows that the embeddings learned from the artificial noisy dataset (50% clean) are clearly separated into two classes. Figure 8(b) shows style embeddings for 2,000 randomly drawn samples containing 14 TED talk data speakers. We see that samples are well separated into 14 clusters, each corresponding to an individual speaker. Female and male speakers are linearly separable.\nWe also use style embeddings as features to perform noise and speaker classification with Linear Discriminative Analysis. Results are shown in Table 4. For noise classification, GSTs uncover the true label with 99.2% accuracy. For speaker classification, we use TED video IDs as true labels\nand compare with the i-vector method (Dehak et al., 2011), a standard representation used in modern speaker verification systems. For this task, the test set contains 431 speakers. While both trained and tested on short utterances (mean duration 3.75 secs), we can see that GSTs are comparable with i-vectors. This is an encouraging result, given that i-vectors were specifically designed for speaker classification. We speculate that GST has the potential to be applied to speaker diarization."
+  }, {
+    "heading": "7.4. Implications",
+    "text": "The results above have important implications for future TTS research on found data. First, due to the robustness of GSTs to both acoustic and textual noise, the design of automated data mining pipelines may be greatly simplified. The robustness as a function of the accuracy of individual pipeline component is worth a systematic study. Second, style attributes, such as emotion, are often very difficult to label for large-scale noisy data. Using GSTs or weights to automatically generate style annotations may substantially reduce human-in-the-loop effort."
+  }, {
+    "heading": "8. Conclusions and Discussions",
+    "text": "This work has introduced Global Style Tokens, a powerful method for modeling style in end-to-end TTS systems. GSTs are intuitive, easy to implement, and learn without explicit labels. We have shown that, in addition to learning interpretable embeddings that can be used to control and transfer style, GSTs are a general technique for uncovering latent variations in data.\nThere is still much to be investigated, including improving GST learning, and using GST weights as targets to predict from text. Finally, while this work adds GSTs only to Tacotron, we believe the method can be readily used by other types of end-to-end TTS models. More generally, we envision that GSTs can be applied to models in other domains – such as text-to-image and neural machine translation systems – that would benefit from interpretability, controllability and robustness."
+  }, {
+    "heading": "Acknowledgements",
+    "text": "The authors thank Aren Jansen, Rob Clark, Zhifeng Chen, Ron J. Weiss, Mike Schuster, Yonghui Wu, Patrick Nguyen, and the Machine Hearing, Google Brain and Google TTS teams for their helpful discussions and feedback."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Deep voice: Real-time neural text-tospeech",
+    "authors": ["S.O. Arik", "M. Chrzanowski", "A. Coates", "G. Diamos", "A. Gibiansky", "Y. Kang", "X. Li", "J. Miller", "J. Raiman", "S Sengupta"],
+    "year": 2017
+  }, {
+    "title": "Front-end factor analysis for speaker verification",
+    "authors": ["N. Dehak", "P.J. Kenny", "R. Dehak", "P. Dumouchel", "P. Ouellet"],
+    "venue": "IEEE Transactions on Audio, Speech, and Language Processing,",
+    "year": 2011
+  }, {
+    "title": "Unsupervised clustering of emotion and voice styles for expressive tts",
+    "authors": ["F. Eyben", "S. Buchholz", "N. Braunschweiler"],
+    "venue": "In ICASSP,",
+    "year": 2012
+  }, {
+    "title": "Signal estimation from modified short-time fourier transform",
+    "authors": ["D. Griffin", "J. Lim"],
+    "venue": "IEEE Transactions on Acoustics, Speech, and Signal Processing,",
+    "year": 1984
+  }, {
+    "title": "Unsupervised learning of disentangled and interpretable representations from sequential data",
+    "authors": ["Hsu", "W.-N", "Y. Zhang", "J. Glass"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2017
+  }, {
+    "title": "Unsupervised learning for expressive speech synthesis",
+    "authors": ["I. Jauk"],
+    "venue": "PhD thesis, Universitat Politècnica de Catalunya,",
+    "year": 2017
+  }, {
+    "title": "Generation of large-scale simulated utterances in virtual rooms to train deep-neural networks for far-field speech recognition in google home",
+    "authors": ["C. Kim", "A. Misra", "K. Chin", "T. Hughes", "A. Narayanan", "T. Sainath", "M. Bacchiani"],
+    "venue": "Proc. INTERSPEECH",
+    "year": 2017
+  }, {
+    "title": "Nonparallel voice conversion using i-vector plda: Towards unifying speaker verification and transformation",
+    "authors": ["T. Kinnunen", "L. Juvela", "P. Alku", "J. Yamagishi"],
+    "year": 2017
+  }, {
+    "title": "Zoneout: Regularizing RNNs by randomly preserving hidden activations",
+    "authors": ["D. Krueger", "T. Maharaj", "J. Kramár", "M. Pezeshki", "N. Ballas", "N.R. Ke", "A. Goyal", "Y. Bengio", "H. Larochelle", "A Courville"],
+    "venue": "In Proc. ICLR,",
+    "year": 2017
+  }, {
+    "title": "Adapting and controlling dnn-based speech synthesis using input codes",
+    "authors": ["Luong", "H.-T", "S. Takaki", "G.E. Henter", "J. Yamagishi"],
+    "venue": "In ICASSP,",
+    "year": 2017
+  }, {
+    "title": "Visualizing data using t-sne",
+    "authors": ["Maaten", "L. v. d", "G. Hinton"],
+    "venue": "Journal of machine learning research,",
+    "year": 2008
+  }, {
+    "title": "Non-parallel training in voice conversion using an adaptive restricted boltzmann machine",
+    "authors": ["T. Nakashika", "T. Takiguchi", "Y. Minami"],
+    "venue": "IEEE/ACM Trans. Audio, Speech and Lang. Proc.,",
+    "year": 2016
+  }, {
+    "title": "Deep voice 3: 2000-speaker neural text-to-speech",
+    "authors": ["W. Ping", "K. Peng", "A. Gibiansky", "S.O. Arik", "A. Kannan", "S. Narang", "J. Raiman", "J. Miller"],
+    "venue": "arXiv preprint arXiv:1710.07654,",
+    "year": 2017
+  }, {
+    "title": "AuToBI-a tool for automatic ToBI annotation",
+    "authors": ["A. Rosenberg"],
+    "venue": "In Interspeech, pp. 146–149,",
+    "year": 2010
+  }, {
+    "title": "Natural tts synthesis by conditioning wavenet on mel spectrogram predictions",
+    "authors": ["J. Shen", "R. Pang", "R.J. Weiss", "M. Schuster", "N. Jaitly", "Z. Yang", "Z. Chen", "Y. Zhang", "Y. Wang", "R SkerryRyan"],
+    "venue": "arXiv preprint arXiv:1712.05884,",
+    "year": 2017
+  }, {
+    "title": "ToBI: A standard for labeling english prosody",
+    "authors": ["K. Silverman", "M. Beckman", "J. Pitrelli", "M. Ostendorf", "C. Wightman", "P. Price", "J. Pierrehumbert", "J. Hirschberg"],
+    "venue": "In Second International Conference on Spoken Language Processing,",
+    "year": 1992
+  }, {
+    "title": "Towards end-to-end prosody transfer for expressive speech synthesis with Tacotron",
+    "authors": ["R. Skerry-Ryan", "E. Battenberg", "Y. Xiao", "Y. Wang", "D. Stanton", "J. Shor", "R.J. Weiss", "R. Clark", "R.A. Saurous"],
+    "year": 2018
+  }, {
+    "title": "Voice synthesis for in-the-wild speakers via a phonological loop",
+    "authors": ["Y. Taigman", "L. Wolf", "A. Polyak", "E. Nachmani"],
+    "venue": "arXiv preprint arXiv:1707.06588,",
+    "year": 2017
+  }, {
+    "title": "Text-to-speech synthesis",
+    "authors": ["P. Taylor"],
+    "venue": "Cambridge university press,",
+    "year": 2009
+  }, {
+    "title": "A note on the evaluation of generative models",
+    "authors": ["L. Theis", "Oord", "A. v. d", "M. Bethge"],
+    "venue": "arXiv preprint arXiv:1511.01844,",
+    "year": 2015
+  }, {
+    "title": "Wavenet: A generative model for raw audio",
+    "authors": ["A. van den Oord", "S. Dieleman", "H. Zen", "K. Simonyan", "O. Vinyals", "A. Graves", "N. Kalchbrenner", "A. Senior", "K. Kavukcuoglu"],
+    "venue": "CoRR abs/1609.03499,",
+    "year": 2016
+  }, {
+    "title": "Neural discrete representation learning",
+    "authors": ["A. van den Oord", "O Vinyals"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2017
+  }, {
+    "title": "Attention is all you need",
+    "authors": ["A. Vaswani", "N. Shazeer", "N. Parmar", "J. Uszkoreit", "L. Jones", "A.N. Gomez", "Ł. Kaiser", "I. Polosukhin"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2017
+  }, {
+    "title": "Tacotron: Towards end-to-end speech synthesis",
+    "authors": ["Y. Wang", "R. Skerry-Ryan", "D. Stanton", "Y. Wu", "R.J. Weiss", "N. Jaitly", "Z. Yang", "Y. Xiao", "Z. Chen", "S. Bengio", "Q. Le", "Y. Agiomyrgiannakis", "R. Clark", "R.A. Saurous"],
+    "venue": "In Proc. Interspeech,",
+    "year": 2017
+  }, {
+    "title": "Uncovering latent style factors for expressive speech synthesis",
+    "authors": ["Y. Wang", "R. Skerry-Ryan", "Y. Xiao", "D. Stanton", "J. Shor", "E. Battenberg", "R. Clark", "R.A. Saurous"],
+    "venue": "ML4Audio Workshop,",
+    "year": 2017
+  }, {
+    "title": "Tobi or not tobi",
+    "authors": ["C.W. Wightman"],
+    "venue": "In Speech Prosody 2002, International Conference,",
+    "year": 2002
+  }, {
+    "title": "Conditional restricted boltzmann machine for voice conversion",
+    "authors": ["Z. Wu", "E.S. Chng", "H. Li"],
+    "venue": "In ChinaSIP,",
+    "year": 2013
+  }, {
+    "title": "Fast, compact, and high quality LSTM-RNN based statistical parametric speech synthesizers for mobile devices",
+    "authors": ["H. Zen", "Y. Agiomyrgiannakis", "N. Egberts", "F. Henderson", "P. Szczepaniak"],
+    "venue": "Proceedings Interspeech,",
+    "year": 2016
+  }],
+  "id": "SP:697363bf0e7eb53e1a7cd9f2aaf6d4d450cb5986",
+  "authors": [{
+    "name": "Yuxuan Wang",
+    "affiliations": []
+  }, {
+    "name": "Daisy Stanton",
+    "affiliations": []
+  }, {
+    "name": "Yu Zhang",
+    "affiliations": []
+  }, {
+    "name": "RJ Skerry-Ryan",
+    "affiliations": []
+  }, {
+    "name": "Eric Battenberg",
+    "affiliations": []
+  }, {
+    "name": "Joel Shor",
+    "affiliations": []
+  }, {
+    "name": "Ying Xiao",
+    "affiliations": []
+  }, {
+    "name": "Fei Ren",
+    "affiliations": []
+  }, {
+    "name": "Ye Jia",
+    "affiliations": []
+  }, {
+    "name": "Rif A. Saurous",
+    "affiliations": []
+  }],
+  "abstractText": "In this work, we propose “global style tokens” (GSTs), a bank of embeddings that are jointly trained within Tacotron, a state-of-the-art end-toend speech synthesis system. The embeddings are trained with no explicit labels, yet learn to model a large range of acoustic expressiveness. GSTs lead to a rich set of significant results. The soft interpretable “labels” they generate can be used to control synthesis in novel ways, such as varying speed and speaking style – independently of the text content. They can also be used for style transfer, replicating the speaking style of a single audio clip across an entire long-form text corpus. When trained on noisy, unlabeled found data, GSTs learn to factorize noise and speaker identity, providing a path towards highly scalable but robust speech synthesis.",
+  "title": "Style Tokens: Unsupervised Style Modeling, Control and Transfer in End-to-End Speech Synthesis"
+}

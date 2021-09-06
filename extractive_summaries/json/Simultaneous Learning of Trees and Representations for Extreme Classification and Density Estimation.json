@@ -1,0 +1,295 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Several machine learning settings are concerned with performing predictions in a very large discrete label space. From extreme multi-class classification to language modeling, one commonly used approach to this problem reduces it to a series of choices in a tree-structured model, where the leaves typically correspond to labels. While this allows for faster prediction, and is in many cases necessary to make the models tractable, the performance of the system can depend significantly on the structure of the tree used, e.g. (Mnih & Hinton, 2009).\nInstead of relying on possibly costly heuristics (Mnih &\n1New York University, New York, New York, USA 2Massachussets Institute of Technology, Cambridge, Massachussets, USA. Correspondence to: Yacine Jernite <jernite@cs.nyu.edu>.\nProceedings of the 34 th International Conference on Machine Learning, Sydney, Australia, PMLR 70, 2017. Copyright 2017 by the author(s).\nHinton, 2009), extrinsic hierarchies (Morin & Bengio, 2005) which can badly generalize across different data sets, or purely random trees, we provide an efficient datadependent algorithm for tree construction and training. Inspired by the LOM tree algorithm (Choromanska & Langford, 2015) for binary trees, we present an objective function which favors high-quality node splits, i.e. balanced and easily separable. In contrast to previous work, our objective applies to trees of arbitrary width and leads to guarantees on model accuracy. Furthermore, we show how to successfully optimize it in the setting when the data representation needs to be learned simultaneously with the classification tree.\nFinally, the multi-class classification problem is closely related to that of conditional density estimation (Ram & Gray, 2011; Bishop, 2006) since both need to consider all labels (at least implicitly) during learning and at prediction time. Both problems present similar difficulties when dealing with very large label spaces, and the techniques that we present in this work can be applied indiscriminately to either. Indeed, we show how to adapt our algorithm to efficiently solve the conditional density estimation problem of learning a language model which uses a tree structured objective.\nThis paper is organized as follows: Section 2 discusses related work, Section 3 outlines the necessary background and defines the flat and tree-structured objectives for multi-class classification and density estimation, Section 4 presents the objective and the optimization algorithm, Section ?? contains theoretical results, Section 5 adapts the algorithm to the problem of language modeling, Section 6 reports empirical results on the Flickr tag prediction dataset and Gutenberg text corpus, and finally Section 7 concludes the paper. Supplementary material contains additional material and proofs of theoretical statements of the paper. We also release the C++ implementation of our algorithm1."
+  }, {
+    "heading": "2. Related Work",
+    "text": "The multi-class classification problem has been addressed in the literature in a variety of ways. Some examples include i) clustering methods (Bengio et al., 2010; Madzarov et al., 2009; Weston et al., 2013) ((Bengio et al., 2010)\n1https://github.com/yjernite/fastTextLearnTree\nwas later improved in (Deng et al., 2011)), ii) sparse output coding (Zhao & Xing, 2013), iii) variants of error correcting output codes (Hsu et al., 2009), iv) variants of iterative least-squares (Agarwal et al., 2014), v) a method based on guess-averse loss functions (Beijbom et al., 2014), and vi) classification trees (Beygelzimer et al., 2009b; Choromanska & Langford, 2015; Daume et al., 2016) (that includes the Conditional Probability Trees (Beygelzimer et al., 2009a) when extended to the classification setting).\nThe recently proposed LOM tree algorithm (Choromanska & Langford, 2015) differs significantly from other similar hierarchical approaches, like for example Filter Trees (Beygelzimer et al., 2009b) or random trees (Breiman, 2001), in that it addresses the problem of learning good-quality binary node partitions. The method results in low-entropy trees and instead of using an inefficient enumerate-and-test approach, see e.g: (Breiman et al., 1984), to find a good partition or expensive brute-force optimization (Agarwal et al., 2013), it searches the space of all possible partitions with SGD (Bottou, 1998). Another work (Daume et al., 2016) uses a binary tree to map an example to a small subset of candidate labels and makes a final prediction via a more tractable one-against-all classifier, where this subset is identified with the proposed Recall Tree. A notable approach based on decision trees also include FastXML (Prabhu & Varma, 2014) (and its slower and less accurate at prediction predecessor (Agarwal et al., 2013)). It is based on optimizing the rank-sensitive loss function and shows an advantage over some other ranking and NLP-based techniques in the context of multi-label classification. Other related approaches include the SLEEC classifier (Bhatia et al., 2015) for extreme multi-label classification that learns embeddings which preserve pairwise distances between only the nearest label vectors and ranking approaches based on negative sampling (Weston et al., 2011). Another tree approach (Kontschieder et al., 2015) shows no computational speed up but leads to significant improvements in prediction accuracy.\nConditional density estimation can also be challenging in settings where the label space is large. The underlying problem here consists in learning a probability distribution over a set of random variables given some context. For example, in the language modeling setting one can learn the probability of a word given the previous text, either by making a Markov assumption and approximating the left context by the last few words seen (n-grams e.g. (Jelinek & Mercer, 1980; Katz, 1987), feed-forward neural language models (Mnih & Teh, 2012; Mikolov et al., 2011; Schwenk & Gauvain, 2002)), or by attempting to learn a low-dimensional representation of the full history (RNNs (Mikolov et al., 2010; Mirowski & Vlachos, 2015; Tai et al., 2015; Kumar et al., 2015)). Both the recurrent and feed-forward Neural Probabilistic Language Models (NPLM) (Bengio et al., 2003) simultaneously learn a distributed representation for words and the probability function for word sequences, expressed in terms of these repre-\nsentations. The major drawback of these models is that they can be slow to train, as they grow linearly with the vocabulary size (anywhere between 10,000 and 1M words), which can make them difficult to apply (Mnih & Teh, 2012). A number of methods have been proposed to overcome this difficulty. Works such as LBL (Mnih & Hinton, 2007) or Word2Vec (Mikolov et al., 2013) reduce the model to its barest bones, with only one hidden layer and no nonlinearities. Another proposed approach has been to only compute the NPLM probabilities for a reduced vocabulary size, and use hybrid neural-n-gram model (Schwenk & Gauvain, 2005) at prediction time. Other avenues to reduce the cost of computing gradients for large vocabularies include using different sampling techniques to approximate it (Bengio & Sénécal, 2003; Bengio & Senecal, 2008; Mnih & Teh, 2012), replacing the likelihood objective by a contrastive one (Gutmann & Hyvärinen, 2012) or spherical loss (de Brébisson & Vincent, 2016), relying on self-normalizing models (Andreas & Klein, 2015), taking advantage of data sparsity (Vincent et al., 2015), or using clustering-based methods (Grave et al., 2016). It should be noted however that most of these techniques (to the exception of (Grave et al., 2016)) do not provide any speed up at test time.\nSimilarly to the classification case, there have also been a significant number of works that use tree structured models to accelerate computation of the likelihood and gradients (Morin & Bengio, 2005; Mnih & Hinton, 2009; Djuric et al., 2015; Mikolov et al., 2013). These use various heuristics to build a hierarchy, from using ontologies (Morin & Bengio, 2005) to Huffman coding (Mikolov et al., 2013). One algorithm which endeavors to learn a binary tree structure along with the representation is presented in (Mnih & Hinton, 2009). They iteratively learn word representations given a fixed tree structure, and use a criterion that trades off between making a balanced tree and clustering the words based on their current embedding. The application we present in the second part of our paper is most closely related to the latter work, and uses a similar embedding of the context. However, where their setting is limited to binary trees, we work with arbitrary width, and provide a tree building objective which is both less computationally costly and comes with theoretical guarantees."
+  }, {
+    "heading": "3. Background",
+    "text": "In this section, we define the classification and loglikelihood objectives we wish to maximize. Let X be an input space, and V a label space. Let P be a joint distribution over samples in (X ,V), and let fΘ : X → Rdr be a function mapping every input x ∈ X to a representation r ∈ Rdr , and parametrized by Θ (e.g. as a neural network).\nWe consider two objectives. Let g be a function that takes an input representation r ∈ Rdr , and predicts for it a label g(r) ∈ V . The classification objective is defined as the expected proportion of correctly classified examples:\nOclass(Θ, g) = E(x,y)∼P [ 1[g ◦ fΘ(x) = y] ] (1)\nNow, let pθ(·|r) define a conditional probability distribution (parametrized by θ) over V for any r ∈ Rdr . The density estimation task consists in maximizing the expected log-likelihood of samples from (X ,V):\nOll(Θ, θ) = E(x,y)∼P [ log pθ(y|fΘ(x)) ]\n(2)\nTree-Structured Classification and Density Estimation Let us now show how to express the objectives in Equations 1 and 2 when using tree-structured prediction functions (with fixed structure) as illustrated in Figure 1.\nConsider a tree T of depth D and arity M with K = |V| leaf nodes and N internal nodes. Each leaf l corresponds to a label, and can be identified with the path cl from the root to the leaf. In the rest of the paper, we will use the following notations:\ncl = ((cl1,1, c l 1,2), . . . , (c l d,1, c l d,2), . . . , (c l D,1, c l D,2)), (3)\nwhere cld,1 ∈ [1, N ] correspond to the node index at depth d, and cld,2 ∈ [1,M ] indicates which child of cld,1 is next in the path. In that case, our classification and density estimation problems are reduced to choosing the right child of a node or defining a probability distribution over children given x ∈ X respectively.\nWe then need to replace g and pθ with node decision functions (gn)Nn=1 and conditional probability distributions (pθn) N n=1 respectively. Given such a tree and representation function, our objective functions then become:\nOclass(Θ, g) = E(x,y)∼P [ D∏ d=1 1[gcld,1 ◦ fΘ(x) = c l d,2] ] (4)\nOll(Θ, θ) = E(x,y)∼P [ D∑ d=1 log pθ cl d,1 (cld,2|fΘ(x)) ]\n(5)\nThe tree objectives defined in Equations 4 and 5 can be optimized in the space of parameters of the representation\nand node functions using standard gradient ascent methods. However, they also implicitly depend on the tree structure T . In the rest of the paper, we provide a surrogate objective function which determines the structure of the tree and, as we show theoretically (Section ??), maximizes the criterion in Equation 4 and, as we show empirically (Sections 5 and 6), maximizes the criterion in Equation 5."
+  }, {
+    "heading": "4. Learning Tree-Structured Objectives",
+    "text": "In this section, we introduce a per-node objective Jn which leads to good quality trees when maximized, and provide an algorithm to optimize it."
+  }, {
+    "heading": "4.1. Objective function",
+    "text": "We define the node objective Jn for node n as:\nJn = 2\nM K∑ i=1 q (n) i M∑ j=1 |p(n)j − p (n) j|i |, (6)\nwhere q(n)i denotes the proportion of nodes reaching node n that are of class i, p(n)j|i is the probability that an example of class i reaching n will be sent to its jth child, and p(n)j is the probability that an example of any class reaching n will be sent to its jth child. Note that we have:\n∀j ∈ [1,M ], p(n)j = K∑ i=1 q (n) i p (n) j|i . (7)\nThe objective in Equation 6 reduces to the LOM tree objective in the case of M = 2.\nAt a high level, maximizing the objective encourages the conditional distribution for each class to be as different as possible from the global one; so the node decision function needs to be able to discriminate between examples of the different classes. The objective thus favors balanced and pure node splits. To wit, we call a split at node n perfectly balanced when the global distribution p(n)· is uniform, and perfectly pure when each p(n)·|i takes value either 0 or 1, as all data points from the same class reaching node n are sent to the same child.\nIn Section ?? we discuss the theoretical properties of this objective in details. We show that maximizing it leads to perfectly balanced and perfectly pure splits. We also derive the boosting theorem that shows the number of internal nodes that the tree needs to have to reduce the classification error below any arbitrary threshold, under the assumption that the objective is “weakly” optimized in each node of the tree.\nRemark 1. In the rest of the paper, we use node functions gn which take as input a data representation r ∈ Rdr and output a distribution over children of n (for example using a soft-max function). When used in the classification setting, gn sends the data point to the child with the highest predicted probability. With this notation, and representa-\nAlgorithm 1 Tree Learning Algorithm Input Input representation function: f with parameters\nΘf . Node decisions functions (gn)Kn=1 with parameters (Θn)Kn=1. Gradient step size .\nOuput Learned M -ary tree, parameters Θf and (Θn)Kn=1.\nprocedure InitializeNodeStats () for n = 1 to N do\nfor i = 1 to K do SumProbasn,i ← 0 Countsn,i ← 0\nprocedure NodeCompute (w, n, i, target) p← gn(w) SumProbasn,i ← SumProbasn,i + p Countsn,i ← Countsn,i + 1 // Gradient step in the node parameters Θn ← Θn + ∂ptarget∂Θn return ∂ptarget∂w\nInitializeNodeStats () for Each batch b do\n// AssignLabels () re-builds the tree based on the // current node statistics AssignLabels ({1, . . . ,K}, root) for each example (x, i) in b do\nCompute input representation w = f(x) ∆w← 0 for d = 1 to D do\n// ci1,...,D is the current path from the root to i Set node id and target: (n, j)← cid ∆w← ∆w + NodeCompute (w, n, i, j)\n// Gradient step in the parameters of f Θf ← Θf + ∂f∂Θf ∆w\ntion function fΘ, we can write:\np (n) j := E(x,y)∼P [gn ◦ fΘ(x)] (8)\nand p\n(n) j|i := E(x,y)∼P [gn ◦ fΘ(x)|y = i]. (9)\nAn intuitive geometric interpretation of probabilities p(n)j and p(n)j|i can be found in the Supplementary material."
+  }, {
+    "heading": "4.2. Algorithm",
+    "text": "In this section we present an algorithm for simultaneously building the classification tree and learning the data representation. We aim at maximizing the accuracy of the tree as defined in Equation 4 by maximizing the objective Jn of Equation 6 at each node of the tree (the boosting theorem that will be presented in Section ?? shows the connection between the two).\nAlgorithm 2 Label Assignment Algorithm Input labels currently reaching the node\nnode ID n Ouput Lists of labels now assigned to the node’s children\nprocedure CheckFull (full, assigned, count, j) if |assignedj | ≡ 2 mod (M − 1) then\ncount← count− (M − 1) if count = 0 then\nfull← full ∪ {j} if count = 1 then\ncount← 0 for j′ s.t. |assignedj′ | ≡ 1 mod (M − 1) do\nfull← full ∪ {j′}\nprocedure AssignLabels (labels, n) // first, compute p(n)j and p (n) j|i .\npavg0 ← 0 count← 0 for i in labels do\npavg0 ← p avg 0 + SumProbasn,i count← count + Countsn,i pavgi ← SumProbasn,i/Countsn,i\npavg0 ← p avg 0 /count // then, assign each label to a child of n unassigned← labels full← ∅ count← (|unassigned| − (M − 1)) for j = 1 to M do\nassignedj ← ∅ while unassigned 6= ∅ do//\n∂Jn ∂p (n) j|i is given in Equation 10\n(i∗, j∗)← argmax i∈unassigned,j 6∈full ( ∂Jn ∂p (n) j|i ) if n = root then\nci ∗ ← (n, j∗)\nelse ci ∗ ← (ci∗ , (n, j∗)) assignedj∗ ← assignedj∗ ∪ {i∗} unassigned← unassigned \\ {i∗} CheckFull (full, assigned, count, j∗)\nfor j = 1 to M do AssignLabels (assignedj , childn,j , d+ 1) return assigned\nLet us now show how we can efficiently optimize Jn. The gradient of Jn with respect to the conditional probability distributions is (see proof of Lemma 1 in the Supplement):\n∂Jn\n∂p (n) j|i\n= 2\nM q\n(n) i (1− q (n) i ) sign(p (n) j|i − p (n) j ). (10)\nThen, according to Equation 10, increasing the likelihood of sending label i to any child j of n such that p(n)j|i > p (n) j increases the objective Jn. Note that we only need to con-\nsider the labels i for which q(n)i > 0, that is, labels i which reach node n in the current tree.\nWe also want to make sure that we have a well-formed M - ary tree at each step, which means that the number of labels assigned to any node is always congruent to 1 modulo (M − 1). Algorithm 2 provides such an assignment by greedily choosing the label-child pair (i, j) such that j still has room for labels with the highest value of ∂Jn\n∂p (n) j|i .\nThe global procedure, described in Algorithm 1, is then the following.\n• At the start of each batch, re-assign targets for each node prediction function, starting from the root and going down the tree. At each node, each label is more likely to be re-assigned to the child it has had most affinity with in the past (Algorithm 2). This can be seen as a form of hierarchical on-line clustering.\n• Every example now has a unique path depending on its label. For each sample, we then take a gradient step at each node along the assigned path (see Algorithm 1).\nLemma 1. Algorithm 2 finds the assignment of nodes to children for a fixed depth tree which most increases Jn under well-formedness constraints.\nRemark 2. An interesting feature of the algorithm, is that since the representation of examples from different classes are learned together, there is intuitively less of a risk of getting stuck in a specific tree configuration. More specifically, if two similar classes are initially assigned to different children of a node, the algorithm is less likely to keep this initial decision since the representations for examples of both classes will be pulled together in other nodes.\nNext, we provide a theoretical analysis of the objective introduced in Equation 6. Proofs are deferred to the Supplementary material."
+  }, {
+    "heading": "5. Theoretical Results",
+    "text": "In this section, we first analyze theoretical properties of the objective Jn as regards node quality, then prove a boosting statement for the global tree accuracy."
+  }, {
+    "heading": "5.1. Properties of the objective function",
+    "text": "We start by showing that maximizing Jn in every node of the tree leads to high-quality nodes, i.e. perfectly balanced and perfectly pure node splits. Let us first introduce some formal definitions.\nDefinition 1 (Balancedness factor). The split in node n of the tree is β(n)-balanced if\nβ(n) ≤ min j={1,2,...,M} p (n) j ,\nwhere β(n) ∈ (0, 1M ] is a balancedness factor.\nA split is perfectly balanced if and only if β(n) = 1M . Definition 2 (Purity factor). The split in node n of the tree is α(n)-pure if\n1\nM M∑ j=1 K∑ i=1 q (n) i min ( p (n) j|i , 1− p (n) j|i ) ≤ α(n),\nwhere α(n) ∈ [0, 1M ) is a purity factor.\nA split is perfectly pure if and only if α(n) = 0.\nThe following lemmas characterize the range of the objective Jn and link it to the notions of balancedness and purity of the split. Lemma 2. The objective function Jn lies in the interval[ 0, 4M ( 1− 1M )] .\nLet J∗ denotes the highest possible value of Jn, i.e. J∗ = 4 M ( 1− 1M ) . Lemma 3. The objective function Jn admits the highest value, i.e. Jn = J∗, if and only if the split in node n is perfectly balanced, i.e. β(n) = 1M , and perfectly pure, i.e. α(n) = 0.\nWe next show Lemmas ?? and ?? which analyze balancedness and purity of a node split in isolation, i.e. we analyze resp. balancedness and purity of a node split when resp. purity and balancedness is fixed and perfect. We show that in such isolated setting increasing Jn leads to a more balanced and more pure split.\nLemma 4. If a split in node n is perfectly pure, then\nβ(n) ∈\n[ 1 M − √ M(J∗ − Jn) 2 , 1 M ] .\nLemma 5. If a split in node n is perfectly balanced, then α(n) ≤ (J∗ − Jn)/2.\nNext we provide a bound on the classification error for the tree. In particular, we show that if the objective is “weakly” optimized in each node of the tree, where this weak advantage is captured in a form of the Weak Hypothesis Assumption, then our algorithm will amplify this weak advantage to build a tree achieving any desired level of accuracy."
+  }, {
+    "heading": "5.2. Error bound",
+    "text": "Denote y(x) to be a fixed target function with domain X , which assigns the data point x to its label, and let P be a fixed target distribution over X . Together y and P induce a distribution on labeled pairs (x, y(x)). Let t(x) be the label assigned to data point x by the tree. We denote as (T ) the error of tree T , i.e. (T ) := Ex∼P [∑K i=1 1[t(x) = i, y(x) 6= i]\n] (1− (T ) refers to the accuracy as given by Equation 4). Then the following theorem holds\nTheorem 1. The Weak Hypothesis Assumption says that for any distribution P over the data, at each node n of the tree T there exists a partition such that Jn ≥ γ, where\nγ ∈ [ M 2 minj=1,2,...,M pj , 1− M2 minj=1,2,...,M pj ] .\nUnder the Weak Hypothesis Assumption, for any κ ∈ [0, 1], to obtain (T ) ≤ κ it suffices to have a tree with\nN ≥ ( 1\nκ\n) 16[M(1−2γ)+2γ](M−1) log2 eM 2γ2 lnK\ninternal nodes.\nThe above theorem shows the number of splits that suffice to reduce the multi-class classification error of the tree below an arbitrary threshold κ. As shown in the proof of the above theorem, the Weak Hypothesis Assumption implies that all pjs satisfy: pj ∈ [ 2γM , M(1−2γ)+2γ M ]. Below we show a tighter version of this bound when assuming that each node induces balanced split. Corollary 1. The Weak Hypothesis Assumption says that for any distribution P over the data, at each node n of the tree T there exists a partition such that Jn ≥ γ, where γ ∈ R+.\nUnder the Weak Hypothesis Assumption and when all nodes make perfectly balanced splits, for any κ ∈ [0, 1], to obtain (T ) ≤ κ it suffices to have a tree with\nN ≥ ( 1\nκ\n) 16(M−1) log2 eM 2γ2 lnK\ninternal nodes."
+  }, {
+    "heading": "6. Extension to Density Estimation",
+    "text": "We now show how to adapt the algorithm presented in Section 4 for conditional density estimation, using the example of language modeling.\nHierarchical Log Bi-Linear Language Model (HLBL) We take the same approach to language modeling as (Mnih & Hinton, 2009). First, using the chain rule and an order T Markov assumption we model the probability of a sentence w = (w1, w2, . . . , wn) as:\np(w1, w2, . . . , wn) = n∏ t=1 p(wt|wt−T,...,t−1)\nSimilarly to their work, we also use a low dimensional representation of the context (wt−T,...,t−1). In this setting, each word w in the vocabulary V has an embedding Uw ∈ Rdr . A given context x = (wt−T , . . . , wt−1) corresponding to position t is then represented by a context embedding vector rx such that\nrx = T∑ k=1 RkUwt−k ,\nwhere U ∈ R|V|×dr is the embedding matrix, and Rk ∈ Rdr×dr is the transition matrix associated with the kth context word.\nThe most straight-forward way to define a probability function is then to define the distribution over the next word given the context representation as a soft-max, as done in (Mnih & Hinton, 2007). That is:\np(wt = i|x) = σi(r>x U + b)\n= exp(r>x Ui + bi)∑\nw∈V exp(r > x Uw + bw)\n,\nwhere bw is the bias for word w. However, the complexity of computing this probability distribution in this setting is O(|V |×dr), which can be prohibitive for large corpora and vocabularies.\nInstead, (Mnih & Hinton, 2009) takes a hierarchical approach to the problem. They construct a binary tree, where each word w ∈ V corresponds to some leaf of the tree, and can thus be identified with the path from the root to the corresponding leaf by making a sequence of choices of going left versus right. This corresponds to the treestructured log-likelihood objective presented in Equation 5 for the case where M = 2, and fΘ(x) = rx. Thus, if ci is the path to word i as defined in Expression 3, then:\nlog p(wt = i|x) = D∑ d=1 log σcid,2((r > x U cid,1 + bc i d,1) (11)\nIn this binary case, σ is the sigmoid function, and for all non-leaf nodes n ∈ {1, 2, . . . , N}, we have Un ∈ Rdr and bn ∈ Rdr . The cost of computing the likelihood of word w is then reduced to O(log(|V|) × dr). In their work, the authors start the training procedure by using a random tree, then alternate parameter learning with using a clusteringbased heuristic to rebuild their hierarchy. We expand upon their method by providing an algorithm which allows for using hierarchies of arbitrary width, and jointly learns the tree structure and the model parameters.\nUsing our Algorithm We may use Algorithm 1 as is to learn a good tree structure for classification: that is, a model that often predictswt to be the most likely word after seeing the context (wt−T , . . . , wt−1). However, while this could certainly learn interesting representations and tree structure, there is no guarantee that such a model would achieve a good average log-likelihood. Intuitively, there are often several valid possibilities for a word given its immediate left context, which a classification objective does not necessarily take into account. Yet another option would be to learn a tree structure that maximizes the classification objective, then fine-tune the model parameters using the log-likelihood objective. We tried this method, but initial tests of this approach did not do much better than the use of random trees. Instead, we present here a small modification of Algorithm 1 which is equivalent to log-likelihood training when restricted to the fixed tree setting, and can be shown to increase the value of the node objectives Jn: by replacing the gradients with respect to ptarget by those with respect to log ptarget. Then, for a given tree structure, the algorithm takes a gradient step with respect to the\nlog-likelihood of the samples:\n∂Jn\n∂ log p (n) j|i\n= 2\nM q\n(n) i (1−q (n) i ) sign(p (n) j|i −p (n) j )p (n) j|i . (12)\nLemma 1 extends to the new version of the algorithm."
+  }, {
+    "heading": "7. Experiments",
+    "text": "We ran experiments to evaluate both the classification and density estimation version of our algorithm. For classification, we used the YFCC100M dataset (Thomee et al., 2016), which consists of a set of a hundred million Flickr pictures along with captions and tag sets split into 91M training, 930K validation and 543K test examples. We focus here on the problem of predicting a picture’s tags given its caption. For density estimation, we learned a logbilinear language model on the Gutenberg novels corpus, and compared the perplexity to that obtained with other flat and hierarchical losses. Experimental settings are described in greater detail in the Supplementary material."
+  }, {
+    "heading": "7.1. Classification",
+    "text": "We follow the setting of (Joulin et al., 2016) for the YFCC100M tag prediction task: we only keep the tags which appear at least a hundred times, which leaves us with a label space of size 312K. We compare our results to those obtained with the FastText software (Joulin et al., 2016), which uses a binary hierarchical softmax objective based on Huffman coding (Huffman trees are designed to minimize the expected depth of their leaves weighed by frequencies and have been shown to work well with word embedding systems (Mikolov et al., 2013)), and to the Tagspace system (Weston et al., 2014), which uses a sampling-based margin loss (this allows for training in tractable time, but does not help at test time, hence the long times reported). We also extend the FastText software to use Huffman trees of arbitrary width. All models use a bagof-word embedding representation of the caption text; the parameters of the input representation function fΘ which we learn are the word embeddings Uw ∈ Rd (as in Section 5) and a caption representation is obtained by summing the embeddings of its words. We experimented with embeddings of dimension d = 50 and d = 200. We predict one tag for each caption, and report the precision as well as the training and test times in Table 1.\nOur implementation is based on the FastText open source version2, to which we added M -ary Huffman and learned tree objectives. Table 1 reports the best accuracy we obtained with a hyper-parameter search using this version on our system so as to provide the most meaningful comparison, even though the accuracy is less than that reported in (Joulin et al., 2016).\nWe gain a few different insights from Table 1. First, al-\n2https://github.com/facebookresearch/fastText\nthough wider trees are theoretically slower (remember that the theoretical complexity isO(M logM (N)) for anM -ary tree with N labels), they run incomparable time in practice and always perform better. Using our algorithm to learn the structure of the tree also always leads to more accurate models, with a gain of up to 3.3 precision points in the smaller 5-ary setting. Further, both the importance of having wider trees and learning the structure seems to be less when the node prediction functions become more expressive. At a high level, one could imagine that in that setting, the model can learn to use different dimensions of the input representation for different nodes, which would minimize the negative impact of having to learn a representation which is suited to more nodes.\nAnother thing to notice is that since prediction time only depends on the expected depth of a label, our models which learned balanced trees are nearly as fast as Huffman coding which is optimal in that respect (except for the dimension 200, 20-ary tree, but the tree structure had not stabilized yet in that setting). Given all of the above remarks, our algorithm especially shines in settings where computational complexity and prediction time are highly constrained at test time, such as mobile devices or embedded systems."
+  }, {
+    "heading": "7.2. Density Estimation",
+    "text": "We also ran language modeling experiments on the Gutenberg novel corpus3, which has about 50M tokens and a vocabulary of 250,000 words.\nOne notable difference from the previous task is that the language modeling setting can drastically benefit from the use of GPU computing, which can make using a flat softmax tractable (if not fast). While our algorithm requires\n3http://www.gutenberg.org/\nmore flexibility and thus does not benefit as much from the use of GPUs, a small modification of Algorithm 2 (described in the Supplementary material) allows it to run under a maximum depth constraint and remain competitive. The results presented in this section are obtained using this modified version, which learns 65-ary trees of depth 3.\nTable 2 presents perplexity results for different loss functions, along with the time spent on computing and learning the objective (softmax parameters for the flat version, hierarchical softmax node parameters for the fixed tree, and hierarchical softmax structure and parameters for our algorithm). The learned tree model is nearly three and seven times as fast at train and test time respectively as the flat objective without losing any points of perplexity.\nHuffman coding does not apply to trees where all of the leaves are at the same depth. Instead, we use the following heuristic as a baseline, inspired by (Mnih & Hinton, 2009): we learn word embeddings using FastText, perform a hierarchical clustering of the vocabulary based on these, then use the resulting tree to learn a new language model. We call this approach “Clustering Tree”. However, for all hyper-parameter settings, this tree structure did worse\nthan a random one. We conjecture that its poor performance is because such a tree structure means that the deepest node decisions can be quite difficult. Finally, we also ran density estimation experiments on the Penn TreeBank data set, which consists of 1M tokens with a vocabulary size of 10,000, with sensibly similar performance results and a speedup factor of two (see supplementary material). It should be noted that running a softmax on a label set of this size (only 10K) fits comfortably on most modern GPUs (hence the comparatively smaller speed gain).\nFigure 2 shows the evolution of the test perplexity for a few epochs. It appears that most of the relevant tree structure can be learned in one epoch: from the second epoch on, the learned hierarchical soft-max performs similarly to the flat one. Figure 3 shows a part of the tree learned on the Gutenberg dataset, which appears to make semantic and syntactic sense."
+  }, {
+    "heading": "8. Conclusion",
+    "text": "In this paper, we introduced a provably accurate algorithm for jointly learning tree structure and data representation for hierarchical prediction. We applied it to a multiclass classification and a density estimation problem, and showed our models’ ability to achieve favorable accuracy in competitive times in both settings."
+  }],
+  "year": 2017,
+  "references": [{
+    "title": "Least squares revisited: Scalable approaches for multi-class prediction",
+    "authors": ["A. Agarwal", "S.M. Kakade", "N. Karampatziakis", "L. Song", "G. Valiant"],
+    "venue": "In ICML,",
+    "year": 2014
+  }, {
+    "title": "Multilabel learning with millions of labels: Recommending advertiser bid phrases for web pages",
+    "authors": ["R. Agarwal", "A. Gupta", "Y. Prabhu", "M. Varma"],
+    "venue": "In WWW,",
+    "year": 2013
+  }, {
+    "title": "When and why are log-linear models self-normalizing",
+    "authors": ["J. Andreas", "D. Klein"],
+    "venue": "In NAACL HLT,",
+    "year": 2015
+  }, {
+    "title": "On strongly midconvex functions",
+    "authors": ["A. Azocar", "J. Gimenez", "K. Nikodem", "J.L. Sanchez"],
+    "venue": "Opuscula Math.,",
+    "year": 2011
+  }, {
+    "title": "Guess-averse loss functions for cost-sensitive multiclass boosting",
+    "authors": ["O. Beijbom", "M. Saberian", "D. Kriegman", "N. Vasconcelos"],
+    "venue": "In ICML,",
+    "year": 2014
+  }, {
+    "title": "Label embedding trees for large multi-class tasks",
+    "authors": ["S. Bengio", "J. Weston", "D. Grangier"],
+    "venue": "In NIPS,",
+    "year": 2010
+  }, {
+    "title": "Quick training of probabilistic neural nets by importance sampling",
+    "authors": ["Y. Bengio", "Sénécal", "J.-S"],
+    "venue": "In AISTATS,",
+    "year": 2003
+  }, {
+    "title": "Adaptive importance sampling to accelerate training of a neural probabilistic language model",
+    "authors": ["Y. Bengio", "Senecal", "J.-S"],
+    "venue": "IEEE Trans. Neural Networks,",
+    "year": 2008
+  }, {
+    "title": "A neural probabilistic language model",
+    "authors": ["Y. Bengio", "R. Ducharme", "Pascal", "C. Janvin"],
+    "venue": "J. Mach. Learn. Res.,",
+    "year": 2003
+  }, {
+    "title": "Conditional probability tree estimation analysis and algorithms",
+    "authors": ["A. Beygelzimer", "J. Langford", "Y. Lifshits", "G.B. Sorkin", "A.L. Strehl"],
+    "venue": "In UAI,",
+    "year": 2009
+  }, {
+    "title": "Sparse local embeddings for extreme multi-label classification",
+    "authors": ["K. Bhatia", "H. Jain", "P. Kar", "M. Varma", "P. Jain"],
+    "venue": "In NIPS",
+    "year": 2015
+  }, {
+    "title": "Pattern Recognition and Machine Learning",
+    "authors": ["C.M. Bishop"],
+    "year": 2006
+  }, {
+    "title": "Online algorithms and stochastic approximations. In Online Learning and Neural Networks",
+    "authors": ["L. Bottou"],
+    "year": 1998
+  }, {
+    "title": "Classification and Regression Trees",
+    "authors": ["L. Breiman", "J.H. Friedman", "R.A. Olshen", "C.J. Stone"],
+    "venue": "CRC Press LLC, Boca Raton, Florida,",
+    "year": 1984
+  }, {
+    "title": "Logarithmic time online multiclass prediction",
+    "authors": ["A. Choromanska", "J. Langford"],
+    "venue": "In NIPS",
+    "year": 2015
+  }, {
+    "title": "On the boosting ability of top-down decision tree learning algorithm for multiclass classification",
+    "authors": ["A. Choromanska", "K. Choromanski", "M. Bojarski"],
+    "year": 2016
+  }, {
+    "title": "An exploration of softmax alternatives belonging to the spherical loss family",
+    "authors": ["A. de Brébisson", "P. Vincent"],
+    "venue": "In ICLR,",
+    "year": 2016
+  }, {
+    "title": "Fast and balanced: Efficient label tree learning for large scale object recognition",
+    "authors": ["J. Deng", "S. Satheesh", "A.C. Berg", "L. Fei-Fei"],
+    "venue": "In NIPS,",
+    "year": 2011
+  }, {
+    "title": "Hierarchical neural language models for joint representation of streaming documents and their content",
+    "authors": ["N. Djuric", "H. Wu", "V. Radosavljevic", "M. Grbovic", "N. Bhamidipati"],
+    "venue": "In WWW,",
+    "year": 2015
+  }, {
+    "title": "Efficient softmax approximation for gpus",
+    "authors": ["E. Grave", "A. Joulin", "M. Cissé", "D. Grangier", "H. Jégou"],
+    "year": 2016
+  }, {
+    "title": "Noise-contrastive estimation of unnormalized statistical models, with applications to natural image statistics",
+    "authors": ["M.U. Gutmann", "A. Hyvärinen"],
+    "venue": "J. Mach. Learn. Res.,",
+    "year": 2012
+  }, {
+    "title": "Multilabel prediction via compressed sensing",
+    "authors": ["D. Hsu", "S. Kakade", "J. Langford", "T. Zhang"],
+    "venue": "In NIPS,",
+    "year": 2009
+  }, {
+    "title": "Interpolated estimation of Markov source parameters from sparse data",
+    "authors": ["F. Jelinek", "R.L. Mercer"],
+    "venue": "In Proceedings, Workshop on Pattern Recognition in Practice,",
+    "year": 1980
+  }, {
+    "title": "Bag of tricks for efficient text classification",
+    "authors": ["Joulin", "Armand", "Grave", "Edouard", "Bojanowski", "Piotr", "Mikolov", "Tomas"],
+    "year": 2016
+  }, {
+    "title": "Estimation of probabilities from sparse data for the language model component of a speech recognizer",
+    "authors": ["S.M. Katz"],
+    "venue": "In IEEE Trans. on Acoustics, Speech and Singal proc.,",
+    "year": 1987
+  }, {
+    "title": "Deep Neural Decision Forests",
+    "authors": ["P. Kontschieder", "M. Fiterau", "A. Criminisi", "Bulo", "S. Rota"],
+    "venue": "In ICCV,",
+    "year": 2015
+  }, {
+    "title": "Ask me anything: Dynamic memory networks for natural language processing",
+    "authors": ["A. Kumar", "O. Irsoy", "J. Su", "J. Bradbury", "R. English", "B. Pierce", "P. Ondruska", "I. Gulrajani", "R. Socher"],
+    "venue": "CoRR, abs/1506.07285,",
+    "year": 2015
+  }, {
+    "title": "A multiclass svm classifier utilizing binary decision",
+    "authors": ["G. Madzarov", "D. Gjorgjevikj", "I. Chorbev"],
+    "venue": "tree. Informatica,",
+    "year": 2009
+  }, {
+    "title": "Recurrent neural network based language model",
+    "authors": ["T. Mikolov", "M. Karafit", "L. Burget", "J. Cernock", "S. Khudanpur"],
+    "venue": "In INTERSPEECH,",
+    "year": 2010
+  }, {
+    "title": "Empirical evaluation and combination of advanced language modeling techniques",
+    "authors": ["T. Mikolov", "A. Deoras", "S. Kombrink", "L. Burget", "Cernocky", "J. Honza"],
+    "venue": "In INTERSPEECH,",
+    "year": 2011
+  }, {
+    "title": "Distributed representations of words and phrases and their compositionality",
+    "authors": ["T. Mikolov", "I. Sutskever", "K. Chen", "G.S. Corrado", "J. Dean"],
+    "venue": "In NIPS,",
+    "year": 2013
+  }, {
+    "title": "Dependency recurrent neural language models for sentence completion",
+    "authors": ["P. Mirowski", "A. Vlachos"],
+    "venue": "CoRR, abs/1507.01193,",
+    "year": 2015
+  }, {
+    "title": "Three new graphical models for statistical language modelling",
+    "authors": ["A. Mnih", "G. Hinton"],
+    "venue": "In ICML,",
+    "year": 2007
+  }, {
+    "title": "A scalable hierarchical distributed language model",
+    "authors": ["A. Mnih", "G.E. Hinton"],
+    "venue": "In NIPS",
+    "year": 2009
+  }, {
+    "title": "A fast and simple algorithm for training neural probabilistic language models",
+    "authors": ["A. Mnih", "Y.W. Teh"],
+    "venue": "In ICML,",
+    "year": 2012
+  }, {
+    "title": "Hierarchical probabilistic neural network language model",
+    "authors": ["F. Morin", "Y. Bengio"],
+    "venue": "In AISTATS,",
+    "year": 2005
+  }, {
+    "title": "Fastxml: A fast, accurate and stable tree-classifier for extreme multi-label learning",
+    "authors": ["Y. Prabhu", "M. Varma"],
+    "venue": "In ACM SIGKDD,",
+    "year": 2014
+  }, {
+    "title": "Density estimation trees",
+    "authors": ["P. Ram", "A.G. Gray"],
+    "venue": "In KDD,",
+    "year": 2011
+  }, {
+    "title": "Connectionist language modeling for large vocabulary continuous speech recognition",
+    "authors": ["H. Schwenk", "Gauvain", "J.-L"],
+    "venue": "In ICASSP,",
+    "year": 2002
+  }, {
+    "title": "Training neural network language models on very large corpora",
+    "authors": ["H. Schwenk", "Gauvain", "J.-L"],
+    "venue": "In HLT,",
+    "year": 2005
+  }, {
+    "title": "Online learning and online convex optimization",
+    "authors": ["S. Shalev-Shwartz"],
+    "venue": "Found. Trends Mach. Learn.,",
+    "year": 2012
+  }, {
+    "title": "Improved semantic representations from tree-structured long shortterm memory",
+    "authors": ["K.S. Tai", "R. Socher", "C.D. Manning"],
+    "venue": "networks. CoRR,",
+    "year": 2015
+  }, {
+    "title": "YFCC100M: the new data in multimedia research",
+    "authors": ["Thomee", "Bart", "Shamma", "David A", "Friedland", "Gerald", "Elizalde", "Benjamin", "Ni", "Karl", "Poland", "Douglas", "Borth", "Damian", "Li", "Li-Jia"],
+    "venue": "Commun. ACM,",
+    "year": 2016
+  }, {
+    "title": "Efficient exact gradient update for training deep networks with very large sparse targets",
+    "authors": ["P. Vincent", "A. de Brébisson", "X. Bouthillier"],
+    "venue": "In NIPS,",
+    "year": 2015
+  }, {
+    "title": "Wsabie: Scaling up to large vocabulary image annotation",
+    "authors": ["J. Weston", "S. Bengio", "N. Usunier"],
+    "venue": "In IJCAI,",
+    "year": 2011
+  }, {
+    "title": "Label partitioning for sublinear ranking",
+    "authors": ["J. Weston", "A. Makadia", "H. Yee"],
+    "venue": "In ICML,",
+    "year": 2013
+  }, {
+    "title": "tagspace: Semantic embeddings from hashtags",
+    "authors": ["Weston", "Jason", "Chopra", "Sumit", "Adams", "Keith"],
+    "venue": "In Proceedings of the 2014 Conference on Empirical Methods in Natural Language Processing,",
+    "year": 2014
+  }, {
+    "title": "Sparse output coding for largescale visual recognition",
+    "authors": ["B. Zhao", "E.P. Xing"],
+    "venue": "In CVPR,",
+    "year": 2013
+  }],
+  "id": "SP:61a417ee0a268637dcfb7bc22511b271967dee7c",
+  "authors": [{
+    "name": "Yacine Jernite",
+    "affiliations": []
+  }, {
+    "name": "Anna Choromanska",
+    "affiliations": []
+  }, {
+    "name": "David Sontag",
+    "affiliations": []
+  }],
+  "abstractText": "We consider multi-class classification where the predictor has a hierarchical structure that allows for a very large number of labels both at train and test time. The predictive power of such models can heavily depend on the structure of the tree, and although past work showed how to learn the tree structure, it expected that the feature vectors remained static. We provide a novel algorithm to simultaneously perform representation learning for the input data and learning of the hierarchical predictor. Our approach optimizes an objective function which favors balanced and easilyseparable multi-way node partitions. We theoretically analyze this objective, showing that it gives rise to a boosting style property and a bound on classification error. We next show how to extend the algorithm to conditional density estimation. We empirically validate both variants of the algorithm on text classification and language modeling, respectively, and show that they compare favorably to common baselines in terms of accuracy and running time.",
+  "title": "Simultaneous Learning of Trees and Representations for Extreme Classification and Density Estimation"
+}

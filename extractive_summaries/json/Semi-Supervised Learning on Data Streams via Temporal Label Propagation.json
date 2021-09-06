@@ -1,0 +1,271 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "In many real situations, unlabeled data is readily available, whereas labeled data tends to be of a smaller size. This motivates semi-supervised learning (SSL), which aims to make heavy use of a large amount of unlabeled data along with a limited amount of labeled data. For this problem, the celebrated paper due to (Zhu et al., 2003a) provided a principled offline approach with excellent results in practice. Their algorithm casts the problem as label propagation on a graph, where the nodes represent both labeled and unlabeled data points, and the weight of an edge reflects similarity between its endpoints. The labels are spread in the graph by a random walk process that moves through the unlabeled nodes until reaching a labeled node. The labeling computed by this process is known as the harmonic solution.\nIn this paper, we consider the case where the data arrives in a high-throughput stream, such as an electrocardiogram signal or a video feed. The goal is to label each point upon arrival as quickly as possible, ideally by means of semi-supervised learning over all of the data seen so far, both labeled and unlabeled. Example use cases include real-time monitor-\n1CSAIL, MIT. Work done during an internship at Amazon. 2Amazon. Correspondence to: Tal Wagner <talw@mit.edu>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\ning of metrics arising from medical patient signals (ECG, EEG, fall detection), data centers (network, I/O and CPU utilization), or a camera mounted on a semi-autonomous car (for road conditions and obstacle detection). In these scenarios, unlabeled data is continuously streaming, but only a small number of manually labeled examples are provided – either at the beginning of the stream or as occasional user feedback. We want algorithms that leverage both inputs and learn how to classify stream elements, such as ECG arrhythmias, network intrusion alerts or driving conditions. Several other applications are given in (Goldberg et al., 2008), who defined a similar model, and in (Krempl et al., 2014).\nIn practice, this setting requires algorithms that run under severe time and memory constraints, since the labels are expected in real-time and the stream is generally too large to fully store in the memory. This poses a major challenge: How can we leverage the entire stream history to label a new point, when we can only store a tiny fraction of it?\nProblem Statement. Given a stream x1, x2, . . . of interleaved labeled and unlabeled points, and a similarity function between pairs of points, label every incoming point xn using sublinear time and sublinear space in n.\nOur Solution. Our main contribution is Temporal Label Propagation (TLP), a streaming SSL algorithm which is theoretically sound and also works well in practice. Its processing time for the nth point on the stream is independent of n, and its storage space only scales as log n. At the same time, it provably computes the harmonic solution on a similarity graph that naturally describes the entire stream seen so far, which we call a temporal vicinity graph. Thus, it produces labels that utilize all of the labeled and unlabeled points in the past. In comparison, using a batch (offline) label propagation algorithm on the same graph would entail computation and memory requirements that grow at least as a linear function of the stream length n.\nOur Techniques. The algorithm is based on graph reduction tools that originate in the theory of electric networks. The short-circuit operator (Campbell, 1922; Anderson, 1971) is a way to compress a large graph G into a much smaller graph H, that exposes only pre-specified nodes of interest called terminals, while preserving some global properties of G. We choose the terminals as the most recent points on the stream, including the incoming point\nthat we need to classify. Drawing on the electric interpretation of the harmonic solution (Snell & Doyle, 2000), we rigorously show that the labels of the terminals in G can be computed directly from H. A related graph operation, known as the star-mesh transform (Rosen, 1924), enables us to maintain the compressed graphH of the temporal vicinity graph over the stream by a sequence of simple local updates.\nWe evaluate our solution on several real datasets. Our results demonstrate the advantage of TLP over alternative methods."
+  }, {
+    "heading": "1.1. Related Work",
+    "text": "Semi-supervised learning is a well-established field, and a comprehensive overview is available in (Zhu, 2005; Chapelle et al., 2009). The type of SSL algorithms that we explore are graph-based, which have a long history of work, including (Blum & Chawla, 2001; Szummer & Jaakkola, 2002; Zhu et al., 2003a; Joachims, 2003; Zhou et al., 2004; 2005; Belkin et al., 2004; 2005; Wang et al., 2008).\nGraph construction is an important issue. Some prior approaches make deep use of domain knowledge (Levin et al., 2004; Balcan et al., 2005), while others construct general purpose graphs (Zemel & Carreira-Perpiñán, 2005; Wang & Zhang, 2008; Jebara et al., 2009; Ghazvininejad et al., 2011). This topic also plays a role in our paper, as we rely on a graph construction that is suitable for temporal streams.\nGraph-based SSL algorithms typically do not scale well with the data size n, often requiring Ω(n2) computation time or worse. Some authors suggested representing the graph by a smaller “backbone” graph on which label propagation can be performed much faster (Zhu & Lafferty, 2005; Delalleau et al., 2005; Valko et al., 2010). Our work takes a related approach through the construction of our compressed graph H, but our compression based on the short-circuit operator utilizes completely different ideas from these prior results.\nMost of the algorithms mentioned above were designed for the offline setting. Online SSL is a relatively new field that has generated considerable interest (Zhu et al., 2009; Krempl et al., 2014). Online graph-based algorithms were proposed in (Huang et al., 2015) and (Ravi & Diao, 2016). They are applicable to points arriving on a stream, but the processing time and memory for the nth point is still Ω(n), which is problematic as n grows. Non-graph-based online SSL algorithms were given in (Goldberg et al., 2008; 2011; Dyer et al., 2014).\nA related issue is transduction vs. induction. Most graphbased SSL algorithms are transductive, which means the unlabeled data is fully given to them in advance. Inductive algorithms can also label new test points (Zhu et al., 2003b; Sindhwani et al., 2005; Delalleau et al., 2005). However, they do not use the new points to learn how to label future points, which is a desired goal in online/streaming SSL.\nClosest in spirit to our work is (Valko et al., 2010) which operates within similar time and memory constraints. Their algorithm quantizes the stream into a small number of k clusters via the online k-center algorithm of (Charikar et al., 1997). A regularized harmonic solution is then computed on the cluster centers. We experimentally compare this algorithm to our approach in Section 6."
+  }, {
+    "heading": "2. Preliminaries",
+    "text": "Notation. Graphs discussed in this paper are weighted undirected and we denote them by calligraphic letters. Vectors will be written in boldface letters. Let G = (V,E,w) be a graph with |V | = n and non-negative edge weights {wx,y : (x, y) ∈ E}. The (weighted) degree of a node x is deg(x) = ∑ y:(x,y)∈E wx,y .\nLet G ∈ Rn×n be the Laplacian matrix of the graph G. Let\nG = [ Gaa Gab Gba Gbb ] be a block partition corresponding to a partition V = Va∪Vb of the node set. Note that Gba = G>ab. It is well-known that if G is connected then Gaa is invertible. In that case let G/Gaa denote the Schur complement, i.e., G/Gaa = Gbb −GbaG−1aaGab. Appendix A reviews some additional background on graph matrices.\nOffline Label Propagation. We review the algorithm of (Zhu et al., 2003a), as it forms the basis of our approach for learning on the stream. For simplicity, we describe the binary classification setting with labels 1 (positive class) and 0 (negative class). The input to the label propagation algorithm is a weighted undirected graph G = (V,E,w), in which a small subset of nodes Vl ⊂ V are labeled and the rest Vu ⊂ V are unlabeled. The weight of an edge (x, y) represents some measure of similarity between its endpoints. The goal is to compute fractional labels in [0, 1] for the unlabeled nodes that would facilitate a good partition into a 0-set and a 1-set.\nThe vector of fractional labels is denoted by f ∈ RV , with f(x) representing the fractional label of x ∈ V . We separate f into two parts fu ∈ RVu and fl ∈ RVl according to the partition V = Vu ∪ Vl. The part fl is given as input, and fu is the part we need to compute. The algorithm computes fu by minimizing the following energy function of the graph:\nmin fu\n1\n2 ∑ (x,y)∈E wx,y(f(x)− f(y))2. (1)\nThis is equivalent to minimizing 12 f >Gf under the given part fl, where G is the Laplacian of G.\nHarmonic Solution. The minimizer fG of Equation (1) is called the harmonic solution. Since the objective is a\nconvex quadratic, the gradient at fG is zero. This yields the harmonic property of fG , which is that the value at each unlabeled node equals the average at its adjacent nodes:\nfG(x) = 1\ndeg(x) ∑ y:(x,y)∈E wx,yf G(y) ∀ x ∈ Vu. (2)\nBy solving this linear system we get a closed-form formula for the unknown part fGu :\nfGu = −G−1uuGulfl. (3)\nMerging Labeled Nodes. In case there are more than a single labeled node for a class, we can symbolically merge them in G to just one labeled node per class. It does not affect the harmonic solution on all the remaining unlabeled nodes is (cf. Appendix B.1). We use v∗0 as the node formed by merging the 0-class in Vl, and v∗1 as the node merging the 1-class in Vl. Weights of parallel edges are summed."
+  }, {
+    "heading": "2.1. Electric Networks",
+    "text": "Our approach draws on the connection between label propagation and the theory of electric networks, which was described in (Zhu et al., 2003a) following (Snell & Doyle, 2000). View the similarity graph G as an electric network where every edge (x, y) is a resistor with conductance wx,y . Connect a +1V voltage source to all nodes in Vl labeled with 1, and a ground source (0V) to all nodes in Vl labeled with 0. The potentials induced at the unlabeled nodes are equal to the harmonic solution.\nShort-Circuit Operator. Suppose we have a large network G with a small subset Vt of distinguished nodes, called terminals. The short-circuit operator allows us to encode G into a smaller network G〈Vt〉 whose only nodes are the terminals. Definition 2.1. Let G = (V,E,w) be a connected graph with a partition V = Vt ∪ Vs of its nodes. The shortcircuit operator produces a re-weighted graph G〈Vt〉 = (Vt, E\n′, w′), defined by the following operation. Let G denote the Laplacian matrix of G. The Schur complement G/Gss = Gtt − GtsG−1ss Gst ∈ R|Vt|×|Vt| is a Laplacian matrix of a graph on the nodes Vt (see Appendix A), and this graph is the short-circuit graph G〈Vt〉.\nSee Figure 1b for illustration. We refer the reader to (Dorfler & Bullo, 2013) for a more comprehensive study of this useful notion. G〈Vt〉 is known to retain certain global electric properties of G; most famously, it preserves the effective resistance between every pair of terminals. The aforementioned connection to the harmonic solution suggests that G〈Vt〉 could be useful for label propagation, and we will prove this is indeed the case.\nStar-Mesh Transform. Generally, computing G〈Vt〉 is as expensive as computing the harmonic solution on all of G, since both entail inverting a large Laplacian submatrix. Therefore, it provides no substantial speed-up in the offline setting. However, G〈Vt〉 can also be computed by a sequence of local operations, known as star-mesh transforms. This will be useful for the streaming setting.\nDefinition 2.2. The star-mesh transform on a node xo in a graph G = (V,E,w) is the following operation:"
+  }, {
+    "heading": "1. “Star”: Remove xo from G with its incident edges.",
+    "text": "2. “Mesh”: For every pair x, x′ ∈ V such that (x, xo) ∈ E and (x′, xo) ∈ E, add the edge (x, x′) to E with weight wxo,xwxo,x′/deg(xo). If (x, x\n′) is already in E then add the new weight to its current weight.\nThis is in fact a special case of the short-circuit operator, with a single non-terminal xo (see Figure 1a). It is known that G〈Vt〉 can be computed by sequential star-mesh transforms on the non-terminals Vs = V \\ Vt in G in an arbitrary order. This is a direct consequence of the sequential property of Schur complements (cf. (Zhang, 2005), Theorem 4.10; see also (Dorfler & Bullo, 2013), Lemma III.1)."
+  }, {
+    "heading": "3. The Streaming Algorithm",
+    "text": "Consider a data stream {xi}∞i=1 in which some points are labeled and most of the points are unlabeled. Our streaming algorithm Temporal Label Propagation for binary labels1 is presented in Algorithm TLP. It maintains a graphH that contains the most recent τ unlabeled points, plus two labeled nodes v∗0 and v ∗ 1 that represent all of the labeled points.\n1The extension to multiple labels appears in Appendix B.2.\nWhen a new unlabeled point arrives, we add it to H and evict the oldest unlabeled point by a star-mesh transform, thus always maintaining τ+2 nodes. The harmonic solution for the new point is then computed onH.\nLet us give some intuition for the role of the star-mesh transform in the algorithm. The premise of graph-based label propagation is that an unlabeled point xo provides useful information on the structure of the dataset as encoded by its incident edge weights. The star-mesh transform removes those edges, but meshes their weights with the remaining graph, so that the information provided by xo remains encoded. As a result, while we lose the ability to compute the harmonic solution for xo, we retain the ability to compute it for the rest of the nodes as if xo were still in the graph. In the consumer/provider terminology of Section 4, xo is removed from the graph as a consumer but remains a provider. This intuition is made rigorous in Theorem 4.1.\nThe computation time of Algorithm TLP for xn is independent of n, and the space consumption scales only as log n. At the same time, the fractional label computed for xn is provably equal to the value of its harmonic solution on a suitable similarity graph associated with the entire stream seen so far (we call it the temporal vicinity graph and define it in Section 5.1). Thus, it performs label propagation through all of the data from the past, both labeled and unlabeled. These properties will be stated formally in Theorem 5.3."
+  }, {
+    "heading": "4. Compression by Short-Circuiting",
+    "text": "The essence of a streaming algorithm is in maintaining a compressed representation of the stream, from which the desired output can still be computed. In our case, the desired output is the harmonic solution of the incoming point.\nThe challenge here is two-fold since the algorithm needs to not only compress the data, but also update the compressed representation as new points arrive. We handle the two issues separately: in the current section we present an offline (non-streaming) compression technique, which applies to a more general setting of label propagation on arbitrary graphs. It is useful for saving space, but does not yield faster running time. Section 5 will show how to adapt it to streaming data while achieving fast processing time per point. This will necessitate choosing a specific graph construction which is suitable for data streams.\nConsumers and Providers in SSL. The compression scheme we utilize is based on the following reasoning. In graph-based SSL, every unlabeled node plays a dual role: it is both a consumer whose own label needs to be computed, and a provider that participates in computing the labels of other nodes. Batch algorithms for label propagation do not make this distinction – they compute labels for the entire graph in one computation, rendering each unlabeled node\nAlgorithm TLP : Temporal Label Propagation Initialization\nParameters: integer τ > 0, similarity measure Sim : X× X→ R>0 where X is the domain of inputs L0 ← ∅ // set of 0-labeled points L1 ← ∅ // set of 1-labeled points H = (Vh, E, w)← graph with Vh = {v∗0 , v∗1}, E = ∅\n// v∗0 and v ∗ 1 are nodes labeled with 0 and 1 respectively\nOn receiving a point xn ∈ X labeled b ∈ {0, 1}\nLb ← Lb ∪ {xn} // Merge xn into v∗b for x in Vh : wv∗b ,x ← wv∗b ,x + Sim(xn, x)"
+  }, {
+    "heading": "On receiving an unlabeled point xn ∈ X",
+    "text": "Vh ← Vh ∪ {xn} // Add xn toH Add (xn, v∗0) to E with weight ∑ x∈L0 Sim(xn, x)\nAdd (xn, v∗1) to E with weight ∑ x∈L1 Sim(xn, x) for x in Vh \\ {v∗0 , v∗1 , xn} do Add (xn, x) to E with weight Sim(xn, x) if |Vh| ≥ τ + 2 then // Star-mesh transform xo ← oldest node in V \\ {v∗0 , v∗1} Remove xo fromH for all pairs x 6= x′ in Vh do wx,x′ ← wx,x′ + wxo,xwxo,x′\ndeg(xo)\nf ← harmonic solution onH // Label Propagation return f(xn)\nboth a consumer and a provider. However, the distinction can be useful when we only need to label one or few nodes, as labeling the entire graph is redundant and potentially wasteful. This will be relevant for the streaming setting in Section 5, since a streaming algorithm only needs to label the incoming point at each time step, so that point is the only consumer. However, its label should ideally depend globally on all of the past points, so they are all desired providers.\nOur approach is to refine the representation of the input so as to encode the non-consumers only by their provider role. Ideally this would allow for a substantially more efficient representation. We implement this idea for the harmonic solution in the offline setting by using the short-circuit operator (Definition 2.1), as formalized next.\nLet G = (V,E,w) be an arbitrary connected graph with a partition V = Vl∪Vu into labeled and unlabeled nodes. Let Vc ⊂ Vu be the subset of consumer nodes, i.e., those for which we wish to compute the harmonic solution. We are interested in the case where |Vc| |V |. The consumer labels depend globally on G, and hence all nodes in V are designated as providers. We define the terminal set as Vt = Vc ∪Vl, to include both the consumers and the labeled\nnodes. LetH = G〈Vt〉 be the result of short-circuiting the non-terminals in G. Our main technical result is that the harmonic solution of all consumers in G is preserved inH. Theorem 4.1. Let fl be a vector of given labels for Vl. Let fG and fH be the harmonic solutions on G and H respectively. Then fG(x) = fH(x) for every consumer x ∈ Vc.\nSee Figure 1c for an illustration. As a result, the harmonic solution for every consumer in G can be computed by label propagation onH. At the same time,H has only |Vt| nodes and is significantly cheaper to store: Proposition 4.2. Let ω be the ratio of maximum to minimum edge weights in G. The storage size of H is O(|Vt|2(log |V |+ logω)) bits.\nIn comparison, the storage size of G is O(|E|(log |V | + logω)) bits, and since G is connected, |E| = Ω(|V |). Hence the dependence on |V | is improved exponentially from |V | (in G) to log |V | (inH).\nFull details from this section are collected in Appendix C. Theorem 4.1 and Proposition 4.2 are proven in Sections C.4 and C.5 respectively. Remark 4.3. Let us put Theorem 4.1 in the context of known results. It is well-known that for every fl, the energy of the harmonic solutions (cf. eq. (1)) on G and H is the same, i.e., 12 (f G)>GfG = 12 (f H)>HfH. However, for the purpose of SSL, it is not enough to just preserve energy since classification relies on the value of fG at specific nodes. We therefore require the more general fact that the harmonic solutions are equal at each unlabeled node that appears in both G andH, namely fG(x) = fH(x) for every x ∈ Vc.\n5. TLP Analysis In the previous section we presented a compression scheme for label propagation on an arbitrary graph G in the form of a smaller re-weighted graphH. However, compression by itself does not yield a streaming algorithm, as we also need to efficiently update H along the stream. To this end, we introduce a suitable similarity graph for streaming data."
+  }, {
+    "heading": "5.1. The Temporal Vicinity Graph",
+    "text": "Let X denote the domain of the inputs and let Sim : X×X→ R>0 be an associated similarity measure. Definition 5.1. Let τ > 0 be an integer, and x1, x2, . . . ∈ X be a stream of labeled/unlabeled data points. The temporal vicinity graph up to timestep n, denoted by G(n)τ , is the following graph:\n• Nodes: The node set of G(n)τ is {x1, . . . , xn}. • Edges: Every point (either labeled or unlabeled) is adjacent to the previous τ unlabeled points, and to all the previous labeled points.\n• Weights: For every adjacent pair xi, xj , the edge weight between them is wxi,xj = Sim(xi, xj).\nNote that every incoming point xn defines a new graph G(n)τ , which contains the previous graph G(n−1)τ as its subgraph.\nLet us explain the effect of this graph on the output labeling. When choosing a graph construction for label propagation, the placing of edges encodes a structure over which the solution will be smooth. This means that adjacent nodes will tend to have similar labels, as seen in Equation (1). One can either opt for global smoothness (say, by placing all possible edges), or incorporate domain knowledge.\nTemporal vicinity promotes smoothness over consecutive points in the stream. This is suitable for inherently ordered data, where the context of each point is relevant for its labeling. For example, in an electrocardiogram feed, each arrhythmia lasts several timesteps, and hence most consecutive points have the same groundtruth label. Thus we should favor smoothness across temporally adjacent points.\nA useful analogy is the spatial vicinity graph structure, which was used by (Levin et al., 2004) for propagating colors through pixels in a grayscale image. Their graph contains edges only between neighboring pixels, and the edge weights reflect the similarity in grayscale intensity of the connected pixels. The rationale is that neighboring pixels are expected to have similar colors, in accordance to their grayscale intensities, while distant pixels need not have similar colors even if they have similar grayscale intensities.\nThe choice of parameter τ is data-dependent. Intuitively, it should capture the context span of each point in the stream – or how much the immediate past matters more than the distant past. This is illustrated in Figure 2. In particular, increasing τ does not monotonically improve the accuracy, although it increases the time and space complexity of TLP.\nOur analysis also supports several variations to the graph construction, including connecting each point to the previous τ points (regardless of whether they are labeled or unlabeled) or gradually decaying older edge weights over time. For concreteness we opt for the variant defined above, which connects every unlabeled point to all the previous labeled points. This emphasizes the labeled data without adversely affecting the running time of TLP, which is governed by the number of nodes and edges inH. In particular, H remains a weighted clique on τ + 2 nodes regardless of how the labeled and unlabeled nodes are connected.\n5.2. Theoretical Guarantees of TLP\nThe key property of the temporal vicinity graph is that on one hand it is a suitable graph construction for data streams, while on the other hand we can maintain a compressed representation of it along the stream by sequential star-mesh\ntransforms. Formally, at every timestep n, the graph H in Algorithm TLP is the result of the short-circuit operator on G(n)τ with the terminals Vh. Note that Vh is the node set of H in Algorithm TLP, and is a subset of the nodes in G(n)τ .\nClaim 5.2. At every timestep n,H = G(n)τ 〈Vh〉.\nIn conjunction with Section 4, we obtain the following guarantees for Algorithm TLP. Let χ = |X| be the data domain size and let ω be the magnitude of similarities.2 For every n let nl denote the number of labeled points up to timestep n. Note that nl n in the semi-supervised setting. Theorem 5.3. For every timestep n in the stream, let xn be the new received point. Algorithm TLP satisfies:\n1. The fractional label f(xn) returned by Algorithm TLP is equal to the harmonic solution for xn on G(n)τ . 2. The computation time at timestep n is O(τ3 + nl). 3. The storage size at timestep n is O(τ2 log(nω) + (nl + τ) logχ) bits.\nThe proof appears in Appendix D. To appreciate the effect of compression, note that computing the harmonic solution directly on G(n)τ in timestep n would require Ω(nτ2) time and Θ(nτ log(nω) + n logχ) storage space. In particular, both are linear in the stream length n."
+  }, {
+    "heading": "6. Experimental Evaluation",
+    "text": "In this section, we experimentally demonstrate the effectiveness of our temporal label propagation scheme on data streams ranging from medical to computer vision domains.\nCompared Methods. We compare Algorithm TLP with the following approaches:\nSliding Window Label Propagation (SWLP): One simple approach to label propagation on a stream is to store in memory only the recent τ unlabeled points in a sliding window fashion, in addition to all the labeled data. This\n2ω = maxx,x′∈X Sim(x, x ′)/minx,x′∈X Sim(x, x ′). A point takes logχ bits and a similarity value takes logω bits to store.\napproach ignores the past entirely, while trivially yielding a small memory footprint. This algorithm is identical to TLP except that the star-mesh transform is replaced by usual node deletion. It thus lets us directly evaluate the effectiveness of the short-circuiting operation on the stream.\nQuantized Label Propagation (QLP): The streaming algorithm of (Valko et al., 2010), which was described in Section 1.1. Here τ denotes the number of cluster centroids.\nInductive Label Propagation (ILP): The inductive SSL algorithm of (Delalleau et al., 2005). It performs label propagation on a given training set of labeled and unlabeled nodes, and subsequent test points are then labeled by a kernel regression step. However, the new test points are not incorporated into the trained model. To apply this algorithm to a stream, we use the first τ unlabeled points along with the labeled data as the training set.\nNote that each of the four algorithms works by choosing τ unlabeled points to fully store in memory and to compute the harmonic solution over. This determines both the memory footprint and the computation time of label propagation, since it is computed by inverting a τ×τ Laplacian submatrix (cf. Equation (3)). The algorithms vary in their choice of the τ points. Therefore, while the overall budget is matched, the algorithms choose their own utilization of the budget, permitting a direct comparison.\nIn addition, we include the following baseline:\nLabeled-only Label Propagation (LOLP): This algorithm labels every incoming point on the stream based only on the labeled examples, without taking any unlabeled points into account. We use this non-SSL baseline to evaluate the advantage of making use of the unlabeled points.\nWe start with a visual demonstration of the three algorithms on a toy dataset, and proceed to experiments on real data."
+  }, {
+    "heading": "6.1. Visual Demonstration",
+    "text": "A common demonstration of (offline) label propagation is the two-rings setting, depicted in Figure 3a. In this setting,\nthe data points are densely organized on two concentric circles, and each circle has only a single labeled point at its intersection with the x-axis (shown in red on the outer circle and blue on the inner circle). Offline label propagation classifies the circles correctly, as shown in Figure 3b.\nTo adapt this example to the streaming setting, we turn each circle into a stream by ordering its points counterclockwise, starting from the labeled point on the x-axis. The two streams generated from the two circles are interweaved at random and presented to the algorithms as a single stream of data. The goal is to label the outer circle as red and the inner circle as blue.\nFigure 3 shows of the behavior of the methods we compare. For each method we present snapshots from three points of time on the stream (ordered left-to-right from early to late). Each snapshot shows the τ points stored in memory (we use τ = 40) and colored according to their labeling by the algorithm at that moment. The full videos are included in the supplementary material of this paper (see Appendix F).\nTLP (Figure 3c) stores the τ most recent points on the stream, forming two “caterpillars” that crawl along the circles as new points arrive and old points get evicted. The history of the stream is encoded in the edge weights between the stored points by star-mesh transforms, so the algorithm “remembers” the paths traversed by the caterpillars so far. In particular, the points on those paths are encoded as providers in the graph maintained by the algorithm. The classification remains correct throughout the whole stream.\nSWLP (Figure 3d) stores the τ last points as well, but it does not encode the history of the stream. The classification fails as soon as the caterpillars move away from the labeled points on the x-axis.\nQLP (Figure 3e) takes a different approach: instead of storing the τ recent points, it strategically chooses τ centroids that quantize the stream seen so far. It fails when the stream has become too long to quantize with only τ centroids.\nILP (Figure 3f) trains on the first τ unlabeled points and uses them to label subsequent points, but it does not update the learned model over time. It fails when the model no longer captures the evolution of the stream over time.\nLOLP is not depicted. It fails similar to SWLP and ILP, and for the same reason."
+  }, {
+    "heading": "6.2. Real Data",
+    "text": "Datasets. We use 4 datasets arising from different domains: (a) Incart-ECG (Goldberger et al., 2000): Dataset of ECG timeseries from PhysioNet bank, annotated with heartbeat arrhythmias. We use one ECG lead. The task is to classify atrial (positive) vs. ventricular premature contractions (negative). Both are common arrhythmias that co-occur in\npatients. Only the timeseries associated with the two arrhythmias is provided to the algorithms for classification; normal heartbeats are ignored. (b) Daphnet-Gait (Bachlin et al., 2010): Annotated readings of 9 accelerometer sensors of Parkinson’s disease patients that experience freezing of gait during walking tasks. The goal is to detect gait freeze (positive) vs. regular walking (negative). (c) Caltech10101 (Fei-Fei et al., 2006): Caltech-101 dataset consists of images annotated by 101 object classes with about 800 images per class. We restrict ourselves to 10 classes. The images were resized to 100× 200 (RGB) pixels. This data\nis non-temporal; we simulate a stream by generating random permutations of the images. (d) CamVid-Car (Brostow et al., 2009) (Cambridge-driving Labeled Video Database): CamVid dataset consists of video sequences taken from a moving vehicle in an urban environment with ground truth, provided at a rate of 1Hz, of 32 semantic classes for each pixel of the frames. We restrict ourselves to a binary classification problem of detecting whether there is a car in the frame (positive) or not (negative). We call this the CamVid-Car dataset. For both the Caltech10-101 and CamVid datasets, we use the raw RGB features. The properties of the datasets are summarized in Table 2.\nShingling. A useful technique when dealing with timeseries data is to group consecutive sequences (N -grams) of points into shingles. This lifts the data into a higher dimension N and allows for a richer representation of inputs. For IncartECG and Daphnet-Gait we use N = 50 and generate the stream by taking the normalized difference between every two consecutive shingles. The normalized shingle difference is useful for capturing local shapes in the signal (such as heartbeat arrhythmias) rather than absolute values.\nExperimental Setting. We use the standard RBF similarity, Sim(x,y) = exp(−‖x − y‖2/σ2). We set σ = 0.1 for Incart-ECG, Daphnet-Gait, and CamVid and σ = 10 for Caltech10-101. For the Incart-ECG, Daphnet-Gait, and CamVid datasets we use the natural ordering of the stream, whereas with Caltech10-101 dataset we generate a stream by randomly permuting the images. The labeled examples are given in the beginning of each stream, and we start the labeling process once the mentioned amount of labels from each class arrives. All experiments were performed on a 3.1 GHz Intel Core i7 machine with 16GB RAM.\nResults. Table 1 presents our main experimental results. We make the following observations:\n(1) Short-circuiting matters: The comparison of TLP to SWLP directly evaluates the effect of summarizing\nthe stream by the star-mesh transform, as they are otherwise identical. As noticed in Table 1, it yields a substantial improvement in the accuracy on the temporallyordered datasets Incart-ECG, Daphnet-Gait, and CamVidCar, with almost no effect on the running time. This corroborates the presumption that TLP is well suited for streams that adhere to a temporal vicinity structure as per Section 5.1. However, when there is no natural temporal ordering (such as with Caltech10-101 data), we did not observe an advantage over the other methods. (2) Small amount of labeled data suffice: Notice that we use a very small amount of labeled data in each experiment. For example, on the Incart-ECG dataset, TLP can get to a 95% classification accuracy given only two labeled examples of each type of arrhythmia. (3) Computational speedup: Notice that on the timeseries datasets, even with shingling, which increases the dimensionality of the data by a factor of shingle size, TLP takes few milliseconds per point. We remark that QLP is slower than the other methods because of the iterative loop in the k-center quantization step.\nIn Appendix E, we present additional experiments that show how τ and labeled data size effects the performance of TLP. We also present some visualizations of our approach on the tested datasets."
+  }, {
+    "heading": "7. Conclusion and Future Work",
+    "text": "We presented a principled approach for adapting the label propagation algorithm of (Zhu et al., 2003a) to streaming data. There are many extensions and variants of this fundamental algorithm that address issues like regularization, interpretability, noise in labels, and more. A possible direction of further research is using our methods to adapt these extensions to the streaming setting as well.\nRecently, there has been a surge of theoretical work on fast computation of approximate short-circuit graphs and on maintaining them dynamically (Durfee et al., 2017; 2018; Goranci et al., 2017; 2018). It is not directly applicable to label propagation since they approximate the energy but not the values at individual nodes (see Remark 4.3). In light of our work, we are interested if these results could have implications for SSL in dynamic settings."
+  }, {
+    "heading": "Acknowledgements",
+    "text": "We thank Roger Barga, Kapil Chhabra, Charles Elkan, Praveen Gattu, Lauren Moos, Gourav Roy, Joshua Tokle and the anonymous reviewers for useful comments and suggestions."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Person identification in webcam images: An application of semi-supervised learning",
+    "authors": ["Balcan", "Maria-Florina", "Blum", "Avrim", "Choi", "Patrick Pakyan", "Lafferty", "John D", "Pantano", "Brian", "Rwebangira", "Mugizi Robert", "Zhu", "Xiaojin"],
+    "venue": "CMU Repository,",
+    "year": 2005
+  }, {
+    "title": "Regularization and semi-supervised learning on large graphs",
+    "authors": ["Belkin", "Mikhail", "Matveeva", "Irina", "Niyogi", "Partha"],
+    "venue": "In International Conference on Computational Learning Theory (COLT),",
+    "year": 2004
+  }, {
+    "title": "On manifold regularization",
+    "authors": ["Belkin", "Misha", "Niyogi", "Partha", "Sindhwani", "Vikas"],
+    "venue": "In Artificial Intelligence and Statistics (AISTATS), pp",
+    "year": 2005
+  }, {
+    "title": "Learning from labeled and unlabeled data using graph mincuts",
+    "authors": ["Blum", "Avrim", "Chawla", "Shuchi"],
+    "venue": "In International Conference on Machine Learning (ICML),",
+    "year": 2001
+  }, {
+    "title": "Semantic object classes in video: A high-definition ground truth database",
+    "authors": ["Brostow", "Gabriel J", "Fauqueur", "Julien", "Cipolla", "Roberto"],
+    "venue": "Pattern Recognition Letters,",
+    "year": 2009
+  }, {
+    "title": "Direct capacity measurement",
+    "authors": ["Campbell", "George A"],
+    "venue": "Bell Labs Technical Journal,",
+    "year": 1922
+  }, {
+    "title": "Semi-supervised learning (chapelle, o. et al., eds.; 2006)[book reviews",
+    "authors": ["Chapelle", "Olivier", "Scholkopf", "Bernhard", "Zien", "Alexander"],
+    "venue": "IEEE Transactions on Neural Networks,",
+    "year": 2009
+  }, {
+    "title": "Incremental clustering and dynamic information retrieval",
+    "authors": ["Charikar", "Moses", "Chekuri", "Chandra", "Feder", "Tomás", "Motwani", "Rajeev"],
+    "venue": "In ACM Symposium on Theory of Computing (STOC),",
+    "year": 1997
+  }, {
+    "title": "Efficient non-parametric function induction in semisupervised learning",
+    "authors": ["Delalleau", "Olivier", "Bengio", "Yoshua", "Le Roux", "Nicolas"],
+    "venue": "In Artificial Intelligence and Statistics (AISTATS),",
+    "year": 2005
+  }, {
+    "title": "Kron reduction of graphs with applications to electrical networks",
+    "authors": ["Dorfler", "Florian", "Bullo", "Francesco"],
+    "venue": "IEEE Transactions on Circuits and Systems I: Regular Papers,",
+    "year": 2013
+  }, {
+    "title": "Sampling random spanning trees faster than matrix multiplication",
+    "authors": ["Durfee", "David", "Kyng", "Rasmus", "Peebles", "John", "Rao", "Anup B", "Sachdeva", "Sushant"],
+    "venue": "In ACM Symposium on Theory of Computing (STOC),",
+    "year": 2017
+  }, {
+    "title": "Fully dynamic effective resistances",
+    "authors": ["Durfee", "David", "Gao", "Yu", "Goranci", "Gramoz", "Peng", "Richard"],
+    "venue": "arXiv preprint arXiv:1804.04038,",
+    "year": 2018
+  }, {
+    "title": "Compose: A semisupervised learning framework for initially labeled nonstationary streaming data",
+    "authors": ["Dyer", "Karl B", "Capo", "Robert", "Polikar", "Robi"],
+    "venue": "IEEE transactions on neural networks and learning systems,",
+    "year": 2014
+  }, {
+    "title": "One-shot learning of object categories",
+    "authors": ["Fei-Fei", "Li", "Fergus", "Rob", "Perona", "Pietro"],
+    "venue": "IEEE transactions on pattern analysis and machine intelligence,",
+    "year": 2006
+  }, {
+    "title": "Online manifold regularization: A new learning setting and empirical study",
+    "authors": ["Goldberg", "Andrew B", "Li", "Ming", "Zhu", "Xiaojin"],
+    "venue": "In Joint European Conference on Machine Learning and Knowledge Discovery in Databases,",
+    "year": 2008
+  }, {
+    "title": "Oasis: Online active semi-supervised learning",
+    "authors": ["Goldberg", "Andrew B", "Zhu", "Xiaojin", "Furger", "Alex", "Xu", "Jun-Ming"],
+    "venue": "In AAAI Conference on Artificial Intelligence,",
+    "year": 2011
+  }, {
+    "title": "Physiobank, physiotoolkit, and physionet",
+    "authors": ["Goldberger", "Ary L", "Amaral", "Luis AN", "Glass", "Leon", "Hausdorff", "Jeffrey M", "Ivanov", "Plamen Ch", "Mark", "Roger G", "Mietus", "Joseph E", "Moody", "George B", "Peng", "Chung-Kang", "Stanley", "H Eugene"],
+    "year": 2000
+  }, {
+    "title": "The power of vertex sparsifiers in dynamic graph algorithms",
+    "authors": ["Goranci", "Gramoz", "Henzinger", "Monika", "Peng", "Pan"],
+    "venue": "In European Symposium on Algorithms (ESA),",
+    "year": 2017
+  }, {
+    "title": "Fully dynamic effective resistances",
+    "authors": ["Goranci", "Gramoz", "Henzinger", "Monika", "Peng", "Pan"],
+    "venue": "arXiv preprint arXiv:1802.09111,",
+    "year": 2018
+  }, {
+    "title": "Online semi-supervised annotation via proxy-based local consistency propagation",
+    "authors": ["Huang", "Lei", "Liu", "Xianglong", "Ma", "Binqiang", "Lang", "Bo"],
+    "year": 2015
+  }, {
+    "title": "Graph construction and b-matching for semi-supervised learning",
+    "authors": ["Jebara", "Tony", "Wang", "Jun", "Chang", "Shih-Fu"],
+    "venue": "In International Conference on Machine Learning (ICML),",
+    "year": 2009
+  }, {
+    "title": "Transductive learning via spectral graph partitioning",
+    "authors": ["Joachims", "Thorsten"],
+    "venue": "In International Conference on Machine Learning (ICML),",
+    "year": 2003
+  }, {
+    "title": "Open challenges for data stream mining research",
+    "authors": ["Krempl", "Georg", "Žliobaite", "Indre", "Brzeziński", "Dariusz", "Hüllermeier", "Eyke", "Last", "Mark", "Lemaire", "Vincent", "Noack", "Tino", "Shaker", "Ammar", "Sievi", "Sonja", "Spiliopoulou", "Myra"],
+    "venue": "ACM SIGKDD explorations newsletter,",
+    "year": 2014
+  }, {
+    "title": "Powers of tensors and fast matrix multiplication",
+    "authors": ["Le Gall", "François"],
+    "venue": "In Proceedings of the 39th international symposium on symbolic and algebraic computation,",
+    "year": 2014
+  }, {
+    "title": "Colorization using optimization",
+    "authors": ["Levin", "Anat", "Lischinski", "Dani", "Weiss", "Yair"],
+    "venue": "ACM Transactions on Graphics (ToG),",
+    "year": 2004
+  }, {
+    "title": "Large scale distributed semisupervised learning using streaming approximation",
+    "authors": ["Ravi", "Sujith", "Diao", "Qiming"],
+    "venue": "In Artificial Intelligence and Statistics (AISTATS),",
+    "year": 2016
+  }, {
+    "title": "Generalized inverses of partitioned matrices",
+    "authors": ["Rohde", "Charles A"],
+    "venue": "Journal of the Society for Industrial and Applied Mathematics,",
+    "year": 1965
+  }, {
+    "title": "A new network theorem",
+    "authors": ["A. Rosen"],
+    "venue": "Journal of the institution of electrical engineers,",
+    "year": 1924
+  }, {
+    "title": "Beyond the point cloud: from transductive to semisupervised learning",
+    "authors": ["Sindhwani", "Vikas", "Niyogi", "Partha", "Belkin", "Mikhail"],
+    "venue": "In International Conference on Machine Learning (ICML),",
+    "year": 2005
+  }, {
+    "title": "Random walks and electric networks",
+    "authors": ["Snell", "PGDJL", "Doyle", "Peter"],
+    "venue": "Free Software Foundation,",
+    "year": 2000
+  }, {
+    "title": "Partially labeled classification with markov random walks. In Advances in neural information processing systems (NIPS)",
+    "authors": ["Szummer", "Martin", "Jaakkola", "Tommi"],
+    "year": 2002
+  }, {
+    "title": "Online semi-supervised learning on quantized graphs",
+    "authors": ["Valko", "Michal", "Kveton", "Branislav", "Ling", "Huang", "Daniel", "Ting"],
+    "venue": "In Uncertainty in Artificial Intelligence (UAI),",
+    "year": 2010
+  }, {
+    "title": "Label propagation through linear neighborhoods",
+    "authors": ["Wang", "Fei", "Zhang", "Changshui"],
+    "venue": "IEEE Transactions on Knowledge and Data Engineering,",
+    "year": 2008
+  }, {
+    "title": "Graph transduction via alternating minimization",
+    "authors": ["Wang", "Jun", "Jebara", "Tony", "Chang", "Shih-Fu"],
+    "venue": "In International Conference on Machine Learning (ICML),",
+    "year": 2008
+  }, {
+    "title": "Proximity graphs for clustering and manifold learning. In Advances in neural information processing systems (NIPS)",
+    "authors": ["Zemel", "Richard S", "Carreira-Perpiñán", "Miguel Á"],
+    "year": 2005
+  }, {
+    "title": "The Schur Complement and Its Applications",
+    "authors": ["F. Zhang"],
+    "venue": "Numerical Methods and Algorithms. Springer,",
+    "year": 2005
+  }, {
+    "title": "Learning with local and global consistency. In Advances in neural information processing systems",
+    "authors": ["Zhou", "Denny", "Bousquet", "Olivier", "Lal", "Thomas N", "Weston", "Jason", "Schölkopf", "Bernhard"],
+    "year": 2004
+  }, {
+    "title": "Semi-supervised learning on directed graphs. In Advances in neural information processing systems (NIPS)",
+    "authors": ["Zhou", "Denny", "Hofmann", "Thomas", "Schölkopf", "Bernhard"],
+    "year": 2005
+  }, {
+    "title": "Semi-supervised learning literature survey",
+    "authors": ["Zhu", "Xiaojin"],
+    "venue": "CMU Repository,",
+    "year": 2005
+  }, {
+    "title": "Harmonic mixtures: combining mixture models and graph-based methods for inductive and scalable semi-supervised learning",
+    "authors": ["Zhu", "Xiaojin", "Lafferty", "John"],
+    "venue": "In International Conference on Machine Learning (ICML),",
+    "year": 2005
+  }, {
+    "title": "Semi-supervised learning using gaussian fields and harmonic functions",
+    "authors": ["Zhu", "Xiaojin", "Ghahramani", "Zoubin", "Lafferty", "John D"],
+    "venue": "In International Conference on Machine Learning (ICML),",
+    "year": 2003
+  }, {
+    "title": "Semi-supervised learning: From gaussian fields to gaussian processes, 2003b",
+    "authors": ["Zhu", "Xiaojin", "Lafferty", "John D", "Ghahramani", "Zoubin"],
+    "year": 2003
+  }, {
+    "title": "Some new directions in graph-based semi-supervised learning",
+    "authors": ["Zhu", "Xiaojin", "Goldberg", "Andrew B", "Khot", "Tushar"],
+    "venue": "In IEEE International Conference on Multimedia and Expo (ICME),",
+    "year": 2009
+  }],
+  "id": "SP:b132998a422b4bb85558e182a532a970686cd1f7",
+  "authors": [{
+    "name": "Tal Wagner",
+    "affiliations": []
+  }, {
+    "name": "Sudipto Guha",
+    "affiliations": []
+  }, {
+    "name": "Shiva Prasad Kasiviswanathan",
+    "affiliations": []
+  }, {
+    "name": "Nina Mishra",
+    "affiliations": []
+  }],
+  "abstractText": "We consider the problem of labeling points on a fast-moving data stream when only a small number of labeled examples are available. In our setting, incoming points must be processed efficiently and the stream is too large to store in its entirety. We present a semi-supervised learning algorithm for this task. The algorithm maintains a small synopsis of the stream which can be quickly updated as new points arrive, and labels every incoming point by provably learning from the full history of the stream. Experiments on real datasets validate that the algorithm can quickly and accurately classify points on a stream with a small quantity of labeled examples.",
+  "title": "Semi-Supervised Learning on Data Streams via Temporal Label Propagation"
+}

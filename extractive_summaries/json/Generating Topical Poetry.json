@@ -1,0 +1,213 @@
+{
+  "sections": [{
+    "text": "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing, pages 1183–1191, Austin, Texas, November 1-5, 2016. c©2016 Association for Computational Linguistics"
+  }, {
+    "heading": "1 Introduction",
+    "text": "Automatic algorithms are starting to generate interesting, creative text, as evidenced by recent distinguishability tests that ask whether a given story, poem, or song was written by a human or a computer.1 In this paper, we describe Hafez, a program that generates any number of distinct poems on a user-supplied topic. Figure 1 shows an overview of the system, which sets out these tasks: • Vocabulary. We select a specific, large vocabu-\nlary of words for use in our generator, and we compute stress patterns for each word. • Related words. Given a user-supplied topic, we\ncompute a large set of related words. • Rhyme words. From the set of related words,\nwe select pairs of rhyming words to end lines. • Finite-state acceptor (FSA). We build an FSA\nwith a path for every conceivable sequence of vocabulary words that obeys formal rhythm constraints, with chosen rhyme words in place. • Path extraction. We select a fluent path through\nthe FSA, using a recurrent neural network (RNN) for scoring.\n1For example, in the 2016 Dartmouth test bit.ly/20WGLF3, no automatic sonnet-writing system passed indistinguishability, though ours was selected as the best of the submitted systems.\n1183\nSections 3-7 describe how we address these tasks. After this, we show results of Hafez generating 14- line classical sonnets with rhyme scheme ABAB CDCD EFEF GG, written in iambic pentameter (ten syllables per line with alternating stress: “da-DUM da-DUM da-DUM . . . ”). We then show experiments on Hafez’s parameters and conclude by showing the generality of the approach with respect to language and poetic form."
+  }, {
+    "heading": "2 Prior Work",
+    "text": "Automated poem generation has been a popular but challenging research topic (Manurung et al., 2000; Gervas, 2001; Diaz-Agudo et al., 2002; Manurung, 2003; Wong and Chun, 2008; Jiang and Zhou, 2008; Netzer et al., 2009). Recent work attempts to solve this problem by applying grammatical and semantic templates (Oliveira, 2009; Oliveira, 2012), or by modeling the task as statistical machine translation, in which each line is a “translation” of the previous line (Zhou et al., 2009; He et al., 2012). Yan et al. (2013) proposes a method based on summarization techniques for poem generation, retrieving candidate sentences from a large corpus of poems based on a user’s query and clustering the constituent terms, summarizing each cluster into a line of a poem. Greene et al. (2010) use unsupervised learning to estimate the stress patterns of words in a poetry corpus, then use these in a finite-state network to generate short English love poems.\nSeveral deep learning methods have recently been proposed for generating poems. Zhang and Lapata (2014) use an RNN model to generate 4-line Chinese poems. They force the decoder to rhyme the second and fourth lines, trusting the RNN to control rhythm. Yi et al. (2016) also propose an attentionbased bidirectional RNN model for generating 4- line Chinese poems. The only such work which tries to generate longer poems is from Wang et al. (2016), who use an attention-based LSTM model for generation iambic poems. They train on a small dataset and do not use an explicit system for constraining rhythm and rhyme in the poem.\nNovel contributions of our work are: • We combine finite-state machinery with deep\nlearning, guaranteeing formal correctness of our poems, while gaining coherence of long-\ndistance RNNs. • By using words related to the user’s topic as\nrhyme words, we design a system that can generate poems with topical coherence. This allows us to generate longer topical poems. • We extend our method to other poetry formats\nand languages."
+  }, {
+    "heading": "3 Vocabulary",
+    "text": "To generate a line of iambic pentameter poetry, we arrange words to form a sequence of ten syllables alternating between stressed and unstressed. For example:\n010 1 0 10 101 Attending on his golden pilgramage\nFollowing Ghazvininejad and Knight (2015), we refer to unstressed syllables with 0 and stressed syllables with 1, so that the form of a Shakespearean sonnet is ((01)5)14. To get stress patterns for individual words, we use CMU pronunciation dictionary,2 collapsing primary and secondary stresses. For example:\nCAFETERIA K AE2 F AH0 T IH1 R IY0 AH0\nbecomes\nCAFETERIA 10100\nThe first two columns of Table 1 show other examples. From the 125,074 CMU dictionary word types, we can actually only use words whose stress pattern matches the iambic pattern (alternating 1s and 0s). However, we make an exception for words that end in ...100 (such as spatula). To mimic how human poets employ such words, we convert all “...100” patterns to “...101”. This leaves us with a 106,019 word types.\nWords with multiple syllable-stress patterns present a challenge. For example, our program may use the word record in a “...10...” context, but if it is a verb in that context, a human reader will pronounce it as “01”, breaking the intended rhythm. To guarantee that our poems scan properly, we eject all ambiguous words from our vocabulary. This problem is especially acute with monosyllabic words, as most have a stress that depends on context. Greene et al. (2010) apply the EM algorithm to align\n2http://www.speech.cs.cmu.edu/cgi-bin/cmudict\nhuman-written sonnets with assumed meter, extracting P(0|word) and P(1|word) probabilities. Using their method, we eject all monosyllabic words except those with P(0|word) > 0.9 or P(1|word) > 0.9. A consequence is that our poetry generator avoids the words to, it, in, and is, which actually forces the system into novel territory. This yields 16,139 monosyllabic and 87,282 multisyllabic words.\nBecause our fluency module (Section 7) is restricted to 20,000 word types, we further pare down our vocabulary by removing words that are not found in the 20k-most-frequent list derived from the song lyrics corpus we use for fluency. After this step, our final vocabulary contains 14,368 words (4833 monosyllabic and 9535 multisyllabic)."
+  }, {
+    "heading": "4 Topically Related Words and Phrases",
+    "text": "After we receive a user-supplied topic, the first step in our poem generation algorithm is to build a scored list of 1000 words/phrases that are related to that topic. For example: • User-supplied input topic: colonel • Output: colonel (1.00), lieutenant colonel\n(0.77), brigadier general (0.73), commander (0.67) ... army (0.55) ... This problem is different from finding synonyms or hypernyms in WordNet (Miller, 1995). For example, while Banerjee and Pedersen (2003) use WordNet to assign a 1.0 similarity score between car and automobile, they only give a 0.3 similarity between car and gasoline.\nA second method is to use pointwise mutual information (PMI). Let t be the topic/phrase, and let w be a candidate related word. We collect a set of sentences S that contain t, and sort candidates by\nProportion of sentences in S containing w P(w) in general text\nTable 2 shows that PMI has a tendency to assign a high score to low frequency words (Bouma, 2009; Role and Nadif, 2011; Damani, 2013).\nA third method is word2vec (Mikolov et al., 2013a), which provides distributed word representations. We train a continuous-bag-of-words model3 with window size 8 and 40 and word vector dimension 200. We score candidate related words/phrases with cosine to topic-word vector. We find that a larger window size works best (Pennington et al., 2014; Levy and Goldberg, 2014).\nTable 2 shows examples. The training corpus for word2vec has a crucial effect on the quality of the related words. We train word2vec models on the English Gigaword corpus,4 a song lyrics corpus, and the first billion characters from Wikipedia.5 The Gigaword corpus produces related words that are too newsy, while the song lyrics corpus does not cover enough topics. Hence, we train on Wikipedia. To obtain related phrases as well as words, we apply the method of Mikolov et al. (2013b) to the Wikipedia corpus, which replaces collocations like Los Angeles with single tokens like Los Angeles. Word2vec then builds vectors for phrases as well as words. When the user supplies a multi-word topic, we use its phrase vector if available. Otherwise, we create the vector topic by element wise addition of its words’ vectors."
+  }, {
+    "heading": "5 Choosing Rhyme Words",
+    "text": "We next fill in the right-hand edge of our poem by selecting pairs of rhyming words/phrases and assigning them to lines. In a Shakespearean sonnet with rhyme scheme ABAB CDCD EFEF GG, there are seven pairs of rhyme words to decide on."
+  }, {
+    "heading": "5.1 Strict Rhyme",
+    "text": "The strict definition of English rhyme is that the sounds of two words must match from the last stressed vowel onwards. In a masculine rhyme,\n3https://code.google.com/archive/p/word2vec/ 4https://catalog.ldc.upenn.edu/LDC2011T07 5http://mattmahoney.net/dc/enwik9.zip\nthe last syllable is stressed; in a feminine rhyme, the penultimate syllable is stressed. We collect phoneme and stress information from the CMU pronunciation dictionary. We pre-compute strict rhyme classes for words (see Table 1) and hash the vocabulary into those classes."
+  }, {
+    "heading": "5.2 Slant Rhyme",
+    "text": "In practice, human poets do not always use strict rhymes. To give ourselves more flexibility in choosing rhyme pairs, we allow for slant (or half) rhymes. By inspecting human rhyming data, we develop this operational definition of slant rhyme:\n1. Let s1 and s2 be two potentially-rhyming phoneme sequences. 2. Replace ER with UH R in both sequences. 3. Let v1 and v2 be the last stressed vowels in s1\nand s2. 4. Let w1 and w2 be last vowels in s1 and s2. 5. Let s1 = a1 v1 x1 w1 c1. Likewise, let s2 = a2\nv2 x2 w2 c2. 6. Output NO under any of these circumstances:\n(a) v1 6= v2, (b) w1 6= w2, (c) c1 6= c2, (d) a1 6= NULL and a2 6= NULL and a1 = a2.\n7. If x1 and x2 are single phonemes: (a) If x1 ∼ x2, then output YES.6 (b) Otherwise, output NO. 8. If x1 and x2 contain different numbers of vowels, output NO. 9. Let p1 and q1 be the first and last phonemes of x1. Let p2 and q2 be the same for x2.\n10. If (p1 = p2) and (q1 ∼ q2), output YES. 11. If (p1 ∼ p2) and (q1 = q1), output YES. 12. Otherwise, output NO.\n6x ∼ y if phonemes x and y are similar. Two phonemes are similar if their pairwise score according to (Hirjee and Brown, 2010) is greater than -0.6. This includes 98 pairs, such as L/R, S/SH, and OY/UH.\nWords whose last syllable is stressed do not participate in slant rhymes.\nExample slant rhymes taken from our generated poems include Viking/fighting, snoopy/spooky, baby/crazy and comic/ironic. We pre-compute a coarse version of slant rhyme classes (Table 1) with the pattern “vi * wi ci”. If two words hash to the same coarse class, then we subsequently accept or reject depending on the similarity of the intermediate phonemes."
+  }, {
+    "heading": "5.3 Non-Topical Rhyming Words",
+    "text": "For rare topics, we may not have enough related words to locate seven rhyming pairs. For example, we generate 1000 related words for the topic Viking, but only 32 of them are found in our 14,368- word vocabulary. To give a chance for all topical words/phrases to be used as rhyme words, for each strict rhyme class, we add the most common word in our song lyric corpus to the list of related words. In addition, we add words from popular rhyme pairs7 (like do/you and go/know) to the list of related words with a low topic similarity score."
+  }, {
+    "heading": "5.4 Rhyme word selection",
+    "text": "We first hash all related words/phrases into rhyme classes. Each collision generates a candidate rhyme pair (s1, s2), which we score with the maximum of cosine(s1, topic) and cosine(s2, topic). So that we can generate many different sonnets on the same topic, we choose rhyme pairs randomly with probability proportional to their score. After choosing a pair (s1, s2), we remove it, along with any other candidate pair that contains s1 or s2. Because a poem’s beginning and ending are more important, we assign the first rhyme pair to the last two lines of the sonnet,\n7http://slate.me/OhTKCA\nthen assign other pairs from beginning of the sonnet towards the end."
+  }, {
+    "heading": "6 Constructing FSA of Possible Poems",
+    "text": "After choosing rhyme words, we create a large finite-state acceptor (FSA) that compactly encodes all word sequences that use these rhyme words and also obey formal sonnet constraints: • Each sonnet contains 14 lines. • Lines are in iambic pentameter, with stress pat-\ntern (01)5. Following poetic convention, we also use (01)50, allowing feminine rhyming. • Each line ends with the chosen rhyme\nword/phrase for that line. • Each line is punctuated with comma or period,\nexcept for the 4th, 8th, 12th, and 14th lines, which are punctuated with period. To implement these constraints, we create FSA states that record line number and syllable count. For example, FSA state L2-S3 (Figure 2) signifies “I am in line 2, and I have seen 3 syllables so far”. From each state, we create arcs for each feasible word in the vocabulary. For example, we can move from state L1-S1 to state L1-S3 by consuming any word with stress pattern 10 (such as table or active). When moving between lines (e.g., from L1-S10 to L2-S1), we employ arcs labeled with punctuation marks.\nTo fix the rhyme words at the end of each line, we delete all arcs pointing to the line-final state, except for the arc labeled with the chosen rhyme word. For speed, we pre-compute the entire FSA; once we receive the topic and choose rhyme words, we only need to carry out the deletion step.\nIn the resulting FSA, each path is formally a sonnet. However, most of the paths through the FSA are meaningless. One FSA generated from the topic natural language contains 10229 paths, including this randomly-selected one:\nOf pocket solace ammunition grammar. An tile pretenders spreading logical. An stories Jackie gallon posing banner. An corpses Kato biological ...\nHence, we need a way to search and rank this large space."
+  }, {
+    "heading": "7 Path extraction through FSA with RNN",
+    "text": "To locate fluent paths, we need a scoring function and a search procedure. For example, we can build a n-gram word language model (LM)—itself a large weighted FSA. Then we can take a weighted intersection of our two FSAs and return the highestscoring path. While this can be done efficiently with dynamic programming, we find that n-gram models have a limited attention span, yielding poor poetry.\nInstead, we use an RNN language model (LM). We collect 94,882 English songs (32m word tokens) as our training corpus,8 and train9 a two-layer recurrent network with long short-term memory (LSTM) units (Hochreiter and Schmidhuber, 1997).10\nWhen decoding with the LM, we employ a beam\n8http://www.mldb.org/ 9We use the toolkit: https://github.com/isi-nlp/Zoph RNN\n10We use a minibatch of 128, a hidden state size of 1000, and a dropout rate of 0.2. The output vocabulary size is 20,000. The learning rate is initially set as 0.7 and starts to decay by 0.83 once the perplexity on a development set starts to increase. All parameters are initialized within range [−0.08,+0.08], and the gradients are re-scaled when the global norm is larger than 5.\nsearch that is further guided by the FSA. Each beam state Ct,i is a tuple of (h, s, word, score), where h is the hidden states of LSTM at step t in ith state, and s is the FSA state at step t in ith state. The model generates one word at each step.\nAt the beginning, h0,0 is the initial hidden state of LSTM, s0,0 is the start state of FSA, word0,0 = <START> and score0,0 = 0. To expand a beam state Ct,i, we first feed ht,i and word into the LM and get an updated hidden state hnext. The LM also returns a probability distribution P (V ) over the entire vocabulary V for next word. Then, for each succeeding state ssuc of st,i in the FSA and the word wnext over each edge from st,i to ssuc, we form a new state (hnext, ssuc, wnext, scoret,i + log(P (wnext))) and push it into next beam.\nBecause we fix the rhyme word at the end of each line, when we expand the beam states immediately before the rhyme word, the FSA states in those beam states have only one succeeding state—LNS10, where N = [1, 14], and only one succeeding word, the fixed rhyme word. For our beam size b = 50, the chance is quite low that in those b words there exists any suitable word to precede that rhyme word. We solve this by generating the whole sonnet in reverse, starting from the final rhyme word. Thus, when we expand the state L1-S8, we can choose from almost every word in vocabulary instead of just b possible words. The price to pay is that at the beginning of each line, we need to hope in those b words there exists some that are suitable to succeed comma or period.\nBecause we train on song lyrics, our LM tends to generate repeating words, like never ever ever ever ever. To solve this problem, we apply a penalty to those words that already generated in previous steps during the beam search.\nTo create a poem that fits well with the predetermined rhyme words at the end of each line, the LM model tends to choose “safe” words that are frequent and suitable for any topic, such as pronouns, adverbs, and articles. During decoding, we apply a reward on all topically related words (generated in Section 4) in the non-rhyming portion of the poem.\nFinally, to further encourage the system to follow the topic, we train an encoder-decoder sequence-tosequence model (Sutskever et al., 2014). For training, we select song lyric rhyme words and assemble\nthem in reverse order (encoder side), and we pair this with the entire reversed lyric (decoder side). At generation time, we put all the selected rhyme words on the source side, and let the model to generate the poem conditioned on those rhyme words. In this way, when the model tries to generate the last line of the poem, it already knows all fourteen rhyme words, thus possessing better knowledge of the requested topic. We refer to generating poems using the RNN LM as the “generation model” and to this model as the “translation model”."
+  }, {
+    "heading": "8 Results and Analysis",
+    "text": "Sample outputs produced by our best system are shown in Figures 3 and 4. We find that they generally stay on topic and are fairly creative. If we request a poem on the topic Vietnam, we may see the phrase Honky Tonkin Resolution; a different topic leads the system to rhyme Dirty Harry with Bloody Mary. In this section, we present experiments we used to select among different versions of our poem generator.\nThe first experiment tests the effect of encouraging topical words in the body of the poem, via a direct per-word bonus. For 40 different topics, we generate 2 sonnets with and without encouragement, using the same set of rhyme words. Then we ask 23 human judges to choose the better sonnet. Each judge compares sonnets for 10 different topics. Table 3 shows that using topical words increases the\nquality of the sonnets. Next, we compare the translation model with generation model. For each of 40 topics, we generate one poem with generation model and one poem with translation model, using the same set of rhyme words. We ask 25 human judges to chose the better poem. Each judge compares sonnets for 10 different topics. This experiment is run separately for sonnets and stanzas. Table 4 shows how the translation model generates better poems, and Figure 5 compares two stanzas.\nWe check for plagiarism, as it is common for optimal-searching RNNs to repeat large sections of the training data. We hypothesize that strong conditions on rhyme, meter, repetition, and ambiguouslystressed words will all mitigate against plagiarism.\nWe find that on average, each sonnet copies only 1.2 5-grams from the training data. If we relax the repeated-word penalty and the iambic meter, this number increases to 7.9 and 10.6 copied 5- grams, respectively. Considering the lack of copying, we find the RNN-generated grammar to be quite good. The most serious—and surprisingly common—grammatical error is the wrong use of a and an, which we fix in a post-processing step."
+  }, {
+    "heading": "9 Other Languages and Formats",
+    "text": "To show the generality of our approach, we modify our system to generate Spanish-language poetry from a Spanish topic. We use these resources: • A song lyric corpus for training our RNN.\nWe download 97,775 Spanish song lyrics from LyricWikia,11 which amounts to 20m word tokens and 219k word types. • A Spanish Wikipedia dump12 consisting of\n885m word tokens, on which we run word2vec to find words and phrases related to the topic.\nOur vocabulary consists of the 20k most frequent lyric words. For each word, we compute its syllablestress pattern and its rhyme class (see Figure 6). Because Spanish writing is quite phonetic, we can retrieve this from the letter strings of the vocabulary.\n11http://lyrics.wikia.com/wiki/Category:Language/Spanish 12https://dumps.wikimedia.org/eswiki/20160305/eswiki-\n20160305-pages-meta-current.xml.bz2\nFor any given vocabulary word:13\n1. We remove silent h, and convert y into i. 2. We count the number of syllables by isolat-\ning vowel groups. In such groups, weak vowels (i, u) attached to strong vowels (a, e, o) do not form separate syllables, unless they are accented (dı́-as versus dios). Strong clusters are broken into separate syllables (eg, ca-er). 3. We determine which vowel (and therefore syllable) is stressed. If any vowel is accented, it is stressed. If the word is accent-free, then the second-to-last syllable is stressed, unless the word ends in a consonant other than n or s, in which case the last syllable is stressed. 4. We form the word’s rhyme class by breaking off a letter suffix starting at the last stressed vowel (as in English). Weak vowels do not participate (e.g., tienda→ -enda, not -ienda). We remove h from the rhyme, so búho rhymes with continúo. Because rhyming is easier in Spanish than English, we do not need slant rhyme.\nMost Spanish poetic formats enforce some number of syllables per line, without meter. However, there are two caveats when counting syllables:\n1. Sinalefa merges vowels across word boundaries. Thus, la obra is counted as two syllables instead of three, and va a hacer is counted as two syllables instead of four. A line may therefore have more words than syllables. 2. For the last word of a line (only), we count up to its last stressed syllable, then add one. This means that even though iambic meter is not employed, we still need stress patterns to correctly count syllables.\nWe implement these constraints in the FSA framework, now with separate states for “I have seen M syllables, and the last word ended in a vowel sound” and “I have seen M syllables, and the last\n13http://community.dur.ac.uk/m.p.thompson/verse.htm\nword ended in a consonant sound.” Technically speaking, the FSA includes single-state cycles for the Spanish word a, due to sinalefa. Line-ending states can only be reached by words that have their syllable count adjusted as in point 2 above.\nFigure 7 shows a sample Spanish output. The format is the classical Spanish soneta, which consists of 14 eleven-syllable lines under the rhyme scheme ABBA ABBA CDC DCD. This scheme requires us to choose up to four words with the same rhyme.\nOverall, we also find Spanish outputs to be fluent, fairly creative, and on topic. Grammatical problems are a bit more common than in our English generator—for example, adjacent words sometimes disagree in number or gender. The RNN generalizations that permit these errors no doubt also permit creative phrasings."
+  }, {
+    "heading": "10 Conclusion",
+    "text": "We have described Hafez, a poetry generation system that combines hard format constraints with a deep-learning recurrent network. The system uses special techniques, such as rhyme-word choice and encoder-decoder modeling, to keep the poem on topic. We hope that future work will provide more discourse structure and function to automatic poetry, while maintaining the syntax, semantics, and creative phrasing we observe."
+  }, {
+    "heading": "Acknowledgments",
+    "text": "We would like to thank the anonymous reviewers for their helpful comments. This work was supported by DARPA (W911NF-15-1-0543) and NSF (IIS-1524371)."
+  }],
+  "year": 2016,
+  "references": [{
+    "title": "Extended gloss overlaps as a measure of semantic relatedness",
+    "authors": ["Satanjeev Banerjee", "Ted Pedersen."],
+    "venue": "Proc. IJCAI.",
+    "year": 2003
+  }, {
+    "title": "Normalized (pointwise) mutual information in collocation extraction",
+    "authors": ["Gerlof Bouma."],
+    "venue": "Proc. Biennial GSCL Conference.",
+    "year": 2009
+  }, {
+    "title": "Improving pointwise mutual information (PMI) by incorporating significant cooccurrence",
+    "authors": ["Om P. Damani."],
+    "venue": "Proc. ACL.",
+    "year": 2013
+  }, {
+    "title": "Poetry generation in COLIBRI",
+    "authors": ["Belen Diaz-Agudo", "Pablo Gervas", "Pedro GonzalezCalero."],
+    "venue": "Proc. ECCBR.",
+    "year": 2002
+  }, {
+    "title": "An expert system for the composition of formal Spanish poetry",
+    "authors": ["Pablo Gervas."],
+    "venue": "Knowledge-Based Systems, 14(3).",
+    "year": 2001
+  }, {
+    "title": "How to memorize a random 60-bit string",
+    "authors": ["Marjan Ghazvininejad", "Kevin Knight."],
+    "venue": "Proc. NAACL.",
+    "year": 2015
+  }, {
+    "title": "Automatic analysis of rhythmic poetry with applications to generation and translation",
+    "authors": ["Erica Greene", "Tugba Bodrumlu", "Kevin Knight."],
+    "venue": "Proc. EMNLP.",
+    "year": 2010
+  }, {
+    "title": "Generating Chinese classical poems with statistical machine translation models",
+    "authors": ["Jing He", "Ming Zhou", "Long Jiang."],
+    "venue": "Proc. AAAI.",
+    "year": 2012
+  }, {
+    "title": "Using automated rhyme detection to characterize rhyming style in rap music",
+    "authors": ["Hussein Hirjee", "Daniel Brown."],
+    "venue": "Empirical Musicology Review.",
+    "year": 2010
+  }, {
+    "title": "Long short-term memory",
+    "authors": ["Sepp Hochreiter", "Jurgen Schmidhuber."],
+    "venue": "Neural Computation, 9(8).",
+    "year": 1997
+  }, {
+    "title": "Generating Chinese couplets using a statistical MT approach",
+    "authors": ["Long Jiang", "Ming Zhou."],
+    "venue": "Proc. COLING.",
+    "year": 2008
+  }, {
+    "title": "Dependencybased word embeddings",
+    "authors": ["Omer Levy", "Yoav Goldberg."],
+    "venue": "Proc. ACL.",
+    "year": 2014
+  }, {
+    "title": "Towards a computational model of poetry generation",
+    "authors": ["Hisar Manurung", "Graeme Ritchie", "Henry Thompson."],
+    "venue": "Proc. AISB Symposium on Creative and Cultural Aspects and Applications of AI and Cognitive Science.",
+    "year": 2000
+  }, {
+    "title": "An evolutionary algorithm approach to poetry generation",
+    "authors": ["Hisar Manurung."],
+    "venue": "Ph.D. thesis, University of Edinburgh.",
+    "year": 2003
+  }, {
+    "title": "Efficient estimation of word representations in vector space",
+    "authors": ["Tomas Mikolov", "Kai Chen", "Greg Corrado", "Jeffrey Dean."],
+    "venue": "Proc. NIPS.",
+    "year": 2013
+  }, {
+    "title": "Distributed representations of words and phrases and their compositionality",
+    "authors": ["Tomas Mikolov", "Ilya Sutskever", "Kai Chen", "Greg Corrado", "Jeff Dean."],
+    "venue": "Proc. NIPS.",
+    "year": 2013
+  }, {
+    "title": "WordNet: A lexical database for English",
+    "authors": ["George Miller."],
+    "venue": "Communications of the ACM.",
+    "year": 1995
+  }, {
+    "title": "Gaiku: Generating haiku with word associations norms",
+    "authors": ["Yael Netzer", "David Gabay", "Yoav Goldberg", "Michael Elhadad."],
+    "venue": "Proc. NAACL Workshop on Computational Approaches to Linguistic Creativity.",
+    "year": 2009
+  }, {
+    "title": "Automatic generation of poetry: an overview",
+    "authors": ["Hugo Oliveira."],
+    "venue": "Proc. 1st Seminar of Art, Music, Creativity and Artificial Intelligence.",
+    "year": 2009
+  }, {
+    "title": "PoeTryMe: a versatile platform for poetry generation",
+    "authors": ["Hugo Oliveira."],
+    "venue": "Computational Creativity, Concept Invention, and General Intelligence, 1.",
+    "year": 2012
+  }, {
+    "title": "Glove: Global vectors for word representation",
+    "authors": ["Jeffrey Pennington", "Richard Socher", "Christopher Manning."],
+    "venue": "Proc. EMNLP.",
+    "year": 2014
+  }, {
+    "title": "Handling the impact of low frequency events on co-occurrence based measures of word similarity—a case study of pointwise mutual information",
+    "authors": ["Franois Role", "Mohamed Nadif."],
+    "venue": "Knowledge Discovery and Information Retrieval.",
+    "year": 2011
+  }, {
+    "title": "Sequence to sequence learning with neural networks",
+    "authors": ["I. Sutskever", "O. Vinyals", "Q.V. Le."],
+    "venue": "Proc. NIPS.",
+    "year": 2014
+  }, {
+    "title": "Chinese song iambics generation with neural attention-based model",
+    "authors": ["Qixin Wang", "Tianyi Luo", "Dong Wang", "Chao Xing."],
+    "venue": "arXiv:1604.06274.",
+    "year": 2016
+  }, {
+    "title": "Automatic haiku generation using VSM",
+    "authors": ["Martin Wong", "Andy Chun."],
+    "venue": "Proc. ACACOS.",
+    "year": 2008
+  }, {
+    "title": "I, Poet: Automatic Chinese poetry composition through a generative summarization framework under constrained optimization",
+    "authors": ["Rui Yan", "Han Jiang", "Mirella Lapata", "Shou-De Lin", "Xueqiang Lv", "Xiaoming Li."],
+    "venue": "Proc. IJCAI.",
+    "year": 2013
+  }, {
+    "title": "Generating chinese classical poems with RNN encoderdecoder",
+    "authors": ["Xiaoyuan Yi", "Ruoyu Li", "Maosong Sun."],
+    "venue": "arXiv:1604.01537.",
+    "year": 2016
+  }, {
+    "title": "Chinese poetry generation with recurrent neural networks",
+    "authors": ["Xingxing Zhang", "Mirella Lapata."],
+    "venue": "Proc. EMNLP.",
+    "year": 2014
+  }, {
+    "title": "Generating Chinese couplets and quatrain using a statistical approach",
+    "authors": ["Ming Zhou", "Long Jiang", "Jing He."],
+    "venue": "Proc. Pacific Asia Conference on Language, Information and Computation.",
+    "year": 2009
+  }],
+  "id": "SP:9dadf5bb0a2182b1509c5ea60d434bb35d4701c1",
+  "authors": [{
+    "name": "Marjan Ghazvininejad",
+    "affiliations": []
+  }, {
+    "name": "Xing Shi",
+    "affiliations": []
+  }, {
+    "name": "Yejin Choi",
+    "affiliations": []
+  }, {
+    "name": "Kevin Knight",
+    "affiliations": []
+  }],
+  "abstractText": "We describe Hafez, a program that generates any number of distinct poems on a usersupplied topic. Poems obey rhythmic and rhyme constraints. We describe the poetrygeneration algorithm, give experimental data concerning its parameters, and show its generality with respect to language and poetic form.",
+  "title": "Generating Topical Poetry"
+}

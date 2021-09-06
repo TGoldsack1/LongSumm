@@ -1,0 +1,339 @@
+{
+  "sections": [{
+    "text": "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 4231–4242 Brussels, Belgium, October 31 - November 4, 2018. c©2018 Association for Computational Linguistics\n4231"
+  }, {
+    "heading": "1 Introduction",
+    "text": "Open domain Question Answering (QA) is the task of finding answers to questions posed in natural language. Historically, this required a specialized pipeline consisting of multiple machinelearned and hand-crafted modules (Ferrucci et al., 2010). Recently, the paradigm has shifted towards training end-to-end deep neural network models for the task (Chen et al., 2017; Liang et al., 2017; Raison et al., 2018; Talmor and Berant, 2018; Iyyer et al., 2017). Most existing models, however, answer questions using a single information source, usually either text from an encyclopedia, or a single knowledge base (KB).\nIntuitively, the suitability of an information source for QA depends on both its coverage and\n∗Haitian Sun and Bhuwan Dhingra contributed equally to this work."
+  }, {
+    "heading": "Q. Who voiced Meg in Family Guy?",
+    "text": "the difficulty of extracting answers from it. A large text corpus has high coverage, but the information is expressed using many different text patterns. As a result, models which operate on these patterns (e.g. BiDAF (Seo et al., 2017)) do not generalize beyond their training domains (Wiese et al., 2017; Dhingra et al., 2018) or to novel types of reasoning (Welbl et al., 2018; Talmor and Berant, 2018). KBs, on the other hand, suffer from low coverage due to their inevitable incompleteness and restricted schema (Min et al., 2013), but are easier to extract answers from, since they are constructed precisely for the purpose of being queried.\nIn practice, some questions are best answered using text, while others are best answered using KBs. A natural question, then, is how to effectively combine both types of information. Surprisingly little prior work has looked at this problem. In this paper we focus on a scenario in which a large-scale KB (Bollacker et al., 2008; Auer et al., 2007) and a text corpus are available, but neither is sufficient alone for answering all questions.\nA naı̈ve option, in such a setting, is to take stateof-the-art QA systems developed for each source, and aggregate their predictions using some heuristic (Ferrucci et al., 2010; Baudiš, 2015). We call this approach late fusion, and show that it can be sub-optimal, as models have limited ability to aggregate evidence across the different sources (§ 5.4). Instead, we focus on an early fusion strategy, where a single model is trained to extract answers from a question subgraph (Fig 1) containing relevant KB facts as well as text sentences. Early fusion allows more flexibility in combining information from multiple sources.\nTo enable early fusion, in this paper we propose a novel graph convolution based neural network, called GRAFT-Net (Graphs of Relations Among Facts and Text Networks), specifically designed to operate over heterogeneous graphs of KB facts and text sentences. We build upon recent work on graph representation learning (Kipf and Welling, 2016; Schlichtkrull et al., 2017), but propose two key modifications to adopt them for the task of QA. First, we propose heterogeneous update rules that handle KB nodes differently from the text nodes: for instance, LSTM-based updates are used to propagate information into and out of text nodes (§ 3.2). Second, we introduce a directed propagation method, inspired by personalized Pagerank in IR (Haveliwala, 2002), which constrains the propagation of embeddings in the graph to follow paths starting from seed nodes linked to the question (§ 3.3). Empirically, we show that both these extensions are crucial for the task of QA.\nWe evaluate these methods on a new suite of benchmark tasks for testing QA models when both KB and text are present. Using WikiMovies (Miller et al., 2016) and WebQuestionsSP (Yih et al., 2016), we construct datasets with a varying amount of training supervision and KB completeness, and with a varying degree of question complexity. We report baselines for future comparison, including Key Value Memory Networks (Miller et al., 2016; Das et al., 2017c), and show that our proposed GRAFT-Nets have superior performance across a wide range of conditions (§ 5). We also show that GRAFT-Nets are competitive with the state-of-the-art methods developed specifically for text-only QA, and state-of-the art methods developed for KB-only QA (§ 5.4)1.\n1Source code and data are available at https:// github.com/OceanskySun/GraftNet"
+  }, {
+    "heading": "2 Task Setup",
+    "text": ""
+  }, {
+    "heading": "2.1 Description",
+    "text": "A knowledge base is denoted as K = (V, E ,R), where V is the set of entities in the KB, and the edges E are triplets (s, r, o) which denote that relation r ∈ R holds between the subject s ∈ V and object o ∈ V . A text corpus D is a set of documents {d1, . . . , d|D|} where each document is a sequence of words di = (w1, . . . , w|di|). We further assume that an (imperfect) entity linking system has been run on the collection of documents whose output is a set L of links (v, dp) connecting an entity v ∈ V with a word at position p in document d, and we denote with Ld the set of all entity links in document d. For entity mentions spanning multiple words in d, we include links to all the words in the mention in L.\nThe task is, given a natural language question q = (w1, . . . , w|q|), extract its answers {a}q from G = (K,D,L). There may be multiple correct answers for a question. In this paper, we assume that the answers are entities from either the documents or the KB. We are interested in a wide range of settings, where the KB K varies from highly incomplete to complete for answering the questions, and we will introduce datasets for testing our models under these settings.\nTo solve this task we proceed in two steps. First, we extract a subgraph Gq ⊂ G which contains the answer to the question with high probability. The goal for this step is to ensure high recall for answers while producing a graph small enough to fit into GPU memory for gradient-based learning. Next, we use our proposed model GRAFT-Net to learn node representations in Gq, conditioned on q, which are used to classify each node as being an answer or not. Training data for the second step is generated using distant supervision. The entire process mimics the search-and-read paradigm for text-based QA (Dhingra et al., 2017)."
+  }, {
+    "heading": "2.2 Question Subgraph Retrieval",
+    "text": "We retrieve the subgraph Gq using two parallel pipelines – one over the KB K which returns a set of entities, and the other over the corpus D which returns a set of documents. The retrieved entities and documents are then combined with entity links to produce a fully-connected graph.\nKB Retrieval. To retrieve relevant entities from the KB we first perform entity linking on the ques-\ntion q, producing a set of seed entities, denoted Sq. Next we run the Personalized PageRank (PPR) method (Haveliwala, 2002) around these seeds to identify other entities which might be an answer to the question. The edge-weights around Sq are distributed equally among all edges of the same type, and they are weighted such that edges relevant to the question receive a higher weight than those which are not. Specifically, we average word vectors to compute a relation vector v(r) from the surface form of the relation, and a question vector v(q) from the words in the question, and use cosine similarity between these as the edge weights. After running PPR we retain the top E entities v1, . . . , vE by PPR score, along with any edges between them, and add them to Gq.\nText Retrieval. We use Wikipedia as the corpus and retrieve text at the sentence level, i.e. documents in D are defined along sentences boundaries2. We perform text retrieval in two steps: first we retrieve the top 5 most relevant Wikipedia articles, using the weighted bag-of-words model from DrQA (Chen et al., 2017); then we populate a Lucene3 index with sentences from these articles, and retrieve the top ranking ones d1, . . . , dD, based on the words in the question. For the sentence-retrieval step, we found it beneficial to include the title of the article as an additional field in the Lucene index. As most sentences in an article talk about the title entity, this helps in retrieving relevant sentences that do not explicitly mention the entity in the question. We add the retrieved documents, along with any entities linked to them, to the subgraph Gq.\nThe final question subgraph is Gq = (Vq, Eq,R+), where the vertices Vq consist of all the retrieved entities and documents, i.e. Vq = {v1, . . . , vE} ∪{d1, . . . , dD}. The edges are all relations from K among these entities, plus the entity-links between documents and entities, i.e.\nEq ={(s, o, r) ∈ E : s, o ∈ Vq, r ∈ R} ∪ {(v, dp, rL) : (v, dp) ∈ Ld, d ∈ Vq},\nwhere rL denotes a special “linking” relation. R+ = R ∪ {rL} is the set of all edge types in the subgraph.\n2The term document will always refer to a sentence in the rest of this paper.\n3https://lucene.apache.org/"
+  }, {
+    "heading": "3 GRAFT-Nets",
+    "text": "The question q and its answers {a}q induce a labeling of the nodes in Vq: we let yv = 1 if v ∈ {a}q and yv = 0 otherwise for all v ∈ Vq . The task of QA then reduces to performing binary classification over the nodes of the graph Gq. Several graph-propagation based models have been proposed in the literature which learn node representations and then perform classification of the nodes (Kipf and Welling, 2016; Schlichtkrull et al., 2017). Such models follow the standard gather-apply-scatter paradigm to learn the node representation with homogeneous updates, i.e. treating all neighbors equally.\nThe basic recipe for these models is as follows:\n1. Initialize node representations h(0)v .\n2. For l = 1, . . . , L update node representations\nh(l)v = φ h(l−1)v , ∑ v′∈Nr(v) h (l−1) v′  , where Nr(v) denotes the neighbours of v along incoming edges of type r, and φ is a neural network layer.\nHere L is the number of layers in the model and corresponds to the maximum length of the paths along which information should be propagated in the graph. Once the propagation is complete the final layer representations h(L)v are used to perform the desired task, for example link prediction in knowledge bases (Schlichtkrull et al., 2017).\nHowever, there are two differences in our setting from previously studied graph-based classification tasks. The first difference is that, in our case, the graph Gq consists of heterogeneous nodes. Some nodes in the graph correspond to KB entities which represent symbolic objects, whereas other nodes represent textual documents which are variable length sequences of words. The second difference is that we want to condition the representation of nodes in the graph on the natural language question q. In §3.2 we introduce heterogeneous updates to address the first difference, and in §3.3 we introduce mechanisms for conditioning on the question (and its entities) for the second."
+  }, {
+    "heading": "3.1 Node Initialization",
+    "text": "Nodes corresponding to entities are initialized using fixed-size vectors h(0)v = xv ∈ Rn, where\nxv can be pre-trained KB embeddings or random, and n is the embedding size. Document nodes in the graph describe a variable length sequence of text. Since multiple entities might link to different positions in the document, we maintain a variable length representation of the document in each layer. This is denoted by H(l)d ∈ R\n|d|×n. Given the words in the document (w1, . . . , w|d|), we initialize its hidden representation as:\nH (0) d = LSTM(w1, w2, . . . ),\nwhere LSTM refers to a long short-term memory unit. We denote the p-th row of H(l)d , corresponding to the embedding of p-th word in the document d at layer l, as H(l)d,p."
+  }, {
+    "heading": "3.2 Heterogeneous Updates",
+    "text": "Figure 2 shows the update rules for entities and documents, which we describe in detail here.\nEntities. Let M(v) = {(d, p)} be the set of positions p in documents d which correspond to a mention of entity v. The update for entity nodes involves a single-layer feed-forward network (FFN) over the concatenation of four states:\nh(l)v = FFN  \nh (l−1) v\nh (l−1) q∑\nr ∑ v′∈Nr(v) α v′ r ψr(h\n(l−1) v′ )∑\n(d,p)∈M(v)H (l−1) d,p\n  . (1)\nThe first two terms correspond to the entity representation and question representation (details below), respectively, from the previous layer.\nThe third term aggregates the states from the entity neighbours of the current node, Nr(v), after scaling with an attention weight αv ′ r (described in the next section), and applying relation specific transformations ψr. Previous work on RelationalGraph Convolution Networks (Schlichtkrull et al., 2017) used a linear projection for ψr. For a batched implementation, this results in matrices of size O(B|Rq||Eq|n), where B is the batch size, which can be prohibitively large for large subgraphs4. Hence in this work we use relation vectors xr for r ∈ Rq instead of matrices, and compute the update along an edge as:\nψr(h (l−1) v′ ) = pr (l−1) v′ FFN ( xr, h (l−1) v′ ) . (2)\n4This is because we have to use adjacency matrices of size |Rq| × |Eq| × |Eq| to aggregate embeddings from neighbours of all nodes simultaneously.\nHere pr(l−1)v′ is a PageRank score used to control the propagation of embeddings along paths starting from the seed nodes, which we describe in detail in the next section. The memory complexity of the above isO(B(|Fq|+ |Eq|)n), where |Fq| is the number of facts in the subgraph Gq.\nThe last term aggregates the states of all tokens that correspond to mentions of the entity v among the documents in the subgraph. Note that the update depends on the positions of entities in their containing document.\nDocuments. Let L(d, p) be the set of all entities linked to the word at position p in document d. The document update proceeds in two steps. First we aggregate over the entity states coming in at each position separately:\nH̃ (l) d,p = FFN H(l−1)d,p , ∑ v∈L(d,p) h(l−1)v  . (3a) Here h(l−1)v are normalized by the number of outgoing edges at v. Next we aggregate states within the document using an LSTM:\nH (l) d = LSTM(H̃ (l) d ). (3b)"
+  }, {
+    "heading": "3.3 Conditioning on the Question",
+    "text": "For the parts described thus far, the graph learner is largely agnostic of the question. We introduce dependence on question in two ways: by attention over relations, and by personalized propagation.\nTo represent q, let wq1, . . . , w q |q| be the words in the question. The initial representation is computed as:\nh(0)q = LSTM(w q 1, . . . , w q |q|)|q| ∈ R n, (4)\nwhere we extract the final state from the output of the LSTM. In subsequent layers the question representation is updated as h(l)q =\nFFN (∑\nv∈Sq h (l) v ) , where Sq denotes the seed en-\ntities mentioned in the question.\nAttention over Relations. The attention weight in the third term of Eq. (1) is computed using the question and relation embeddings:\nαv ′\nr = softmax(x T r h (l−1) q ),\nwhere the softmax normalization is over all outgoing edges from v′, and xr is the relation vector for relation r. This ensures that embeddings are propagated more along edges relevant to the question.\nDirected Propagation. Many questions require multi-hop reasoning, which follows a path from a seed node mentioned in the question to the target answer node. To encourage such a behaviour when propagating embeddings, we develop a technique inspired from personalized PageRank in IR (Haveliwala, 2002). The propagation starts at the seed entities Sq mentioned in the question. In addition to the vector embeddings h(l)v at the nodes, we also maintain scalar “PageRank” scores pr(l)v which measure the total weight of paths from a seed entity to the current node, as follows:\npr(0)v = { 1 |Sq | if v ∈ Sq 0 o.w. ,\npr(l)v = (1− λ)pr(l−1)v + λ ∑ r ∑ v′∈Nr(v) αv ′ r pr (l−1) v′ .\nNotice that we reuse the attention weights αv ′\nr\nwhen propagating PageRank, to ensure that nodes along paths relevant to the question receive a high weight. The PageRank score is used as a scaling factor when propagating embeddings along the edges in Eq. (2). For l = 1, the PageRank score will be 0 for all entities except the seed entities, and hence propagation will only happen outward from these nodes. For l = 2, it will be non-zero for the seed entities and their 1-hop neighbors, and propagation will only happen along these edges. Figure 3 illustrates this process."
+  }, {
+    "heading": "3.4 Answer Selection",
+    "text": "The final representations h(L)v ∈ Rn, are used for binary classification to select the answers:\nPr (v ∈ {a}q|Gq, q) = σ(wTh(L)v + b), (5)\nwhere σ is the sigmoid function. Training uses binary cross-entropy loss over these probabilities."
+  }, {
+    "heading": "3.5 Regularization via Fact Dropout",
+    "text": "To encourage the model to learn a robust classifier, which exploits all available sources of information, we randomly drop edges from the graph during training with probability p0. We call this fact-dropout. It is usually easier to extract answers from the KB than from the documents, so the model tends to rely on the former, especially when the KB is complete. This method is similar to DropConnect (Wan et al., 2013)."
+  }, {
+    "heading": "4 Related Work",
+    "text": "The work of Das et al. (2017c) attempts an early fusion strategy for QA over KB facts and text. Their approach is based on Key-Value Memory Networks (KV-MemNNs) (Miller et al., 2016) coupled with a universal schema (Riedel et al., 2013) to populate a memory module with representations of KB triples and text snippets independently. The key limitation for this model is that it ignores the rich relational structure between the\nfacts and text snippets. Our graph-based method, on the other hand, explicitly uses this structure for the propagation of embeddings. We compare the two approaches in our experiments (§5), and show that GRAFT-Nets outperform KV-MemNNs over all tasks.\nNon-deep learning approaches have been also attempted for QA over both text assertions and KB facts. Gardner and Krishnamurthy (2017) use traditional feature extraction methods of openvocabulary semantic parsing for the task. Ryu et al. (2014) use a pipelined system aggregating evidence from both unstructured and semistructured sources for open-domain QA.\nAnother line of work has looked at learning combined representations of KBs and text for relation extraction and Knowledge Base Completion (KBC) (Lao et al., 2012; Riedel et al., 2013; Toutanova et al., 2015; Verga et al., 2016; Das et al., 2017b; Han et al., 2016). The key difference in QA compared to KBC is that in QA the inference process on the knowledge source has to be conditioned on the question, so different questions induce different representations of the KB and warrant a different inference process. Furthermore, KBC operates under the fixed schema defined by the KB before-hand, whereas natural language questions might not adhere to this schema.\nThe GRAFT-Net model itself is motivated from the large body of work on graph representation learning (Scarselli et al., 2009; Li et al., 2016; Kipf and Welling, 2016; Atwood and Towsley, 2016; Schlichtkrull et al., 2017). Like most other graph-based models, GRAFT-Nets can also be viewed as an instantiation of the Message Passing Neural Network (MPNN) framework of Gilmer et al. (2017). GRAFT-Nets are also inductive representation learners like GraphSAGE (Hamilton et al., 2017), but operate on a heterogeneous mixture of nodes and use retrieval for getting a subgraph instead of random sampling. The recently proposed Walk-Steered Convolution model uses random walks for learning graph representations (Jiang et al., 2018). Our personalization technique also borrows from such random walk literature, but uses it to localize propagation of embeddings.\nTremendous progress on QA over KB has been made with deep learning based approaches like memory networks (Bordes et al., 2015; Jain, 2016) and reinforcement learning (Liang et al., 2017; Das et al., 2017a). But extending them with text,\nwhich is our main focus, is non-trivial. In another direction, there is also work on producing parsimonious graphical representations of textual data (Krause et al., 2016; Lu et al., 2017); however in this paper we use a simple sequential representation augmented with entity links to the KB which works well.\nFor QA over text only, a major focus has been on the task of reading comprehension (Seo et al., 2017; Gong and Bowman, 2017; Hu et al., 2017; Shen et al., 2017; Yu et al., 2018) since the introduction of SQuAD (Rajpurkar et al., 2016). These systems assume that the answer-containing passage is known apriori, but there has been progress when this assumption is relaxed (Chen et al., 2017; Raison et al., 2018; Dhingra et al., 2017; Wang et al., 2018, 2017; Watanabe et al., 2017). We work in the latter setting, where relevant information must be retrieved from large information sources, but we also incorporate KBs into this process."
+  }, {
+    "heading": "5 Experiments & Results",
+    "text": ""
+  }, {
+    "heading": "5.1 Datasets",
+    "text": "WikiMovies-10K consists of 10K randomly sampled training questions from the WikiMovies dataset (Miller et al., 2016), along with the original test and validation sets. We sample the training questions to create a more difficult setting, since the original dataset has 100K questions over only 8 different relation types, which is unrealistic in our opinion. In § 5.4 we also compare to the existing state-of-the-art using the full training set.\nWe use the KB and text corpus constructed from Wikipedia released by Miller et al. (2016). For entity linking we use simple surface level matches, and retrieve the top 50 entities around the seeds to create the question subgraph. We further add the top 50 sentences (along with their article titles) to the subgraph using Lucene search over the text corpus. The overall answer recall in our constructed subgraphs is 99.6%. WebQuestionsSP (Yih et al., 2016) consists of 4737 natural language questions posed over Freebase entities, split up into 3098 training and 1639 test questions. We reserve 250 training questions for model development and early stopping. We use the entity linking outputs from S-MART5 and retrieve 500 entities from the neighbourhood around the question seeds in Freebase to populate the\n5https://github.com/scottyih/STAGG\nquestion subgraphs6. We further retrieve the top 50 sentences from Wikipedia with the two-stage process described in §2. The overall recall of answers among the subgraphs is 94.0%.\nTable 1 shows the combined statistics of all the retreived subgraphs for the questions in each dataset. These two datasets present varying levels of difficulty. While all questions in WikiMovies correspond to a single KB relation, for WebQuestionsSP the model needs to aggregate over two KB facts for ∼30% of the questions, and also requires reasoning over constraints for ∼7% of the questions (Liang et al., 2017). For maximum portability, QA systems need to be robust across several degrees of KB availability since different domains might contain different amounts of structured data; and KB completeness may also vary over time. Hence, we construct an additional 3 datasets each from the above two, with the number of KB facts downsampled to 10%, 30% and 50% of the original to simulate settings where the KB is incomplete. We repeat the retrieval process for each sampled KB."
+  }, {
+    "heading": "5.2 Compared Models",
+    "text": "KV-KB is the Key Value Memory Networks model from Miller et al. (2016); Das et al. (2017c) but using only KB and ignoring the text. KV-EF (early fusion) is the same model with access to both KB and text as memories. For text we use a BiLSTM over the entire sentence as keys, and entity mentions as values. This re-implementation shows better performance on the text-only and KB-only WikiMovies tasks than the results reported previously7 (see Table 4). GN-KB is the GRAFT-Net model ignoring the text. GN-LF is a late fusion version of the GRAFT-Net model: we train two separate models, one using text only and the other using KB only, and then ensemble the two8. GN-EF is our main GRAFT-Net model with early fusion. GN-EF+LF is an ensemble over the GN-EF and GN-LF models, with the same ensembling method as GN-LF. We report Hits@1, which\n6A total of 13 questions had no detected entities. These were ignored during training and considered as incorrect during evaluation.\n7For all KV models we tuned the number of layers {1, 2, 3}, batch size {10, 30, 50}, model dimension {50, 80}. We also use fact dropout regularization in the KB+Text setting tuned between {0, 0.2, 0.4}.\n8For ensembles we take a weighted combination of the answer probabilities produced by the models, with the weights tuned on the dev set. For answers only in text or only in KB, we use the probability as is.\nis the accuracy of the top-predicted answer from the model, and the F1 score. To compute the F1 score we tune a threshold on the development set to select answers based on binary probabilities for each node in the subgraph."
+  }, {
+    "heading": "5.3 Main Results",
+    "text": "Table 2 presents a comparison of the above models across all datasets. GRAFT-Nets (GN) shows consistent improvement over KV-MemNNs on both datasets in all settings, including KB only (-KB), text only (-EF, Text Only column), and early fusion (-EF). Interestingly, we observe a larger relative gap between the Hits and F1 scores for the KV models than we do for our GN models. We believe this is because the attention for KV is normalized over the memories, which are KB facts (or text sentences): hence the model is unable to assign high probabilities to multiple facts at the same time. On the other hand, in GN, we normalize the attention over types of relations outgoing from a node, and hence can assign high weights to all the correct answers.\nWe also see a consistent improvement of early fusion over late fusion (-LF), and by ensembling them together we see the best performance across all the models. In Table 2 (right), we further show the improvement for KV-EF over KV-KB, and GN-LF and GN-EF over GN-KB, as the amount of KB is increased. This measures how effective these approaches are in utilizing text plus a KB. For KV-EF we see improvements when the KB is highly incomplete, but in the full KB setting, the performance of the fused approach is worse. A similar trend holds for GN-LF. On the other hand, GN-EF with text improves over the KB-only approach in all settings. As we would expect, though, the benefit of adding text decreases as the KB becomes more and more complete."
+  }, {
+    "heading": "5.4 Comparison to Specialized Methods",
+    "text": "In Table 4 we compare GRAFT-Nets to state-ofthe-art models that are specifically designed and tuned for QA using either only KB or only text. For this experiment we use the full WikiMovies dataset to enable direct comparison to previously reported numbers. For DrQA (Chen et al., 2017), following the original paper, we restrict answer spans for WebQuestionsSP to match an entity in Freebase. In each case we also train GRAFT-Nets using only KB facts or only text sentences. In three out of the four cases, we find that GRAFT-Nets ei-\nther match or outperform the existing state-of-theart models. We emphasize that the latter have no mechanism for dealing with the fused setting.\nThe one exception is the KB-only case for WebQuestionsSP where GRAFT-Net does 6.2% F1 points worse than Neural Symbolic Machines (Liang et al., 2017). Analysis suggested three explanations: (1) In the KB-only setting, the recall of subgraph retrieval is only 90.2%, which limits overall performance. In an oracle setting where we ensure the answers are part of the subgraph, the F1 score increases by 4.8%. (2) We use the same probability threshold for all questions, even though the number of answers may vary significantly. Models which parse the query into a symbolic form do not suffer from this problem since answers are retrieved in a deterministic fashion. If we tune separate thresholds for each question the F1 score improves by 7.6%. (3) GRAFT-Nets perform poorly in the few cases where there is a constraint involved in picking out the answer (for example, “who first voiced Meg in Family Guy”). If we ignore such constraints, and consider all entities with the same sequence of relations to the seed as correct, the performance improves by 3.8% F1. Heuristics such as those used by Yu et al. (2017) can be used to improve these cases. Figure 3 shows\nexamples where GRAFT-Net fails to predict the correct answer set exactly."
+  }, {
+    "heading": "5.5 Effect of Model Components",
+    "text": "Heterogeneous Updates. We tested a nonheterogeneous version of our model, where instead of using fine-grained entity linking information for updating the node representations (M(v) and L(d, p) in Eqs. 1, 3a), we aggregate the document states across all its positions as ∑ pH (l) d,p and use this combined state for all updates. Without the heterogeneous update, all entities v ∈ L(d, ·) will receive the same update from document d. Therefore, the model cannot disambiguate different entities mentioned in the same document. The result in Table 5 shows that this version is consistently worse than the heterogeneous model.\nConditioning on the Question. We performed an ablation test on the directed propagation method and attention over relations. We observe that both components lead to better performance. Such effects are observed in both complete and incomplete KB scenarios, e.g. on WebQuestionsSP dataset, as shown in Figure 4 (left).\nFact Dropout. Figure 4 (right) compares the performance of the early fusion model as we vary\n0 KB 0.1 KB 0.3 KB 0.5 KB 1.0 KB NH 22.7 / 13.6 28.7 / 15.8 35.6 / 23.2 47.2 / 33.3 66.5 / 59.8 H 25.3 / 15.3 31.5 / 17.7 40.7 / 25.2 49.9 / 34.7 67.8 / 60.4\nTable 5: Non-Heterogeneous (NH) vs. Heterogeneous (H) updates on WebQuestionsSP\nthe rate of fact dropout. Moderate levels of fact dropout improve performance on both datasets. The performance increases as the fact dropout rate increases until the model is unable to learn the inference chain from KB."
+  }, {
+    "heading": "6 Conclusion",
+    "text": "In this paper we investigate QA using text combined with an incomplete KB, a task which has received limited attention in the past. We introduce several benchmark problems for this task by modifying existing question-answering datasets, and discuss two broad approaches to solving this problem—“late fusion” and “early fusion”. We show that early fusion approaches perform better.\nWe also introduce a novel early-fusion model, called GRAFT-Net, for classifying nodes in subgraph consisting of both KB entities and text doc-\numents. GRAFT-Net builds on recent advances in graph representation learning but includes several innovations which improve performance on this task. GRAFT-Nets are a single model which achieve performance competitive to state-of-theart methods in both text-only and KB-only settings, and outperform baseline models when using text combined with an incomplete KB. Current directions for future work include – (1) extending GRAFT-Nets to pick spans of text as answers, rather than only entities and (2) improving the subgraph retrieval process."
+  }, {
+    "heading": "Acknowledgments",
+    "text": "Bhuwan Dhingra is supported by NSF under grants CCF-1414030 and IIS-1250956 and by grants from Google. Ruslan Salakhutdinov is supported in part by ONR grant N000141812861, Apple, and Nvidia NVAIL Award."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Dbpedia: A nucleus for a web of open data",
+    "authors": ["Sören Auer", "Christian Bizer", "Georgi Kobilarov", "Jens Lehmann", "Richard Cyganiak", "Zachary Ives."],
+    "venue": "The semantic web, pages 722–735. Springer.",
+    "year": 2007
+  }, {
+    "title": "Yodaqa: a modular question answering system pipeline",
+    "authors": ["Petr Baudiš."],
+    "venue": "POSTER 2015-19th International Student Conference on Electrical Engineering, pages 1156–1165.",
+    "year": 2015
+  }, {
+    "title": "Freebase: a collaboratively created graph database for structuring human knowledge",
+    "authors": ["Kurt Bollacker", "Colin Evans", "Praveen Paritosh", "Tim Sturge", "Jamie Taylor."],
+    "venue": "Proceedings of the 2008 ACM SIGMOD international conference on Management",
+    "year": 2008
+  }, {
+    "title": "Large-scale simple question answering with memory networks",
+    "authors": ["Antoine Bordes", "Nicolas Usunier", "Sumit Chopra", "Jason Weston."],
+    "venue": "arXiv preprint arXiv:1506.02075.",
+    "year": 2015
+  }, {
+    "title": "Reading Wikipedia to answer opendomain questions",
+    "authors": ["Danqi Chen", "Adam Fisch", "Jason Weston", "Antoine Bordes."],
+    "venue": "Association for Computational Linguistics (ACL).",
+    "year": 2017
+  }, {
+    "title": "2017a. Go for a walk and arrive at the answer: Reasoning over paths in knowledge bases using reinforcement",
+    "authors": ["Rajarshi Das", "Shehzaad Dhuliawala", "Manzil Zaheer", "Luke Vilnis", "Ishan Durugkar", "Akshay Krishnamurthy", "Alex Smola", "Andrew McCallum"],
+    "year": 2017
+  }, {
+    "title": "Chains of reasoning over entities, relations, and text using recurrent neural networks",
+    "authors": ["Rajarshi Das", "Arvind Neelakantan", "David Belanger", "Andrew McCallum."],
+    "venue": "EACL.",
+    "year": 2017
+  }, {
+    "title": "Question answering on knowledge bases and text using universal schema and memory networks",
+    "authors": ["Rajarshi Das", "Manzil Zaheer", "Siva Reddy", "Andrew McCallum."],
+    "venue": "ACL.",
+    "year": 2017
+  }, {
+    "title": "Quasar: Datasets for question answering by search and reading",
+    "authors": ["Bhuwan Dhingra", "Kathryn Mazaitis", "William W Cohen."],
+    "venue": "arXiv preprint arXiv:1707.03904.",
+    "year": 2017
+  }, {
+    "title": "Simple and effective semi-supervised question answering",
+    "authors": ["Bhuwan Dhingra", "Danish Pruthi", "Dheeraj Rajagopal."],
+    "venue": "NAACL.",
+    "year": 2018
+  }, {
+    "title": "Building watson: An overview of the deepqa project",
+    "authors": ["David Ferrucci", "Eric Brown", "Jennifer Chu-Carroll", "James Fan", "David Gondek", "Aditya A Kalyanpur", "Adam Lally", "J William Murdock", "Eric Nyberg", "John Prager"],
+    "venue": "AI magazine,",
+    "year": 2010
+  }, {
+    "title": "Openvocabulary semantic parsing with both distributional statistics and formal knowledge",
+    "authors": ["Matt Gardner", "Jayant Krishnamurthy."],
+    "venue": "AAAI, pages 3195–3201.",
+    "year": 2017
+  }, {
+    "title": "Neural message passing for quantum chemistry",
+    "authors": ["Justin Gilmer", "Samuel S Schoenholz", "Patrick F Riley", "Oriol Vinyals", "George E Dahl."],
+    "venue": "ICML.",
+    "year": 2017
+  }, {
+    "title": "Ruminating reader: Reasoning with gated multi-hop attention",
+    "authors": ["Yichen Gong", "Samuel R Bowman."],
+    "venue": "arXiv preprint arXiv:1704.07415.",
+    "year": 2017
+  }, {
+    "title": "Inductive representation learning on large graphs",
+    "authors": ["William L. Hamilton", "Rex Ying", "Jure Leskovec."],
+    "venue": "CoRR, abs/1706.02216.",
+    "year": 2017
+  }, {
+    "title": "Joint representation learning of text and knowledge for knowledge graph completion",
+    "authors": ["Xu Han", "Zhiyuan Liu", "Maosong Sun."],
+    "venue": "arXiv preprint arXiv:1611.04125.",
+    "year": 2016
+  }, {
+    "title": "Topic-sensitive pagerank",
+    "authors": ["Taher H Haveliwala."],
+    "venue": "Proceedings of the 11th international conference on World Wide Web, pages 517–526. ACM.",
+    "year": 2002
+  }, {
+    "title": "Mnemonic reader for machine comprehension",
+    "authors": ["Minghao Hu", "Yuxing Peng", "Xipeng Qiu."],
+    "venue": "arXiv preprint arXiv:1705.02798.",
+    "year": 2017
+  }, {
+    "title": "Search-based neural structured learning for sequential question answering",
+    "authors": ["Mohit Iyyer", "Wen-tau Yih", "Ming-Wei Chang."],
+    "venue": "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), vol-",
+    "year": 2017
+  }, {
+    "title": "Question answering over knowledge base using factual memory networks",
+    "authors": ["Sarthak Jain."],
+    "venue": "Proceedings of the NAACL Student Research Workshop, pages 109–115.",
+    "year": 2016
+  }, {
+    "title": "Walk-steered convolution for graph classification",
+    "authors": ["Jiatao Jiang", "Zhen Cui", "Chunyan Xu", "Chengzheng Li", "Jian Yang."],
+    "venue": "arXiv preprint arXiv:1804.05837.",
+    "year": 2018
+  }, {
+    "title": "Semisupervised classification with graph convolutional networks",
+    "authors": ["Thomas N Kipf", "Max Welling."],
+    "venue": "arXiv preprint arXiv:1609.02907.",
+    "year": 2016
+  }, {
+    "title": "Sar-graphs: A language resource connecting linguistic knowledge with semantic relations from knowledge graphs",
+    "authors": ["Sebastian Krause", "Leonhard Hennig", "Andrea Moro", "Dirk Weissenborn", "Feiyu Xu", "Hans Uszkoreit", "Roberto Navigli."],
+    "venue": "Web Seman-",
+    "year": 2016
+  }, {
+    "title": "Reading the web with learned syntactic-semantic inference rules",
+    "authors": ["Ni Lao", "Amarnag Subramanya", "Fernando Pereira", "William W Cohen."],
+    "venue": "Proceedings of the 2012 Joint Conference on Empirical Methods in Natural Language Processing and",
+    "year": 2012
+  }, {
+    "title": "Gated graph sequence neural networks",
+    "authors": ["Yujia Li", "Daniel Tarlow", "Marc Brockschmidt", "Richard Zemel."],
+    "venue": "ICLR.",
+    "year": 2016
+  }, {
+    "title": "Neural symbolic machines: Learning semantic parsers on freebase with weak supervision",
+    "authors": ["Chen Liang", "Jonathan Berant", "Quoc Le", "Kenneth D Forbus", "Ni Lao."],
+    "venue": "ACL.",
+    "year": 2017
+  }, {
+    "title": "Object-oriented neural programming (oonp) for document understanding",
+    "authors": ["Zhengdong Lu", "Haotian Cui", "Xianggen Liu", "Yukun Yan", "Daqi Zheng."],
+    "venue": "arXiv preprint arXiv:1709.08853.",
+    "year": 2017
+  }, {
+    "title": "Key-value memory networks for directly reading documents",
+    "authors": ["Alexander Miller", "Adam Fisch", "Jesse Dodge", "AmirHossein Karimi", "Antoine Bordes", "Jason Weston."],
+    "venue": "EMNLP.",
+    "year": 2016
+  }, {
+    "title": "Distant supervision for relation extraction with an incomplete knowledge base",
+    "authors": ["Bonan Min", "Ralph Grishman", "Li Wan", "Chang Wang", "David Gondek."],
+    "venue": "Proceedings of the 2013 Conference of the North American Chapter of the Association for",
+    "year": 2013
+  }, {
+    "title": "Weaver: Deep coencoding of questions and documents for machine reading",
+    "authors": ["Martin Raison", "Pierre-Emmanuel Mazaré", "Rajarshi Das", "Antoine Bordes."],
+    "venue": "arXiv preprint arXiv:1804.10490.",
+    "year": 2018
+  }, {
+    "title": "Squad: 100,000+ questions for machine comprehension of text",
+    "authors": ["Pranav Rajpurkar", "Jian Zhang", "Konstantin Lopyrev", "Percy Liang."],
+    "venue": "arXiv preprint arXiv:1606.05250.",
+    "year": 2016
+  }, {
+    "title": "Relation extraction with matrix factorization and universal schemas",
+    "authors": ["Sebastian Riedel", "Limin Yao", "Andrew McCallum", "Benjamin M Marlin."],
+    "venue": "Proceedings of the 2013 Conference of the North American Chapter of the Association for Computational",
+    "year": 2013
+  }, {
+    "title": "Open domain question answering using wikipedia-based knowledge model",
+    "authors": ["Pum-Mo Ryu", "Myung-Gil Jang", "Hyun-Ki Kim."],
+    "venue": "Information Processing and Management, 50(5):683 – 692.",
+    "year": 2014
+  }, {
+    "title": "The graph neural network model",
+    "authors": ["Franco Scarselli", "Marco Gori", "Ah Chung Tsoi", "Markus Hagenbuchner", "Gabriele Monfardini."],
+    "venue": "IEEE Transactions on Neural Networks, 20(1):61–80.",
+    "year": 2009
+  }, {
+    "title": "Modeling relational data with graph convolutional networks",
+    "authors": ["Michael Schlichtkrull", "Thomas N Kipf", "Peter Bloem", "Rianne van den Berg", "Ivan Titov", "Max Welling."],
+    "venue": "arXiv preprint arXiv:1703.06103.",
+    "year": 2017
+  }, {
+    "title": "Bidirectional attention flow for machine comprehension",
+    "authors": ["Minjoon Seo", "Aniruddha Kembhavi", "Ali Farhadi", "Hannaneh Hajishirzi."],
+    "venue": "ICLR.",
+    "year": 2017
+  }, {
+    "title": "Reasonet: Learning to stop reading in machine comprehension",
+    "authors": ["Yelong Shen", "Po-Sen Huang", "Jianfeng Gao", "Weizhu Chen."],
+    "venue": "Proceedings of the 23rd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining, pages",
+    "year": 2017
+  }, {
+    "title": "The web as a knowledge-base for answering complex questions",
+    "authors": ["A. Talmor", "J. Berant."],
+    "venue": "North American Association for Computational Linguistics (NAACL).",
+    "year": 2018
+  }, {
+    "title": "Representing text for joint embedding of text and knowledge bases",
+    "authors": ["Kristina Toutanova", "Danqi Chen", "Patrick Pantel", "Hoifung Poon", "Pallavi Choudhury", "Michael Gamon."],
+    "venue": "Proceedings of the 2015 Conference on Empirical Methods in Natural Lan-",
+    "year": 2015
+  }, {
+    "title": "Multilingual relation extraction using compositional universal schema",
+    "authors": ["Patrick Verga", "David Belanger", "Emma Strubell", "Benjamin Roth", "Andrew McCallum."],
+    "venue": "NAACL.",
+    "year": 2016
+  }, {
+    "title": "Regularization of neural networks using dropconnect",
+    "authors": ["Li Wan", "Matthew Zeiler", "Sixin Zhang", "Yann Le Cun", "Rob Fergus."],
+    "venue": "International Conference on Machine Learning, pages 1058–1066.",
+    "year": 2013
+  }, {
+    "title": "R3: Reinforced reader-ranker for open-domain question answering",
+    "authors": ["Shuohang Wang", "Mo Yu", "Xiaoxiao Guo", "Zhiguo Wang", "Tim Klinger", "Wei Zhang", "Shiyu Chang", "Gerald Tesauro", "Bowen Zhou", "Jing Jiang."],
+    "venue": "AAAI.",
+    "year": 2018
+  }, {
+    "title": "Evidence aggregation for answer re-ranking in open-domain question answering",
+    "authors": ["Shuohang Wang", "Mo Yu", "Jing Jiang", "Wei Zhang", "Xiaoxiao Guo", "Shiyu Chang", "Zhiguo Wang", "Tim Klinger", "Gerald Tesauro", "Murray Campbell."],
+    "venue": "arXiv preprint",
+    "year": 2017
+  }, {
+    "title": "Question answering from unstructured text by retrieval and comprehension",
+    "authors": ["Yusuke Watanabe", "Bhuwan Dhingra", "Ruslan Salakhutdinov."],
+    "venue": "arXiv preprint arXiv:1703.08885.",
+    "year": 2017
+  }, {
+    "title": "Constructing datasets for multi-hop reading comprehension across documents",
+    "authors": ["Johannes Welbl", "Pontus Stenetorp", "Sebastian Riedel."],
+    "venue": "TACL.",
+    "year": 2018
+  }, {
+    "title": "Neural domain adaptation for biomedical question answering",
+    "authors": ["Georg Wiese", "Dirk Weissenborn", "Mariana Neves."],
+    "venue": "Proceedings of the 21st Conference on Computational Natural Language Learning (CoNLL 2017), pages 281–289, Vancou-",
+    "year": 2017
+  }, {
+    "title": "The value of semantic parse labeling for knowledge base question answering",
+    "authors": ["Wen-tau Yih", "Matthew Richardson", "Chris Meek", "MingWei Chang", "Jina Suh."],
+    "venue": "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics",
+    "year": 2016
+  }, {
+    "title": "Qanet: Combining local convolution with global self-attention for reading comprehension",
+    "authors": ["Adams Wei Yu", "David Dohan", "Minh-Thang Luong", "Rui Zhao", "Kai Chen", "Mohammad Norouzi", "Quoc V Le."],
+    "venue": "ICLR.",
+    "year": 2018
+  }, {
+    "title": "Improved neural relation detection for knowledge base question answering",
+    "authors": ["Mo Yu", "Wenpeng Yin", "Kazi Saidul Hasan", "Cicero dos Santos", "Bing Xiang", "Bowen Zhou."],
+    "venue": "ACL.",
+    "year": 2017
+  }],
+  "id": "SP:e2e7e920507369792ccfab5991f9e46b11eb4db1",
+  "authors": [{
+    "name": "Haitian Sun",
+    "affiliations": []
+  }, {
+    "name": "Bhuwan Dhingra",
+    "affiliations": []
+  }, {
+    "name": "Manzil Zaheer",
+    "affiliations": []
+  }, {
+    "name": "Kathryn Mazaitis",
+    "affiliations": []
+  }, {
+    "name": "Ruslan Salakhutdinov",
+    "affiliations": []
+  }, {
+    "name": "William W. Cohen",
+    "affiliations": []
+  }, {
+    "name": "Lacey Chabert",
+    "affiliations": []
+  }, {
+    "name": "Mila Kunis",
+    "affiliations": []
+  }],
+  "abstractText": "Open Domain Question Answering (QA) is evolving from complex pipelined systems to end-to-end deep neural networks. Specialized neural models have been developed for extracting answers from either text alone or Knowledge Bases (KBs) alone. In this paper we look at a more practical setting, namely QA over the combination of a KB and entitylinked text, which is appropriate when an incomplete KB is available with a large text corpus. Building on recent advances in graph representation learning we propose a novel model, GRAFT-Net, for extracting answers from a question-specific subgraph containing text and KB entities and relations. We construct a suite of benchmark tasks for this problem, varying the difficulty of questions, the amount of training data, and KB completeness. We show that GRAFT-Net is competitive with the state-of-the-art when tested using either KBs or text alone, and vastly outperforms existing methods in the combined setting.",
+  "title": "Open Domain Question Answering Using Early Fusion of Knowledge Bases and Text"
+}

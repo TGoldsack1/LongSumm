@@ -1,0 +1,221 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Recently, (Guo et al., 2017) made the surprising observation that highly accurate, negative log likelihood trained, deep neural networks predict poorly calibrated confidence probabilities unlike traditional models trained with the same objective (Niculescu-Mizil & Caruana, 2005). Poor calibration implies that if the network makes a prediction with more than 0.99 confidence (which it often does!), the predicted label may be correct much less than 99% of the time. Such lack of calibration is a serious problem in applications like medical diagnosis (Caruana et al., 2015; Crowson et al., 2016; Jiang et al., 2012), obstacle detection in self-driving vehicles (Bojarski et al., 2016), and other applications where\n1Department of Computer Science and Engineering, IIT Bombay, Mumbai, India. Correspondence to: Aviral Kumar <aviralkumar2907@gmail.com>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\nlearned models feed into decision systems or are human interpreted. Also calibration is useful for detecting out of sample examples (Hendrycks & Gimpel, 2017; Lee et al., 2018; Liang et al., 2018) and in fairness (Pleiss et al., 2017).\nA primary reason for poor calibration of modern neural networks is that due to their high capacity, the negative log likelihood (NLL) overfits without overfitting 0/1 error (Zhang et al., 2017). This manifests as overly confident predictions. Recently (Guo et al., 2017) experimented with several known calibration fixes applied post training, and found a simple temperature scaling of logits to be most effective. A second option is to plan for calibration during training. Pereyra et al. (2017) proposes to add a entropy regularizer to the NLL objective to clamp over-confidence. We show that both temperature scaling and entropy regularization manage to reduce aggregate calibration error but in the process needlessly clamp down legitimate high confidence predictions. A third set of approaches model full prediction uncertainty via variational Bayesian networks (Louizos & Welling, 2017), or their committee counterparts (Lakshminarayanan et al., 2017). But their training is too resource-intensive.\nWe propose a practical and principled fix by minimizing calibration error during training along with classification error. We depend on the power of RKHS functions induced by a universal kernel to express calibration error as a tractable integral probability measure, which we call Maximum Mean Calibration Error (MMCE). This is analogous to the way MMD over RKHS kernels expresses the distance between two probability distributions (Muandet et al., 2017; Li et al., 2015). We show that MMCE is a consistent estimator of calibration and converges at rate 1/ √ m to its expected value. Furthermore, MMCE is easy to optimize in the existing mini-batch gradient descent framework.\nOur experiments spanning seven datasets show that training with MMCE achieves significant reduction in calibration error while also providing a modest accuracy increase. MMCE achieves this without throttling high confidence predictions. For example on CIFAR-10, MMCE makes 72% predictions at 99.7% confidence, whereas temperature scaling predicts only 40% at 99.6% and entropy scaling only 7% at 96.9%. This is important in applications like medical diagnosis where only highly confident predictions\nresult in saving the cost of manual screening. This study demonstrates that well-designed training methods can simultaneously improve calibration and accuracy without severely reducing the number of high-confidence predictions."
+  }, {
+    "heading": "2. Problem Setup",
+    "text": "Our focus is improving the calibration of multi-class classification models. Let Y = {1, 2, . . . ,K} denote the set of class labels and X denote a space of inputs. LetNθ(y|x) denote the probability distribution the neural network predicts on an input x ∈ X and θ denote the network parameters. For an instance xi with correct label yi, the network predicts label ŷi = argmaxy∈YNθ(y|xi). The prediction gets correctness score ci = 1 if ŷi = yi and 0 otherwise and a confidence score ri = Nθ(ŷi|xi). The model Nθ(y|x) is well-calibrated over a data distribution D, when over all (xi, yi) ∈ D and ri = α the probability that ci = 1 is α. For example, out of a sample from D if 100 examples are predicted with confidence 0.7, then we expect 70 of these to be correct when Nθ(y|x) is well-calibrated on D. More formally, we use Pθ,D(r, c) to denote the distribution over r and c values of the predictions of Nθ(y|x) on D. When Nθ(y|x) is well calibrated on data distribution D,\nPθ,D(c = 1|r = Iα) = α ∀α ∈ [0, 1] (1)\nwhere Iα denotes a small non-zero interval around α. Using this we can define an expected calibration error (ECE) as\nECE(Pθ,D) = EPθ,D(r) [ |EPθ,D(c|r)[c]− r| ] (2)\nTo estimate ECE on a data sample D ∼ Pθ,D we partition the [0,1] range of r into B equal bins. We then sum up over each bin Bj = [ jB , j+1 B ] the difference between the correctness and confidence scores over examples in that bin:\nECE(D) = 1\n|D| B−1∑ j=0 ∣∣ ∑ i∈Dj ci − ∑ i∈Dj ri ∣∣\ns.t. Dj = {i ∈ D, ri ∈ [ j B , j + 1 B ]}\n(3)\nWe are interested in models with low ECE and high accuracy. Note a model that minimizes ECE may not necessarily have high accuracy. For example, a model that always predicts the majority class with confidence equal to the class’s prior probability will have ECE 0 but is not accurate.\nFortunately, the negative log-likelihood loss (NLL=− ∑ (x,y)∼D logNθ(y|x)) used for training neural networks optimizes for accuracy and calibration indirectly. NLL is minimized when Nθ(y|x) matches the true data distribution D, and is therefore trivially well-calibrated (Hastie et al., 2001). Popular classifiers like linear logistic regression and calibration methods\nlike Platt scaling that optimize the NLL objective lead to well-calibrated models (Niculescu-Mizil & Caruana, 2005). Unfortunately on high capacity neural networks, NLL fails to minimize calibration error because of over-fitting.\nWe explore ways of training so as to directly optimize for calibration alongside NLL. We need to choose a trainable function CE(D, θ) to measure calibration error for joint optimization with NLL as follows:\nmin θ NLL(D, θ) + λCE(D, θ) (4)\nWe cannot use ECE(D) here because it is highly discontinuous in r and consequently on θ. In the next section we propose a new calibration measure called MMCE that is trainable and satisfies other properties of sound measures that we will discuss next in Section 4."
+  }, {
+    "heading": "3. A Trainable Calibration Measure from Kernel Embeddings",
+    "text": "Our goal is to design a function to serve as an optimizable surrogate for the calibration error. In this section we propose such a measure that is zero if and only if the model is calibrated and whose finite sample estimates are consistent and enjoy fast convergence rates. Further, we show empirically that it can be optimized over the network parameters θ using existing batch stochastic gradient algorithms.\nOur approach is based on defining an integral probability measure over functions from a reproducing kernel Hilbert space (RKHS). Such approaches have emerged as a powerful tool in machine learning and have been successfully used in tasks like comparing two distributions (Gretton et al., 2012), (Li et al., 2015), goodness of fit tests, and class ratio estimation (Iyer et al., 2014) (see (Muandet et al., 2017) for a survey). In this paper, we show their usage in defining a tractable measure of calibration error.\nLetH to denote a reproducible kernel Hilbert space (RKHS) induced by a universal kernel k(., .) and canonical feature map φ : [0, 1] 7→ H. We define a measure called maximum mean calibration error (MMCE) over Pθ,D(r, c) as:\nMMCE(P (r, c)) = ∥∥E(r,c)∼P [(c− r)φ(r)]∥∥H (5)\nwhere ‖.‖H denotes norm in the Hilbert spaceH. For ease of notation, we use P (r, c) for Pθ,D(r, c). Theorem 1 in Section 4 shows that MMCE is zero if and only if P (r, c) is calibrated over D provided kernel k(., .) is universal. The finite sample estimate over a sample D ∼ P with D = {(r1, c1), . . . (rm, cm)} becomes:\nMMCEm(D) = ∥∥∥∥∥∥ ∑\n(ri,ci)∈D\n(ci − ri)φ(ri) m ∥∥∥∥∥∥ H\n(6)\nIn Theorem 2 in Section 4 we show that the above estimate is consistent and converges at rate 1/ √ m to MMCE(P (r, c)).\nThe above can be rewritten in terms of kernels as:\nMMCE2m(D) = ∑ i,j∈D (ci − ri)(cj − rj)k(ri, rj) m2 (7)"
+  }, {
+    "heading": "3.1. Minimizing MMCE during training",
+    "text": "When training θ on a dataset D we minimize a weighted combination of NLL to reduce classification errors and MMCE to reduce calibration errors. Training is done over mini batches of examples Db. We found that Db of size ≈ 100 suffices.\nmin θ ∑ (xi,yi)∈Db logNθ(yi|xi) + λ1 ( MMCE2m(Db, θ) ) 1 2 (8)\nMMCE is differentiable in r but not strictly in θ due to the argmax step for computing the predicted label. During backpropagation we pass the gradient through the r terms but not through the prediction step.\nOne issue with MMCE during training is that the number of incorrect samples (i.e., c = 0) is generally smaller than on test data. We obtained better results by re-weighting examples so that correct and incorrect samples have equal weights. If m denotes the number of correct examples in a batch of size n, we assign a weight of mn to correct and m m−n to incorrect examples. The weighted estimate becomes\nMMCE2w(D) = ∑\nci=cj=0\nrirjk(ri, rj)\n(m− n)(m− n)\n+ ∑\nci=cj=1\n(1− ri)(1− rj)k(ri, rj) n2\n− 2 ∑\nci=1,cj=0\n(1− ri)rjk(ri, rj) (m− n)n\n(9)\nIn Section 6 we present an empirical comparison of these two forms of MMCE."
+  }, {
+    "heading": "3.2. Why Does MMCE work?",
+    "text": "Theoretically, MMCE goes to perfect 0 only at perfect calibration, and minimizing it therefore is sensible. We further try to explain why MMCE works in practice. Note from Eq 6 that MMCE attempts confidence calibration by comparing pairs of instances whereas NLL works on instances individually. To understand why this could prevent overconfident predictions, consider the last term in Eq 9. Now, consider a simple example. Say, in a batch we have an instance x that is misclassified with a high confidence 0.99 and all other correctly classified examples X with confidence ∼ 1. The\nthird term in Eq 9 will pair up x with these high confidence correctly classified examples X . This will exert a downward pressure onX s confidence to make it less than 1. In contrast, NLL will continue to push the confidence of X up towards 1 to the point of over-fitting. We present empirical evidence to support that MMCE does indeed prevent overfitting of NLL. We show test-NLL for MMCE and the baseline with increasing training epochs in Figure 1. The baseline model overfits on test NLL more easily than the MMCE trained model. MMCE is most effective when a batch has a mix of correct and incorrectly classified examples. If training accuracy is 100%, MMCE aligns perfectly with NLL and cannot prevent over-fitting."
+  }, {
+    "heading": "4. Analyzing Properties of MMCE",
+    "text": "In this section, we prove theoretical properties of MMCE and its finite sample estimate. First, we show that MMCE(P ) is a faithful measure of calibration error that is zero if and only if P is perfectly calibrated. Next, we present large deviation bounds of MMCE with finite samples. Finally, we relate the MMCE to ECE."
+  }, {
+    "heading": "4.1. MMCE and Perfect Calibration",
+    "text": "Theorem 1. Let P (r, c) be a probability measure defined on the space X = ([0, 1] × {0, 1}) such that P (r|c = 1) and P (r|c = 0) are Borel probability measures. Let k be a universal kernel The MMCE measure (Equation 5) is 0 if and only if P is perfectly calibrated. This implies that MMCE is a proper scoring rule (Parry et al., 2011).\nProof. We start by defining an intractable integral probability measure for calibration that is more general than MMCE. Let C(r) denote the space of all continuous bounded functions over r ∈ [0, 1]. The measure is defined as\nM(C, P ) = sup f∈C E(r,c)∼P (r,c)[(c− r)f(r)] (10)\nWe first show that for calibrated P , M(C, P ) is zero. RHS of above equation is ∫ 1 r=0\nf(r)[(1 − r) dP(r, c = 1) − r dP(r, c = 0)]. This is zero because Eq 1 implies that P (Ir, c = 1) · (1 − r) = r · P (Ir, c = 0) and the integration is just a continuous form of this equality.\nWe prove the converse to show that when P is not calibrated M is non-zero. For uncalibrated P , Eq 1 will not hold on at least one interval I ⊆ R of non-zero measure, call it I0 = [r0, r0 + δ] (δ > 0). Further, since P (r|c) are Borel measures, we can assume that the function P (I0, c = 1) · (1 − r0) − r0 · P (I0, c = 0) is right continuous and converges to a s0 6= 0 as δ → 0. We can then choose a f0(r) ∈ C(r) to be a positive ramp function that is peaked at the center of I0 and drops to zero outside it. For this choice EP ((c− r)f0(r)) is guaranteed to be non-zero.\nWe next proceed to replace the impractical function class C with functions F defined over the unit ball in a RKHS space H with the kernel k(., .). If k is universal, for every f ∈ C and > 0, there exists a function f ′ ∈ F such that maxr |f(r) − f ′(r)| < . This property can be combined with above claims to show that M(F , P ) is zero if and only if P is calibrated provided k(., .) is universal.\nFinally we show that M(F , P ) = MMCE(P )\nM(F , P ) = sup f∈F EP (r,c)[(c− r)f(r)]\n= sup f∈F\nE(r,c)∼P (r,c)[(c− r)〈φ(r), f〉]\n= ‖Er,c∼P [(c− r)φ(r)]‖H = MMCE(P ) (11)\nThe first and second equalities in the above are due to the feature mapping properties of RKHS functions."
+  }, {
+    "heading": "4.2. Large Deviation Bounds of MMCE",
+    "text": "Theorem 2. Let K = maxr∈[0,1] k(r, r) and m be size of sample D. With probability more than 1− δ\n|MMCEm(D)−MMCE(P )| < √ K\nm\n( 4 + √ −2 log δ ) Proof in Section 1 of the supplementary material."
+  }, {
+    "heading": "4.3. Relationship with ECE",
+    "text": "Theorem 3. MMCE(P (r, c)) ≤ K 12 ECE(P (r, c)) where K = maxr k(r, r)\nProof in Section 2 of the supplementary material."
+  }, {
+    "heading": "5. Related Work",
+    "text": "In classical decision theory, calibration of probabilistic predictions has long been studied under the topic of scoring\nrules (Parry et al., 2011). In machine learning, many different methods have been proposed for enhancing calibration of classifiers including Platt’s scaling (Platt, 1999), Isotonic regression (Zadrozny & Elkan, 2002), and Bayesian binning (Naeini et al., 2015), to name a few. A systematic study in (Niculescu-Mizil & Caruana, 2005) found logistic regression classifier and neural networks (of 2005) to be well-calibrated, and the ones that were not calibrated (e.g. SVMs) were best fixed via Platt scaling. Candela et al. (2005) discusses ways of measuring calibration error and highlights the potential of over-fitting of NLL. Kuleshov & Liang (2015) studied calibration for structured prediction and Kuleshov & Ermon (2017) shows how to calibrate in an online adversarial setting.\nFor modern neural networks, a recent systematic study (Guo et al., 2017) finds them to be surprisingly poorly calibrated. They compare several conventional post-facto fixes and find temperature scaling to provide the best calibration. Another recent work proposes an entropy regularizer during training to penalize over-confident predictions (Pereyra et al., 2017). A shortcoming of both methods is that they indiscriminately clamp the confidence of all predictions, robbing an end application of the benefit of high confidence predictions. Bayesian inference is a principled approach to get better prediction uncertainties (Louizos & Welling, 2017) but incurs significantly higher training cost. Lakshminarayanan et al. (2017) proposes to average predictions from a committee of models but this is resource-intensive.\nOur use of kernel embeddings to measure calibration error is similar to their use in MMD to measure distance between distributions (Gretton et al., 2012). MMD has recently been used for training various types of neural networks, including generative models in (Li et al., 2015) and unsupervised domain-adaptation models in (Yan et al., 2017). For other measures defined on kernel embeddings see (Muandet et al., 2017). We are aware of no prior work on defining calibration errors using kernel embeddings."
+  }, {
+    "heading": "6. Experiments",
+    "text": "We compare our method of calibrating using MMCE with existing calibration methods on seven datasets spanning image, NLP, and time-series and 6 network architectures. We establish that a model trained with MMCE not only makes better calibrated and accurate predictions but does so at higher confidence level than existing approaches. We also evaluate the computational overhead of training with the quadratic MMCE loss, and show that the increase in running time is no more than 10%.1\nDatasets The datasets used in our experiments are:\n1. CIFAR-10 (Krizhevsky et al., a): Color images (32×32) from 10 classes. 45,000/5,000/10,000 images for train/validation/test.\n2. CIFAR-100 (Krizhevsky et al., b): Same as above but with 100 classes.\n3. Caltech Birds 200 (Welinder et al., 2010): Images of 200 bird species drawn from Imagenet. 5994/2897/2897 images for train/validation/test sets.\n4. 20 Newsgroups: News articles partitioned into 20 categories by content. 15098/900/3999 documents for train/validation/test.\n5. IMDB reviews (Maas et al., 2011): Polar movie reviews for sentiment classification 25000/5000/20000 for train/ validation/ test.\n6. UC Irvine Human Activity Recognition(HAR) (Anguita et al., 2013): Time series from phones corresponding to 6 human actions. 6653/699/2947 instances for train/ validation/ test.\n7. Stanford Sentiment Treebank (SST) (Socher et al., 2012): Movie reviews, represented as parse trees that are annotated by sentiment. Each sample includes a binary label and a fine grained 5-class label. We used the binary version. Training/validation/test sets contain 6920/872/1821 documents.\nModels For the first three image datasets we used state-ofthe-art convolutional networks like Resnet (He et al., 2016), Wide Resnet (Zagoruyko & Komodakis, 2016) and Inception v3 (Krause et al., 2016). We use different sizes (in terms of depths/ number of layers) for each of the models. On 20 Newsgroups, we train a global pooling Convolutional Network (Lin et al., 2013). On IMDB reviews, we use a version of hierarchical attention networks (Yang et al., 2016). On UCI HAR, we use a LSTM. We used the TreeLSTM model for SST binary (Tai et al., 2015). We used publicly available models: CIFAR 10 Resnet: (Tensorflow, 2018),\n1Code is partially available and will be made fully available at https://github.com/aviralkumar2907/MMCE.\nCIFAR 10 wide resnet, CIFAR 100 all models: (Xin Pan, 2018), Birds CUB dataset: (Vispedia, 2018), IMDB dataset: (Ilya Ivanov, 2018), 20 Newsgroups: (Keras Team, 2018), HAR dataset: (Guillaume Chevalier, 2017) and SST TreeLSTM : (Nicolas Pinchaud, 2017).\nExperiment setup The λ for weighting MMCE wrt NLL is chosen via cross-validation. The same kernel k(r, r′) was used for all since r, r′ are probabilities. We chose the Laplacian Kernel k(r, r′) = exp ( −|r−r′|\n0.4\n) , a universal\nkernel, with a width of 0.4. For measuring calibration error we use ECE with 20 bins, each of size 0.05. We use a batch size of 128, except when the default batch size in the code base was higher. For example, in the IMDB HAN codebase, the default batch size was 256 and for UCI HAR the batch size was 1500. Other details about optimizer and hyperparameters were kept unchanged from the base models from the downloaded source. As an exception, the batch size for SST was kept fixed to 25 (the default value).\nMethods Compared We compare the following methods:\nBaseline The baseline models in all tasks were trained using negative log likelihood. All baseline models were downloaded from public sources and came with their best performing regularizers like dropout and weight penalty.\nBaseline+T Guo et al. (2017) compared six methods of calibrating a baseline model using a validation dataset. Of these temperature scaling was found to be the best in terms of ECE and the only method to not drop baseline accuracy. We compare with this approach and use Baseline+T to denote a temperature calibrated baseline model.\nMMCE, MMCEm, MMCE+T These are variants of our MMCE-based approach. MMCE refers to the weighted version MMCEw in Eq 9 and MMCEm to unweighted version in Eq 7. Temperature scaling can also be applied on models trained using MMCE. We call this the MMCE+T method.\nEntropy penalty We also compare with (Pereyra et al., 2017) that adds an entropy penalty as a regularizer to reduce over-confidence, a primary cause of poor calibration in modern NN.\nKernel regression MMCE uses kernels to measure calibration. Another conventional kernel-based measure is the Nardaya-Watson kernel regressor. We use this to get a smoothed estimate of P (c = 1|r) and then minimize their distance from r to achieve calibration as per Eq 1. This gives us a trainable measure of calibration error as\n∑ i∈D ( ri − ∑ j∈D k(ri, rj)cj∑ j∈D k(ri, rj) )2 . (12)\nthat we use as CE(D, θ) in Equation 4.\nEvaluation Metrics We compare the methods on three different measures of calibration error (Candela et al., 2005) - Expected Calibration Error (ECE) (as described in Section 2), Brier Score ( 1|D| ∑ (xi,yi)∼D ∑ v(ci,v − ri,v)2), and NLL. We also measure the fraction of highly-confident calibrated predictions to reward methods that achieve calibration without throttling correct high confidence scores."
+  }, {
+    "heading": "6.1. Results",
+    "text": "MMCE gains over baseline We first evaluate the efficacy of MMCE in reducing calibration errors over the baseline without dropping accuracy. Tables 1 and Table 2 summarizes the results over different dataset architecture combinations. From columns 3 and 4 of Table 1 we observe that MMCE training consistently gives lower ECE values. For example, on CIFAR-10 all three models get almost a factor of 4 reduction in ECE. The reduction in calibration error is also evident when measured on Brier score and NLL(Table 2). MMCE also boosts baseline accuracy showing that accuracy (as optimized by NLL) is not orthogonal to calibration (as optimized by MMCE).\nAll the models here were trained from scratch with MMCE. But we show that MMCE can be used also for fine-tuning a pre-trained model. Table 1 in the supplementary material shows the ECE and accuracy comparisons with a baseline model fine-tuned using our NLL+λMMCE objective. We find that fine-tuning with MMCE helps improve calibration, although not as much as training from scratch.\nComparison with temperature scaling In the last two columns of Table 1 we compare the effect on ECE of temperature scaling (TS) on both the baseline and MMCE trained model. Accuracy stays unchanged with TS. We find that both models get an improvement in calibration (drop in ECE) with TS. Calibration is best overall with MMCE+T. On 20newsgroup, MMCE+T provides a particularly big im-\nprovement over Baseline+T. From Table 2 we observe that on Brier and NLL too, MMCE (even without TS) provides greater reduction in calibration error over baseline+TS. One natural question is why should temperature scaling improve MMCE? The reason we suspect is the injection of a different validation dataset. TS using MMCE (instead of NLL) on the validation dataset gives similar drops in ECE. But, MMCE gives a much greater fraction of the increase beyond baseline than TS. 70% of the ECE reduction of MMCE+T is due to MMCE training and only additional 30% with TS on the validation dataset.\nWe zoom beyond aggregated ECE values and compare Baseline, Baseline+T, and MMCE+T on reliability plots in Figure 2. In a reliability plot, the perfectly calibrated model should touch the diagonal, models below the diagonal are over-confident and above it are under-estimating confidence. The Baseline is overly confident and temperature scaling (TS) corrects that significantly. But, on 20newsgroup, TS causes the Baseline model to swing in the opposite direction of under confidence!\nWe further show that TS incurs confidence loss on several other datasets but the loss happens at the very high end and does not get reflected in aggregate ECE numbers. Since over-confidence is the problem, we focus on the subset of predictions made with very high confidence, specifically 0.99. For each method, we define a confident set (CS99) consisting of predictions with confidence above 0.99. We desire the largest possible set CS99 as long as accuracy in CS99 is above 99%. We show the result in Table 4. The overconfident baseline, of course, gets the largest size of CS99 but its accuracy is below the contract of 99% on all five cases. Temperature scaling on the baseline does correct accuracy but the size of the confident set is much smaller now. In contrast MMCE (both with and without TS) provides much larger number of confident predictions. For example, on CIFAR 10 (Resnet 110), temperature scaling reduced the size of CS99 from 89% to 40% whereas MMCE lifted it to\n72% without dropping accuracy. As pointed out earlier, less (or no) highly confident predictions is not good from the perspective of practical deployment of neural networks.\nSome applications rely on highly confident predictions, for example, applications of neural networks in medicine and healthcare. The ideal goal of confidence calibration must be to find not only accurate but highly confident predictions. Clamping down large confidence values is not the best way to tap the potential of modern high capacity networks and we need training time methods like MMCE to wean out incorrect confident predictions.\nComparison with Alternative Regularizers We next compare MMCE with Entropy penalty and find that indeed this method reduces ECE significantly even though the goal was to fix over-confidence and not calibration. However, the method suffers from the same flaw as temperature scaling of\nindiscriminately clamping confidence leading to only a few confident predictions as seen in Table 4. For example, on CIFAR 10 with a threshold of 0.99 on confidence, MMCE predicts 72% instances at accuracy 99.7% but with Entropy penalty we get only 7% and that too at 97% accuracy indicating miscalibration in the above 0.99 bucket.\nThe Kernel regression regularizer (Eq 12) was not effective in improving calibration. This was surprising because the Nardaya-Watson regressor has a better convergence rate m− 4 5 than ours m− 1 2 . A possible reason could be that the gradient with respect to θ is not conducive to optimizing the objective, perhaps because of kernels in the denominator. In contrast, MMCE with kernels only in the numerator is conducive to gradient-based optimization.\nMMCE: weighted vs unweighted In Section 3, Equation 7 we motivated the design of the weighted MMCE estimator to surmount natural high accuracy bias in the training data. In Table 3 we observe that this version (last column) indeed provides a significant boost in accuracy over the original MMCE version on most cases.\nTuning Calibration Weight λ In Figure 3 we show the effect on ECE for different values of λ in the NLL+λ CE training objective for MMCE and Entropy regularizer as CE. We find that compared to Entropy, MMCE is significantly more stable with changing lambda. For example for 20Newsgroup, the entropy regularizer has a minima at 6 and rises sharply on both sides whereas MMCE moves gradually towards its flat minima. The accuracy values too (not shown in Figure) do not change much with λ for MMCE.\nComputational Efficiency We compared the running times per epoch of the baseline and the MMCE trained model (on a NVIDIA Titan X GPU) (In Table 2 of supplementary). Although, MMCE scales quadratically with the number of examples we found that the wall-clock running time per epoch for the MMCE algorithm was no more than 10% over the baseline. This is because the MMCE is reliably estimated even on ∼ 100 examples that comprise a batch because of its fast convergence properties.\nIn summary, our experiments demonstrate that training with MMCE is a fast, stable, and accurate method to minimize calibration error while maximally preserving high confidence predictions."
+  }, {
+    "heading": "7. Conclusion",
+    "text": "We proposed MMCE a new measure of calibration error in terms of universal kernels from a RKHS space. We ana-\nlyzed MMCE theoretically and showed that it is minimized only when the model is calibrated and its finite sample estimate is consistent and converges at rate 1/ √ m. The measure can be used to jointly train the network parameters to minimize both accuracy and calibration error. The joint objective is easy to train and does not require very careful hyper-parameter tuning unlike other similar regularizers e.g. the entropy regularizer. Also, the running time overhead is minimal unlike methods like Bayesian networks which model prediction uncertainty at huge performance penalty. Our model not only provides low ECE and high accuracy, but also produces more predictions at high confidence levels unlike previous smoothing approaches that indiscriminately clamp large confidence scores. Our experiments showed that modern neural networks suffer more from poor calibration than over-confidence. Careful training objectives, like MMCE, can fix poor calibration without reducing confidence.\nIn future, we plan to apply MMCE to calibrate structured prediction tasks, for example, the sequence to sequence models used for translation.\nAcknowledgements We thank all anonymous reviewers for their comments and for pointing to the work on scoring rules in statistics. We thank members of our group at IIT Bombay, specifically Shiv Shankar, for discussions. We gratefully acknowledge the support of NVIDIA corporation for Titan X GPUs."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "A public domain dataset for human activity recognition",
+    "authors": ["D. Anguita", "A. Ghio", "L. Oneto", "X. Parra", "J. L ReyesOrtiz"],
+    "venue": "using smartphones,",
+    "year": 2013
+  }, {
+    "title": "End to end learning for self-driving",
+    "authors": ["M. Bojarski", "D.D. Testa", "D. Dworakowski", "B. Firner", "B. Flepp", "P. Goyal", "L.D. Jackel", "M. Monfort", "U. Muller", "J. Zhang", "X. Zhang", "J. Zhao", "K. Zieba"],
+    "venue": "cars. CoRR,",
+    "year": 2016
+  }, {
+    "title": "Intelligible models for healthcare: Predicting pneumonia risk and hospital 30-day readmission",
+    "authors": ["R. Caruana", "Y. Lou", "J. Gehrke", "P. Koch", "M. Sturm", "N. Elhadad"],
+    "venue": "In Proceedings of the 21th KDD 2015,",
+    "year": 2015
+  }, {
+    "title": "Assessing calibration of prognostic risk scores",
+    "authors": ["C.S. Crowson", "E.J. Atkinson", "T.M. Therneau"],
+    "venue": "Statistical Methods in Medical Research,",
+    "year": 2016
+  }, {
+    "title": "A kernel two-sample test",
+    "authors": ["A. Gretton", "K.M. Borgwardt", "M.J. Rasch", "B. Schölkopf", "A.J. Smola"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2012
+  }, {
+    "title": "On calibration of modern neural networks",
+    "authors": ["C. Guo", "G. Pleiss", "Y. Sun", "K.Q. Weinberger"],
+    "venue": "In Proceedings of the 34th International Conference on Machine Learning,",
+    "year": 2017
+  }, {
+    "title": "The Elements of Statistical Learning",
+    "authors": ["T. Hastie", "R. Tibshirani", "J. Friedman"],
+    "year": 2001
+  }, {
+    "title": "Deep residual learning for image recognition",
+    "authors": ["K. He", "X. Zhang", "S. Ren", "J. Sun"],
+    "year": 2016
+  }, {
+    "title": "A baseline for detecting misclassified and out-of-distribution examples in neural networks",
+    "authors": ["D. Hendrycks", "K. Gimpel"],
+    "venue": "In ICLR,",
+    "year": 2017
+  }, {
+    "title": "Maximum mean discrepancy for class ratio estimation: Convergence bounds and kernel selection",
+    "authors": ["A. Iyer", "S. Nath", "S. Sarawagi"],
+    "venue": "In ICML,",
+    "year": 2014
+  }, {
+    "title": "Calibrating predictive model estimates to support personalized medicine",
+    "authors": ["X. Jiang", "M. Osl", "J. Kim", "L. Ohno-Machado"],
+    "venue": "Journal of the American Medical Informatics Association,",
+    "year": 2012
+  }, {
+    "title": "Keras pre-trained word embeddings example. https://github.com/keras-team/keras/ blob/master/examples/pretrained_word_ embeddings.py, 2018",
+    "authors": ["Keras Team"],
+    "venue": "Online; accessed",
+    "year": 2018
+  }, {
+    "title": "The unreasonable effectiveness of noisy data for fine-grained recognition",
+    "authors": ["J. Krause", "B. Sapp", "A. Howard", "H. Zhou", "A. Toshev", "T. Duerig", "J. Philbin", "L. Fei-Fei"],
+    "venue": "Computer Vision – ECCV",
+    "year": 2016
+  }, {
+    "title": "Estimating uncertainty online against an adversary",
+    "authors": ["S. Ermon"],
+    "venue": "In AAAI,",
+    "year": 2017
+  }, {
+    "title": "Calibrated structured prediction",
+    "authors": ["V. Kuleshov", "P.S. Liang"],
+    "year": 2015
+  }, {
+    "title": "Simple and scalable predictive uncertainty estimation using deep ensembles",
+    "authors": ["B. Lakshminarayanan", "A. Pritzel", "C. Blundell"],
+    "venue": "In NIPS,",
+    "year": 2017
+  }, {
+    "title": "Training confidencecalibrated classifiers for detecting out-of-distribution samples",
+    "authors": ["K. Lee", "H. Lee", "J. Shin"],
+    "venue": "In ICLR,",
+    "year": 2018
+  }, {
+    "title": "Generative moment matching networks",
+    "authors": ["Y. Li", "K. Swersky", "R. Zemel"],
+    "venue": "ICML, volume 37 of PMLR, pp. 1718–1727,",
+    "year": 2015
+  }, {
+    "title": "Enhancing the reliability of out-of-distribution image detection in neural networks",
+    "authors": ["S. Liang", "Y. Li", "R. Srikant"],
+    "year": 2018
+  }, {
+    "title": "Multiplicative normalizing flows for variational Bayesian neural networks",
+    "authors": ["C. Louizos", "M. Welling"],
+    "venue": "In ICML,",
+    "year": 2017
+  }, {
+    "title": "Learning word vectors for sentiment analysis",
+    "authors": ["A.L. Maas", "R.E. Daly", "P.T. Pham", "D. Huang", "A.Y. Ng", "C. Potts"],
+    "venue": "In Proceedings of ACL: HLT,",
+    "year": 2011
+  }, {
+    "title": "Kernel mean embedding of distributions: A review and beyond",
+    "authors": ["K. Muandet", "K. Fukumizu", "B.K. Sriperumbudur", "B. Schölkopf"],
+    "venue": "Foundations and Trends in Machine Learning,",
+    "year": 2017
+  }, {
+    "title": "Obtaining well calibrated probabilities using bayesian binning",
+    "authors": ["M.P. Naeini", "G.F. Cooper", "M. Hauskrecht"],
+    "venue": "In AAAI,",
+    "year": 2015
+  }, {
+    "title": "Fast Minibatch version of Tree LSTM. https://github.com/nicolaspi/ treelstm, 2017",
+    "authors": ["Nicolas Pinchaud"],
+    "venue": "Online; accessed",
+    "year": 2018
+  }, {
+    "title": "Predicting good probabilities with supervised learning",
+    "authors": ["A. Niculescu-Mizil", "R. Caruana"],
+    "venue": "In ICML,",
+    "year": 2005
+  }, {
+    "title": "Regularizing neural networks by penalizing confident output distributions",
+    "authors": ["G. Pereyra", "G. Tucker", "J. Chorowski", "L. Kaiser", "G.E. Hinton"],
+    "venue": "ICLR workshop,",
+    "year": 2017
+  }, {
+    "title": "On fairness and calibration",
+    "authors": ["G. Pleiss", "M. Raghavan", "F. Wu", "J.M. Kleinberg", "K.Q. Weinberger"],
+    "venue": "In NIPS,",
+    "year": 2017
+  }, {
+    "title": "Semantic Compositionality Through Recursive Matrix-Vector Spaces",
+    "authors": ["R. Socher", "B. Huval", "C.D. Manning", "A.Y. Ng"],
+    "venue": "In EMNLP,",
+    "year": 2012
+  }, {
+    "title": "Improved semantic representations from tree-structured long short-term memory networks",
+    "authors": ["K.S. Tai", "R. Socher", "C.D. Manning"],
+    "venue": "In ACL,",
+    "year": 2015
+  }, {
+    "title": "CIFAR 100 model. https://github. com/tensorflow/models/tree/master/ research/resnet, 2018",
+    "authors": ["Xin Pan"],
+    "venue": "Online; accessed",
+    "year": 2018
+  }, {
+    "title": "Mind the class weight bias: Weighted maximum mean discrepancy for unsupervised domain adaptation",
+    "authors": ["H. Yan", "Y. Ding", "P. Li", "Q. Wang", "Y. Xu", "W. Zuo"],
+    "venue": "IEEE CVPR 2017,",
+    "year": 2017
+  }, {
+    "title": "Hierarchical attention networks for document classification",
+    "authors": ["Z. Yang", "D. Yang", "C. Dyer", "X. He", "A.J. Smola", "E.H. Hovy"],
+    "year": 2016
+  }, {
+    "title": "Transforming classifier scores into accurate multiclass probability estimates",
+    "authors": ["B. Zadrozny", "C. Elkan"],
+    "venue": "In ACM SIGKDD,",
+    "year": 2002
+  }, {
+    "title": "Understanding deep learning requires rethinking generalization",
+    "authors": ["C. Zhang", "S. Bengio", "M. Hardt", "B. Recht", "O. Vinyals"],
+    "year": 2017
+  }],
+  "id": "SP:bfe5aeba8dc8a7a2b1fd83849d28fc565dc67b32",
+  "authors": [{
+    "name": "Aviral Kumar",
+    "affiliations": []
+  }, {
+    "name": "Sunita Sarawagi",
+    "affiliations": []
+  }, {
+    "name": "Ujjwal Jain",
+    "affiliations": []
+  }],
+  "abstractText": "Modern neural networks have recently been found to be poorly calibrated, primarily in the direction of over-confidence. Methods like entropy penalty and temperature smoothing improve calibration by clamping confidence, but in doing so compromise the many legitimately confident predictions. We propose a more principled fix that minimizes an explicit calibration error during training. We present MMCE, a RKHS kernel based measure of calibration that is efficiently trainable alongside the negative likelihood loss without careful hyperparameter tuning. Theoretically too, MMCE is a sound measure of calibration that is minimized at perfect calibration, and whose finite sample estimates are consistent and enjoy fast convergence rates. Extensive experiments on several network architectures demonstrate that MMCE is a fast, stable, and accurate method to minimize calibration error metrics while maximally preserving the number of high confidence predictions.",
+  "title": "Trainable Calibration Measures For Neural Networks From Kernel Mean Embeddings"
+}

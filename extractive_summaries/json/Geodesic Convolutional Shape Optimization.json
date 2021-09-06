@@ -1,0 +1,240 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Optimizing the aerodynamic or hydrodynamic properties is key to designing shapes, such as those of aircraft wings, windmill blades, hydrofoils, car bodies, bicycle shells, or submarine hulls. However, it remains challenging and computationally demanding because existing Computational Fluid Dynamics (CFD) techniques rely either on solving the Navier-Stokes equations or on Lattice Boltzmann methods. Since the simulation must be re-run each time an engineer wishes to change the shape, this makes the design process slow and costly. A typical engineering approach is therefore to test only a few designs without a fine-grained search in the space of potential variations.\n*Equal contribution 1CVLab, EPFL, Lausanne, Switzerland 2Machine Learning Group, Idiap, Martigny, Switzerland. Correspondence to: Pierre Baque <pierre.baque@epfl.ch>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\nThis is a severe limitation and there have been many attempts at overcoming it, but none has been entirely successful yet. Most current algorithms rely on combining evolutionary algorithms with heuristic local search (Orman & Durmus, 2016) and complex adjoint methods (Allaire, 2015; Gao et al., 2017), which requires rerunning a simulation at each iteration step and therefore remains costly. A classical approach to reduce the computational complexity is to use Gaussian Process (GP) regressors trained to interpolate the performance landscape given a low dimensional parametrization of the shape space. This interpolator is then used as a proxy for the true objective to speed-up the computation, which is referred to as Kriging in the CFD literature (Toal & Keane, 2011; Xu et al., 2017). However, those regressors are only effective for shape deformations that can be parameterized using relatively few parameters (Bengio et al., 2006) and their performance therefore hinges on a well-designed parameterization. Furthermore, the regressors are specific to a particular parameterization and pre-existing computed simulation data using different ones cannot be easily leveraged.\nBy contrast, we propose an approach to optimizing the aero-\ndynamic or hydrodynamic properties of arbitrarily complex shapes by training Geodesic Convolutional Neural Networks (GCNNs) (Monti et al., 2016) to emulate a fluidynamics simulator. More specifically, given a set of generic surfaces parametrized as meshes, we train a GCCN to predict their aerodynamic characteristics, as computed by standard CFD packages, such as XFoil (Drela, 1989) or Ansys Fluent (Inc., 2011), which are then used to write an objective function. Since this function is differentiable with respect to the vertex coordinates, we can use it in conjunction with a gradientbased optimization to explore the shape space much faster and thoroughly than was possible before, with a much better accuracy and without putting undue restrictions on the range of potential shapes. Since performing convolutions on an arbitrary mesh is much slower than on a regular grid, the key to making this approach practical is remeshing the original shape using a cube or poly-cube map (Tarini et al., 2004). It makes it possible to perform the GCNN computations on GPUs instead of CPUs, as for normal CNNs.\nIn short, our contribution is a new surrogate model method for shape optimization. It does not rely on handcrafted features and can handle shapes that must be parameterized using many parameters. Since it operates directly on the 3D surfaces, an added benefit is that it can leverage training data produced using any kind of parameterization and not only the specific one used to perform the shape optimization. Fig 1 illustrates the process. The training shapes can be very different from the target one, which gives our system flexibility.\nWe demonstrate that our method outperforms GP approaches, widely used in the industry, both in terms of regression accuracy and optimization capacity. Not only do we improve upon GP optimization by 5% to 20% for a lift maximization task on 2D NACA airfoils involving few parameters, but we can also deliver results on fully 3D shapes for which our baselines perform poorly."
+  }, {
+    "heading": "2. Related Work",
+    "text": "There is a massive body of literature about fluid simulation techniques. Traditional ones rely on numerical discretization of the Navier-Stokes Equations (NSE) using finitedifference, finite-element, or finite volume methods (Quarteroni & Quarteroni, 2009; Skinner & Zare-Behtash, 2018). Since the NSE are highly non-linear, the space has to be very finely discretized for good accuracy, which tends to make such methods computationally expensive. In some cases, approaches such as the Lattice-Boltzmann Method (LBM) (McNamara & Zanetti, 1988), which simulates streaming and collision processes across individual fluid particles to recover the global behavior as an emergent property, can be more accurate, at the cost of being even more computationally expensive (Xian & Takayuki, 2011).\nAll the above-mentioned techniques approximate the fluodynamics for a fixed physical shape and without changing it. A common engineering practice is therefore to first use them to compute the characteristics of a few hand-designed shapes and then to pick the one giving the best results. Interestingly (Umetani & Bickel, 2018) developed a data-driven technique to instantly predict how fluid flows around various three-dimensional objects, symplifing early-design stages for engineers. In this paper, our focus is on using a Deep Learning approach to fully automate this process by casting it as a gradient descent minimization. In the remainder of this section, we therefore review existing approaches to shape optimization in the CFD context and then discuss current uses of Deep Learning in that field."
+  }, {
+    "heading": "2.1. Shape Optimization",
+    "text": "A popular and relatively easy to implement approach to shape optimization relies on genetic algorithms (Gosselin et al., 2009) to explore the space of possible shapes. However, since genetic algorithms require many evaluation of the fitness function, a naive implementation would be inefficient because each one requires an expensive CFD simulation.\nThis can be avoided using Adjoint Differentiation (Allaire, 2015; Gao et al., 2017) instead. It involves approximating the solution of a so-called adjoint form of the NSE to compute the gradient of the fitness function with respect to the 3D simulation mesh parameters. This allows the use of gradient-based optimization techniques but is still very expensive because it requires a new simulation to be run at each iteration (Alexandersen et al., 2016).\nAs a result, there has been extensive research in ways to reduce the required number of evaluations of the fitness function. One of the most widely used one relies either on Gaussian Processes (GPs, Rasmussen & Williams, 2006), which is known as kriging in the CFD community (Jeong et al., 2005; Toal & Keane, 2011; Xu et al., 2017), or on Artificial Neural Networks (ANN, Gholizadeh & Seyedpoor, 2011; Lundberg et al., 2015; Preen & Bull, 2015) to compute surrogates or meta-models that approximate the fitness function while being much easier to compute. Both approaches can be used either to simply speed-up genetic algorithms (Ulaganathan & Asproulis, 2013) or to find an optimal trade-off between exploration and exploitation, using the confidence bounds provided by the GPs to optimize a multi-objective Pareto front. However, these methods all depend on handcrafted shape parameterizations that can be difficult to design. Furthermore this makes it necessary to retrain the regressor for each new scenario in which the parameterization changes."
+  }, {
+    "heading": "2.2. Deep Learning",
+    "text": "As in many other engineering fields, Deep Learning was recently introduced in CFD. For example, Neural Networks are used by tompson et al. (2016) to accelerate Eulerian fluid simulations. This is done by training CNNs to approximate the solution of the the discrete Poisson equation, which is usually the most time demanding step in an Eulerian fluid simulation pipeline. Along similar lines, 3D CNNs are used by Guo et al. (2016) to directly regress the fluid velocity field at every point of the space given an implicit surface description of the target object.\nThese two methods demonstrate the potential of Deep Learning to speed-up and reproduce fluid simulations. However, they rely on 3D CNNs which have a large memory footprint and are extremely computationally demanding whereas the object of interest is intrinsically represented as 2D manifold. This can be mitigated by running the simulations over a coarse space discretization, which degrades the accuracy. By contrast, our proposed approach directly runs on a surface mesh representation of the object, which enables us to use one less dimension and thus considerably reduce the computing requirements."
+  }, {
+    "heading": "3. Regression of physical quantities",
+    "text": "We define the set of meshesM⊂ R3N × {0, 1}N×N and M = (X, E) ∈ M , a mesh as being a pair composed of locations of vertices, and their connectivity.\nLet us assume we are given a set of meshes Mm = (Xm, Em), m = 1, . . . ,M, and let us further assume that for each one, we ran a CFD solver to compute both a corresponding vector of local physical quantities Ym ∈ RN , one for each vertex, along with a global scalar value Zm ∈ R. Concretely, Ym could be the air-pressure field along a plane’s wing and Zm the total drag force it generates. From these values we can infer a performance score, such as Liftto-Drag ratio for a wing, using a differentiable mapping.\nGiven M such triplets (Mm,Ym, Zm), we want to train a regressor Fω :M→ RN × R such that Fω(Mm) = (F y ω(Mm), F z ω(Mm)) ≈ (Ym, Zm) , (1)\nwhere ω comprises the trainable parameters, which will be optimized to minimize our training loss\nL(ω)= ∑ m ‖F yω(Mm)−Ym‖2+λ (F zω(Mm)−Zm)2 , (2)\nwhere λ is a scaling parameter that ensures that both terms have roughly the same magnitude."
+  }, {
+    "heading": "3.1. From Geodesic to Cube-Mesh CNNs",
+    "text": "Standard CNNs implicitly rely on their input, images usually, having a regular Euclidean geometry. The neighborhood relationship between pixels encodes their distance.\nWhile such a regularity is true for images, it is not for surface meshes. To operate on such an input, one therefore should use Geodesic CNNs (GCCNs) such as those described by Monti et al. (2016) instead. These explicitly account for the varying geodesic distances between vertices when performing convolutions.\nHowever, the structure of the input – the fact that it is organised as a tensor where adjacent elements are neighbours in the physical world–, is also central to the efficient use of modern computational hardware and results in speed-up of several orders of magnitude. For our application, the lack of structure of arbitrary surface meshes – often composed of triangles – would slow down the computation and prevent effective use of the GPUs for a naive implementation of GCNNs. In this section, we first introduce GCNNs which help overcome the first difficulty and then show how we can remesh the surface into a quad-mesh to tackle the second one.\nGeodesic CNNs. We describe the geometric convolution operation that is used at each vertex, where a mixture of gaussians is used to interpolate the features computed at neighbouring vertices into a common predefined basis.\nLet us consider a signal f = (f1, . . . , fN ) defined at each one of the N vertices Xi1≤i≤N of mesh M. For each i, let N i = {j : E(i, j) = 1}, that is the set of indices j such that Xi and Xj are neighbors.\nLet K, where K = 32 in all our experiments, be a predefined number of gaussian parameters αk ∈ R2, Σk ∈ R2, which are vertex independent. We can now define an interpolation operator Dk over the mesh vertices by writing\n(Dkf) i = ∑ j∈N i f j exp (−(ρ(Xi,Xj)− αkρ)2 Σkρ )\nexp (−(θ(Xi,Xj)− αkθ)2 Σkθ ) , (3)\nwhere ρ(·) and θ(·) are relative geodesic coordinates. This makes it possible to define the convolution of f by a filter g over the mesh as\nf ? g = ∑\nk∈1,...,K\ngkDkf. (4)\nThis operator can then be used as a building block for a convolutional architecture. The learning phase involves a gradient-descent based optimization of the convolutional function parameters gk, as in standard CNNs. The values of αk and Σk can be set manually and kept fixed during training (Kipf & Welling, 2016). However, it is more effective to learn them (Monti et al., 2016).\nUnfortunately, the meshes we must deal with are typically large and a naive implementation of the GCNNs would be\nprohibitively expensive because the convolution of Eq. 3 lacks the structure that would make it easy to implement on a GPU, forcing the use of the CPU, which is much slower. In theory, this could be remedied by storing the exponential terms of Eq. 3 in adjacency matrices, as by Monti et al. (2016). However, densely representing those matrices, would not be practical because it would be too large to fit on the GPU for real-world problems. A sparse representation would solve the memory problem but would be equally impractical because, unlike by Monti et al. (2016), the geodesic distances change at every iteration and have to be recomputed. Filling these new values into a sparse representation that fits on the GPU would also be very slow.\nCube-Mesh mapping. To overcome this difficulty, we propose to exploit the properties of cube and poly-cube maps (Tarini et al., 2004), which allow the remeshing of 3D shapes homotopic to spheres such as those of cars or bicycles shells as semi-regular quad-meshes with few irregular vertices, a uniform tessellation density and well-shaped quads (Bommes et al., 2013). Fig. 2 illustrates this process. After remeshing, we can perform the convolutions of Eqs. 3 and 4 for all regular vertices using GPU acceleration. However, a few irregular vertices are unavoidable for most shapes, according to index theory (Bommes et al., 2012). We handle them as special cases, at the cost of a small approximation described in the supplementary material.\nIn practice, we have in memory one “image” per face of the bottom-right box of Fig. 2, and each pixel of the said images has three channels corresponding to the 3d coordinates of that point in the remeshed shape, which is used to compute the values of ρ() and θ(), which can now be done in a GPU-friendly manner."
+  }, {
+    "heading": "3.2. Regressor Architecture",
+    "text": "Recall from Eq. 1 that our regressor must predict a vector of local values Y = F yω(M) and a global scalar value Z = F zω(M) given a mesh M, whose shape and topology are defined by a vector of 3D vertex coordinates X and a set of edges E . Our Network architecture Fω, depicted in Fig. 3 includes a common part F 0ω that processes the input and feeds two separate branches F yω and F z ω , which respectively predict Y and Z. F 0ω(M) is a feature map ∈ RN×k, where k is the number of features for each one of the N vertices. F yω is another Geodesic-Convolutional branch that returns Y ∈ RN while F zω regresses the scalar value Z ∈ R by average pooling followed by two dense layers. Effectively, our shared convnet Fω therefore takes as input this vector X to predict the desired vector Y and scalar value Z.\nInterestingly, as shown in the experiments, we noticed that by learning to predict more physical quantities than actually needed, through additional branches, as by Caruana (1997); Ramsundar et al. (2015) we favour the emergence intermediate-level features that are more robust and less overfitting prone. This observation hints that our architecture is actually learning physical phenomenons and not only interpolating the output.\nAs discussed above, all these operations could be implemented using geodesic nets that operate directly on M and perform convolutions such as those of Eq. 3, but this would be slow. In practice, we first map a reference shape on a cube such as the one depicted at the bottom right of Fig. 2 to obtain a semi-regular quad-remeshing. Then, X becomes the set of 3D coordinates assigned to each vertex of the resulting regular vertex grid, which we then use to reconstruct either identical or modified versions of the 3D shape, such as the one shown at the bottom left of Fig. 2. To increase the receptive field of our convolutions without needlessly increasing the number of parameters or reducing the resolution of our input, we use dilated convolutions (Yu & Koltun, 2016), along with several convolutional blocks with pass-through residual connections (He et al., 2016)."
+  }, {
+    "heading": "4. Shape Optimization",
+    "text": "Once trained, the regressor Fω can be used as a surrogate model or proxy to evaluate the effectiveness of a particular design. Not only is it fast, but it is also differentiable with respect to the X coordinates that control the shape. We can therefore use a gradient-based technique to maximize the desirable property while enforcing design constraints, such as the fact that a bicycle shell must be wide enough to accommodate the rider, a car must contain a pre-defined volume for the engine and passengers, or a plane wing should be thick enough to have the required structural rigidity.\nFormally, this can be expressed by treating Fω as a function\nof X and looking for\nX∗ = argmin X G (Fω(X)) s.t C(X) ≤ 0, (5)\nwhere G is a fitness function, such as the negative Lift-toDrag ratio in the case of a wing or simply the drag in the case of the car, and C represents the set of constraints that a shape must satisfy to be feasible."
+  }, {
+    "heading": "4.1. Projected Gradient Descent",
+    "text": "To solve the minization problem of Eq. 5, we use a projected version of the popular ADAM algorithm (Kingma & Ba, 2015): at the end of each iteration, we check if the X still is a feasible shape. If not, we project it to closest feasible point. To do this effectively, we need to compute the Jacobians\n∇XG (Fω(X)) and∇XC(X), (6)\nwhich we do using the standard chain rule through automatic differentiation. Fig. 4 depicts such a minimization."
+  }, {
+    "heading": "4.2. Parametrization",
+    "text": "Given the size of the meshes we deal with, the optimization problem of Eq. 5 is a very large one, which traditional methods such as Kriging (Toal & Keane, 2011; Xu et al., 2017) cannot handle. To reduce the problem’s dimensionality and make comparisons possible, we introduce parametric models. More specifically, when the shape and its pose are controlled by a small number of parameters C, we can write the vertex coordinates as a differentiable function of these parameters X(C) and reformulate the minimization\nproblem of Eq. 5 as a minimization with respect to C. For example, wings have long been described in terms of their NACA-4digits parameters (Jacobs et al., 1948), which are three real numbers representing a family of shapes known to have good aerodynamic properties. These numbers correspond to the maximum camber, its location, and the wing thickness.\nBy contrast to Kriging, the performance of our approach increases with the number of parameters, which we will demonstrate in the result section by using 18 parameters instead of only the 3 NACA ones for airfoil profiles. To further increase flexibility, we could replace the parametric models by the Laplacian parameterization introduced by Ngo et al. (2016), as demonstrated in the 2D case in the supplementary material. It expresses all vertex coordinates as linear combinations of those of a small number of control vertices. Thus, the objective function will become a differentiable function of the positions of a subset of mesh vertices. Our approach will therefore directly apply, which would let us adjust the model’s complexity as needed by adding or removing control points."
+  }, {
+    "heading": "4.3. Online Learning",
+    "text": "We start from of an initial set of random shapes on which we run a full simulation to generate the triplets (Mi,Yi, Zi). We then use it to train Fω by minimizing the loss of Eq. 1.\nIf the database used to train the network is not representative enough, X can drift away from regions of the shape space where our proxy provides a good approximation. Since performing even a single simulation is much slower than running many ADAM optimization steps, we alternate between the following two-steps.\n1. We run project gradient steps as discussed above using the current Fω GCNN regressor until convergence.\n2. We run a new simulation for the obtained shape, add\nthis new sample to the training set and fine tune the Fω GCNN regressor with this new training sample.\nNote that in an industrial setting, the randomly chosen set of initial samples could be replaced by all the shapes that have been simulated in the past. Over time, this would result in an increasingly competent proxy that would require less and less re-training."
+  }, {
+    "heading": "5. Experimental Results",
+    "text": "In this section, we evaluate our proposed shape optimization pipeline. It is designed to handle 3D shapes but can also handle 2D ones by simply considering the 2D equivalent of a surface mesh, which is a discretized 2D contour. We therefore first present results on 2D airfoil profiles, which have become a de facto standard in the CFD community for benchmarking shape optimization algorithms (Toal & Keane, 2011; Orman & Durmus, 2016). We then use the example of car shapes to evaluate our algorithm’s behavior in the more challenging 3D case. We implemented our deeplearning algorithms in TensorFlow (Abadi et al., 2016) and ran them on a single Titan X Pascal GPU.\nWe will quantify the accuracy of various regressors in terms of the standard L2 mean percentage error over a test set Sv , that is, Ay = 1.0− En∈Sv [‖yn−ŷn‖2‖yn‖2 ] , (7) where y denotes either a ground truth local quantity Yi or the global one Zi. In turn, ŷ denotes the corresponding predictions Fy(Xi) or Fz(Xi)."
+  }, {
+    "heading": "5.1. 2D Shapes - Airfoils and Hydrofoils",
+    "text": "Training and testing data. As discussed above, airfoil profiles have long been parameterized using three NACA parameters (Jacobs et al., 1948). To generate our training and validation data, we create 8000 training and 8000 testing shapes, such as those depicted by the blue outlines at the top of Fig. 5. To this end, we randomly select NACA parameters and then further randomize the shape. This is intended to demonstrate that our approach remains effective even when the training shapes belong to a much larger set of shapes that can be far from desirable. We use the popular CFD simulator XFoil to compute their aerodynamic properties. It takes as input a discretized outline, solves the flow problem using an inviscid-vorticity panel method, and applies a compressibility correction (Drela, 1989). We will demonstrate below that our regressor learned from such non-aerodynamic shapes can nevertheless be used to refine a profile and obtain truly efficient ones, such as those shown at the bottom of Fig. 5.\nGCNN design choices. We tested several architectures to implement the regressor Fω of Eq. 1. • Standard Separate: We use two separate\nGCNN architectures for drag and pressure prediction.\nThey are exactly the same as discussed in Section 3.2, except that only one of the final branches is created for each and we use dense 3× 3 convolutional filters instead of dilated ones.\n• Dilated Separate: We replace the usual convolutions by dilated ones, which include a spacing between kernel values (Yu & Koltun, 2016).\n• Joint 2 Branches: We replace the two separate networks by a shared common branch F0 followed by separate branches F y and F z for drag and pressure, as discussed in Section 3.2.\n• Joint 4 Branches: We push the idea of using separate branches connected to a shared one a step further by adding two more branches that predict the skin friction coefficient along the airfoil and edge fluid velocity. Although these quantities are not used to compute the objective function, the hope is that forcing the\nnetwork to predict them helps the joint branch to learn the right features. This is known as disentangling in the Computer Vision literature and has been observed to boost performance (Caruana, 1997; Rifai et al., 2012; Ramsundar et al., 2015).\nWe report the accuracy results for these four architectures in Table 6. As observed by Chen et al. (2015) for dense semantic image segmentation, the dilated convolutions perform better than the standard ones for regression of dense outputs. Both joint architectures do better than the separate ones, with disentangling providing a further performance boost. At the top of Fig. 5, we superpose the pressure vector computed using the simulator and those predicted by the Joint 4 Branches architecture for 4 different profiles.\nComparing to standard regressors. Since our Joint 4 Branches GCNN architecture performs best, we will refer to it as Ours and we now compare its accuracy to that of two standard regressors, one based on Gaussian Processes (GPs) and the other on K-Nearest Neighbours (KNNs). For GPs, we use squared exponential kernels because they have recently be shown to be effective for aerodynamic prediction tasks (Toal & Keane, 2011; Rosenbaum & Schulz, 2013; Chiplunkar et al., 2017). For KNN regression, we empirically determined that K = 8 combined to a distance-based neighbor weighting yielded the best results. Note that in order to compare to such parametric methods, in this experiment only, we restrict our training and test set to the NACA parameter space.\nThe three curves at the top of Fig. 7 represent the mean accuracy of the predicted drag and its variance as function of the number of samples used to train the regressors. Our approach consistently outperforms the other two, especially when there are few training samples. One possible interpretation is that, because our regressor operates directly on the shape of the object unlike the other two regress from the NACA parameters, it learns the local physical interactions between discretization vertices and can therefore generalize well to unseen shapes.\nShape optimization. We now use our regressor along with the baseline ones to maximize lift while keeping drag constant. To this end, we take the fitness function of Eq. 5 to be G(Y, Z) = −CL(Y) + λ(Z − Ztarget)2, where CL is the function that integrates the pressure values Y to estimate the lift, Ztarget is the drag target, and λ is a parameter that controls the relative importance of the two terms. In our experiments, we set λ = 100 and Ztarget = 0.8.\nIn the bottom graph of Fig. 7, we show the resulting lift values after performing shape optimization, again as a function of the number of training samples used to train the regressor. The resulting wing profiles are shown at the bottom middle of Fig. 5.\nWe also plot the corresponding results of a standard GPbased method, also known as kriging (Jeong et al., 2005; Toal & Keane, 2011; Nardari et al., 2017; Xu et al., 2017), an industry standard as discussed in Section 2.1. Kriging can also be used either offline or online, that is without or with retraining the regressor during the optimization process. To implement the retraining, we relied on an optimal tradeoff strategy between exploitation and exploration (Toal & Keane, 2011). Note that our regressor is good enough to outperform GP online even without retraining.\nIn a last experiment, we reparameterized the wing shape in terms of 19 parameters instead of the usual 3 from NACA, as described in detail in the supplementary material. We performed the computation again using this new parameter set in conjunction with either our approach or GPs. The results are shown at the bottom right of Fig. 5 and demonstrate our approach’s ability to deal with larger models."
+  }, {
+    "heading": "5.2. 3D Shapes - Cars",
+    "text": "Training and Testing Data. We use the four following datasets\n• SYNT-TRAIN : It is a dataset of 2000 randomly generated 3D shapes such as the one shown at the top of Fig. 1, which does not need to be car-like.\n• SYNT-TEST: 50 more random shapes generated in the same way as those of SYNT-TRAIN for testing purposes.\n• CARS-FineTune : We downloaded 6 cars CAD models from the web. Two of them are kept for finetuning. We augment each model with 3 scaling factors and 9 rotations, to obtain a total of 54 cars.\n• CARS-TEST : The four remaining CAD models held out for final testing, yielding a total of 108 shapes after augmentation.\nTo generate our random shapes, we introduce a function\nfC : R3 → R3, where C represents the parameters that control its behavior and apply it to an initially spherical set of vertices X0. f is an algebraic function that applies rotations, translations, affine transformations, and dilatations with respect to the center of the shape, which lets us create a wide variety of shapes. The shape at the top Fig. 1 is one of them and we provide more in the supplementary material. We give the precise definition of f in the supplementary material and take C to be a 21D vector. We used the industry standard Ansys Fluent (Inc., 2011) to compute their aerodynamic properties with the k-epsilon turbulence model.\nComparing to Standard Regressors. In Fig. 8, we report the accuracy of our regressor under three different training and testing scenarios:\n• VALID : The regressor is first trained on SYNT-TRAIN and tested on SYNT-TEST. This is a sanity check since testing is carried out on shapes that have the same statistical distribution as the training ones.\n• TEST : The regressor is trained on SYNT-TRAIN and tested on CARS-TEST. This is much more challenging since the testing shapes are those of real cars while the training ones are not.\n• TEST-FT : The regressor is trained on SYNT-TRAIN, fine tuned using CARS-FineTune, and tested on CARS-TEST. This is similar to TEST but we help the regressor by giving it a few real car shapes making a few additional epochs of training.\nUnsurprisingly, the accuracy on TEST is lower than on VALID. Nevertheless, fine-tuning with a few car-like examples brings it back up. To assess the importance of using GCNNs instead of regular CNNs, we re-ran all three scenarios using a standard CNN of similar complexity. In other terms, we keep the same architecture where the geodesic convolutions of Eqs. 3 and 4, are replaced by standard ones. As can be seen on the top row of the figure, the accuracy numbers are much worse in all three cases.\nShape Optimization In this section, we use the GCNN regressor pre-trained on our SYNT-TRAIN data to minimize the drag generated by a car-like shape, that is, G(Y, Z) = Z. Without constraints, the shape would collapse to an infinitely thin one. To allows for passengers and an engine, we need the constraint C of Eq. 5. Feasible shapes are defined as those that remain outside of two parallelepiped, one for\nthe engine and the other for the passenger compartment, as shown at the top of Fig. 9.\nAs in the case of the airfoils, the GP regressor takes as input the 21 parameters C of the deformation function fC introduced above while ours operates directly on the surface mesh. The initial shape X0 that fC operates on is the CAD model of a car shown on the left at bottom of Fig. 1 and the result is shown on the right. At the bottom of Fig. 9, we report the resulting drag for a given number of call to the simulator during the minimization, 50 or 100 for the online methods and 0 for the offline one.\nAgain whether offline or online, our approach outperforms the online version of GP and finds a better optimum for the 21 parameters. In the online case, note that with only 50 calls to the simulator our result is already close to the optimum even though our network, pre-trained on SYNT-TRAIN, had never seen a car before."
+  }, {
+    "heading": "6. Conclusion",
+    "text": "We have shown that we could first train Geodesic CNNs to reliably emulate a output of a CFD simulator and then use them to optimize them the aerodynamic performance of a shape. As a result, we can outperform state-of-the-art techniques by 5 to 20% on relatively simple 2D problems and solve previously unsolvable ones.\nIn our current implementation, we use parameterized models to reduce the shape’s number of degrees of freedom and make the optimization problem tractable. Since our method can operate on generic meshes, in future work, we intend to use the Laplacian parameterization introduced by Ngo et al. (2016) to increase or decrease the number of degrees of freedom at will and make our approach fully flexible.\nThis work was realized with the help of the software ANSYS by ANSYS Inc."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Large Scale Three-Dimensional Topology Optimization of Heat Sinks Cooled by Natural Convection",
+    "authors": ["J. Alexandersen", "O. Sigmund", "N. Aage"],
+    "venue": "International Journal of Heat and Mass Transfer,",
+    "year": 2016
+  }, {
+    "title": "A Review of Adjoint Methods for Sensitivity Analysis, Uncertainty Quantification and Optimization in Numerical Codes",
+    "authors": ["G. Allaire"],
+    "venue": "Ingénieurs de l’Automobile,",
+    "year": 2015
+  }, {
+    "title": "The Curse of Highly Variable Functions for Local Kernel Machines",
+    "authors": ["Y. Bengio", "O. Delalleau", "N.L. Roux"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2006
+  }, {
+    "title": "Quad-Mesh Generation and Processing: A Survey",
+    "authors": ["D. Bommes", "B. Lévy", "N. Pietroni", "E. Puppo", "C. Silva", "M. Tarini", "D. Zorin"],
+    "venue": "Computer Graphics Forum,",
+    "year": 2013
+  }, {
+    "title": "Multitask Learning",
+    "authors": ["R. Caruana"],
+    "venue": "Machine Learning,",
+    "year": 1997
+  }, {
+    "title": "Semantic Image Segmentation with Deep Convolutional Nets and Fully Connected CRFs",
+    "authors": ["Chen", "L.-C", "G. Papandreou", "I. Kokkinos", "K. Murphy", "A. Yuille"],
+    "venue": "In International Conference on Learning Representations,",
+    "year": 2015
+  }, {
+    "title": "Gaussian process for aerodynamic pressures prediction in fast fluid structure interaction simulations",
+    "authors": ["A. Chiplunkar", "E. Bosco", "J. Morlier"],
+    "venue": "In World Congress of Structural and Multidisciplinary Optimisation,",
+    "year": 2017
+  }, {
+    "title": "XFOIL: An Analysis and Design System for Low Reynolds Number Airfoils",
+    "authors": ["M. Drela"],
+    "venue": "In Conference on Low Reynolds Number Aerodynamics,",
+    "year": 1989
+  }, {
+    "title": "Automatic Differentiation Dased Discrete Adjoint Method for Aerodynamic Design Optimization on Unstructured Meshes",
+    "authors": ["Y. Gao", "Y. Wu", "J. Xia"],
+    "venue": "Chinese Journal of Aeronautics,",
+    "year": 2017
+  }, {
+    "title": "Shape Optimization of Arch Dams by Metaheuristics and Neural Networks for Frequency Constraints",
+    "authors": ["S. Gholizadeh", "S. Seyedpoor"],
+    "venue": "Scientia Iranica,",
+    "year": 2011
+  }, {
+    "title": "Review of Utilization of Genetic Algorithms in Heat Transfer Problems",
+    "authors": ["L. Gosselin", "M. Tye-Gingras", "F. Mathieu-Potvin"],
+    "venue": "International Journal of Heat and Mass Transfer,",
+    "year": 2009
+  }, {
+    "title": "Convolutional Neural Networks for Steady Flow Approximation",
+    "authors": ["X. Guo", "W. Li", "F. Iorio"],
+    "venue": "In Conference on Knowledge Discovery and Data Mining,",
+    "year": 2016
+  }, {
+    "title": "Deep Residual Learning for Image Recognition",
+    "authors": ["K. He", "X. Zhang", "S. Ren", "J. Sun"],
+    "venue": "In CVPR,",
+    "year": 2016
+  }, {
+    "title": "The characteristics of 78 related airfoil sections from tests in the variable density wind tunnel",
+    "authors": ["E.N. Jacobs", "K.E. Ward", "R.M. Pinkerton"],
+    "venue": "Technical Report 460,",
+    "year": 1948
+  }, {
+    "title": "Efficient optimization design method using kriging model",
+    "authors": ["S. Jeong", "M. Murayama", "K. Yamamoto"],
+    "venue": "Journal of Aircraft,",
+    "year": 2005
+  }, {
+    "title": "Adam: A Method for Stochastic Optimisation",
+    "authors": ["D. Kingma", "J. Ba"],
+    "venue": "In International Conference on Learning Representations,",
+    "year": 2015
+  }, {
+    "title": "Semi-Supervised Classification with Graph Convolutional Networks",
+    "authors": ["T. Kipf", "M. Welling"],
+    "venue": "arXiv preprint arXiv:1609.02907,",
+    "year": 2016
+  }, {
+    "title": "Use of the Boltzmann Equation to Simulate Lattice-gas Automata",
+    "authors": ["G. McNamara", "G. Zanetti"],
+    "venue": "Physical Review Letters,",
+    "year": 1988
+  }, {
+    "title": "Geometric Deep Learning on Graphs and Manifolds Using Mixture Model CNNs",
+    "authors": ["F. Monti", "D. Boscaini", "J. Masci", "E. Rodolà", "J. Svoboda", "M. Bronstein"],
+    "venue": "arXiv preprint arXiv:1611.08402,",
+    "year": 2016
+  }, {
+    "title": "Characterization of the effects of manufacturing geometry details on exhaust flow noise using lattice boltzmann based method",
+    "authors": ["C. Nardari", "A. Mann", "T. Schindele"],
+    "year": 2017
+  }, {
+    "title": "Template-Based Monocular 3D Shape Recovery Using Laplacian Meshes",
+    "authors": ["D. Ngo", "J. Ostlund", "P. Fua"],
+    "venue": "IEEE Transactions on Pattern Analysis and Machine Intelligence,",
+    "year": 2016
+  }, {
+    "title": "Comparison of Shape Optimization Techniques Coupled with Genetic Algorithms for a Wind Turbine Airfoil",
+    "authors": ["E. Orman", "G. Durmus"],
+    "venue": "In IEEE Aerospace Conference,",
+    "year": 2016
+  }, {
+    "title": "Toward the Coevolution of Novel Vertical-Axis Wind Turbines",
+    "authors": ["R.J. Preen", "L. Bull"],
+    "venue": "IEEE Transactions on Evolutionary Computation,",
+    "year": 2015
+  }, {
+    "title": "Numerical Models for Differential Problems, volume",
+    "authors": ["A. Quarteroni", "S. Quarteroni"],
+    "year": 2009
+  }, {
+    "title": "Massively Multitask Networks for Drug Discovery",
+    "authors": ["B. Ramsundar", "S.M. Kearnes", "P. Riley", "D. Webster", "D.E. Konerding", "V.S. Pande"],
+    "year": 2015
+  }, {
+    "title": "Gaussian Process for Machine Learning",
+    "authors": ["C.E. Rasmussen", "C.K. Williams"],
+    "year": 2006
+  }, {
+    "title": "Disentangling Factors of Variation for Facial Expression Recognition",
+    "authors": ["S. Rifai", "Y. Bengio", "A. Courville", "P. Vincent", "M. Mirza"],
+    "venue": "In European Conference on Computer Vision, pp",
+    "year": 2012
+  }, {
+    "title": "Response surface methods for efficient aerodynamic surrogate models",
+    "authors": ["B. Rosenbaum", "V. Schulz"],
+    "venue": "In Computational Flight Testing,",
+    "year": 2013
+  }, {
+    "title": "State-of-the-art in aerodynamic shape optimisation methods",
+    "authors": ["S. Skinner", "H. Zare-Behtash"],
+    "venue": "Applied Soft Computing,",
+    "year": 2018
+  }, {
+    "title": "Efficient multipoint aerodynamic design optimization via cokriging",
+    "authors": ["D.J. Toal", "A.J. Keane"],
+    "venue": "Journal of Aircraft,",
+    "year": 2011
+  }, {
+    "title": "Accelerating Eulerian Fluid Simulation with Convolutional Networks",
+    "authors": ["J. tompson", "K. schlachter", "P. sprechmann", "K. perlin"],
+    "venue": "ArXiv e-prints,",
+    "year": 2016
+  }, {
+    "title": "Surrogate Models for Aerodynamic Shape Optimization, pp. 285–312",
+    "authors": ["S. Ulaganathan", "N. Asproulis"],
+    "year": 2013
+  }, {
+    "title": "Learning Three-Dimensional Flow for Interactive Aerodynamic Design",
+    "authors": ["N. Umetani", "B. Bickel"],
+    "venue": "ACM Transactions on Graphics (Proc. of SIGGRAPH",
+    "year": 2018
+  }, {
+    "title": "Multi-GPU Performance of Incompressible Flow Computation by Lattice Boltzmann Method on GPU Cluster",
+    "authors": ["W. Xian", "A. Takayuki"],
+    "venue": "Parallel Computing,",
+    "year": 2011
+  }, {
+    "title": "Multiobjective aerodynamic optimization of the streamlined shape of high-speed trains based on the kriging model",
+    "authors": ["G. Xu", "X. Liang", "S. Yao", "D. Chen", "Z. Li"],
+    "year": 2017
+  }, {
+    "title": "Multi-Scale Context Aggregation by Dilated Convolutions",
+    "authors": ["F. Yu", "V. Koltun"],
+    "venue": "In ICLR,",
+    "year": 2016
+  }],
+  "id": "SP:1dc5c685830056b1642d5c69ab2311979d680e54",
+  "authors": [{
+    "name": "Pierre Baque",
+    "affiliations": []
+  }, {
+    "name": "Edoardo Remelli",
+    "affiliations": []
+  }, {
+    "name": "François Fleuret",
+    "affiliations": []
+  }, {
+    "name": "Pascal Fua",
+    "affiliations": []
+  }],
+  "abstractText": "Aerodynamic shape optimization has many industrial applications. Existing methods, however, are so computationally demanding that typical engineering practices are to either simply try a limited number of hand-designed shapes or restrict oneself to shapes that can be parameterized using only few degrees of freedom. In this work, we introduce a new way to optimize complex shapes fast and accurately. To this end, we train Geodesic Convolutional Neural Networks to emulate a fluidynamics simulator. The key to making this approach practical is remeshing the original shape using a poly-cube map, which makes it possible to perform the computations on GPUs instead of CPUs. The neural net is then used to formulate an objective function that is differentiable with respect to the shape parameters, which can then be optimized using a gradient-based technique. This outperforms state-of-the-art methods by 5 to 20% for standard problems and, even more importantly, our approach applies to cases that previous methods cannot handle.",
+  "title": "Geodesic Convolutional Shape Optimization"
+}

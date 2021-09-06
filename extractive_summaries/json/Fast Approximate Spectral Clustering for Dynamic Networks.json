@@ -1,0 +1,240 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Spectral clustering (SC) is one of the most utilized methods for clustering multivariate data (Von Luxburg, 2007; Fortunato, 2010). However, because of its inherent dependence on the spectrum of some large graph, SC is computationally expensive. Let n and k be the number of nodes and clusters, respectively. Clustering a graph takes O(n3) operations if a full eigendecomposition is performed and O(kn2) if the Lanczos method is used. This has motivated a surge of research focusing in reducing its complexity, for example using matrix sketching (Fowlkes et al., 2004; Li et al., 2011; Gittens et al., 2013), coarsening (Loukas and Vandergheynst, 2018), and compressive sampling (Ramasamy and Madhow, 2015; Tremblay et al., 2016), attaining a complexity reduction by roughly a factor of n.\nYet, computation is still an issue for dynamic networks, where the edge set is a function of time. Temporal dynamics constitute an important aspect of many network datasets\n1École Polytechnique Fédérale de Lausanne, Switzerland. Correspondence to: Lionel Martin<lionel.martin@epfl.ch>, Andreas Loukas <andreas.loukas@epfl.ch>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\nand should be taken into account in the algorithmic design and analysis. Unfortunately, SC is poorly suited to this setting as eigendecomposition –its main computational bottleneck– has to be recomputed from scratch whenever the graph is updated, or at least periodically (Ning et al., 2007). This is a missed opportunity since the clustering assignments of many real networks change slowly with time, suggesting that successive algorithmic runs wastefully repeat similar computations.\nThis paper proposes an algorithm that reuses information of past cluster assignments to expedite computation. Different from previous work on dynamic clustering, our objective is not to improve the clustering quality, e.g., by enforcing a temporal-smoothness hypothesis (Chakrabarti et al., 2006; Chi et al., 2007) or by using tensor decompositions (Gauvin et al., 2014; Tu et al., 2016). Similar to recent work by (Dhanjal et al., 2014), we focus entirely on reducing the complexity while producing assignments that are provably close to those of SC.\nOur work starts from the recent idea of sidestepping eigendecomposition by utilizing as features random vectors filtered by Chebyshev polynomials of the graph Laplacian (Tremblay et al., 2016). We notice that, in the dynamic setting, there are ample opportunities to reuse information from previous cluster assignments, both in terms of approximating the k-th eigenvalue (a necessary step of Chebyshev filter design), as well as in terms of computing the features themselves. When the consecutive graphs are appropriately similar, these ideas lead to complexity reductions.\nConcretely, we provide the following contributions:\n1. In Section 3 we refine the analysis of compressive spectral clustering (CSC) presented in (Tremblay et al., 2016). Our goal is to move from assertions about feature approximation to guarantees about the quality of the solution of CSC itself. We prove that w.h.p. the quality of the clustering assignments of CSC and SC differ by O(2k/ √ d), and thus d ∝ k2 filtered vectors are sufficient to obtain a good approximation. Importantly, our analysis does not make restricting assumptions about the graph structure, such as assuming a stochastic block model (Pydi and Dukkipati, 2017).\n2. In Section 4, we focus on dynamic graphs and propose dynamic CSC (dCSC), an algorithm that reuses informa-\ntion of past cluster assignments to expedite computation. We discover that the algorithm’s ability to reuse features is determined by a measure of spectral similarity ρ between consecutive graphs: we prove that, when pd features are reused (i.e., each new instance of the dynamic graph is clustered using pd features of the previous graph and (1 − p)d new features, where 0 < p ≤ 0.5), w.h.p. the clustering quality of dCSC approximates that of CSC up to an additive term in the order of pρ.\nThe paper concludes with a proof of concept comparison against SotA approximation algorithms for Spectral Clustering (Section 5). Our experiments confirm that dCSC yields computational benefits when the graph dynamics are bounded. A case in point: we can cluster 30’000 node graphs 3.9× faster than SC and 1.5× faster than CSC in average. Due to space constraints, certain proofs and implementation details are presented as an appendix in a supplementary document."
+  }, {
+    "heading": "2. Background",
+    "text": "We start by summarizing the standard method for spectral clustering as well as the idea behind the more recent accelerated methods. Due to space constraints, our exposition is brief; the reader is encouraged to refer to the original works for a more comprehensive discussion."
+  }, {
+    "heading": "2.1. Spectral clustering (SC)",
+    "text": "To determine the best node-to-cluster assignment, spectral clustering solves a k-means problem with the eigenvectors of the graph Laplacian as features (Shi and Malik, 2000; Ng et al., 2002).\nLet G = (V, E ,W) be a weighted undirected graph with n nodes V = {v1, v2, . . . , vn}, and m edges E ⊂ V ×V . The graph Laplacian is defined as L = I − D−1/2WD−1/2, where D is a diagonal matrix whose entries are the degree of the nodes in the graph (i.e. the sum of the weighed edges adjacent to each node). We denote the eigendecomposition of the Laplacian by L = UΛU>, with the eigenvalues contained in Λ sorted in non-decreasing order, such that 0 = λ1 ≤ λ2 ≤ . . . ≤ λn.\nSpectral clustering consists of computing the first k eigenvectors of L arranged in matrix Uk and subsequently computing a k-means assignment of the n vectors of size k found in the rows of Uk. Formally, if Φ ∈ Rn×d is the feature matrix (here Φ = Uk and d = k), and k is a positive integer denoting the number of clusters, the k-means clustering problem finds the indicator matrix X ∈ Rn×k which satisfies\nXΦ = arg min X∈X\n‖Φ−XX>Φ‖F , (1)\nwith associated cost CΦ = ‖Φ −XΦXTΦΦ‖F . Symbol X denotes the set of all n×k indicator matrices X. These matrices indicates the cluster membership of each data point by setting\nXi,j =\n{ 1√ sj if data point i belongs to cluster j\n0 otherwise, (2)\nwhere sj is the size of cluster j, also equals to the number of non-zero elements in column j. Note that the cost described in eq. (1) is the square root of the more traditional definition expressed with the distances to the cluster centers (Cohen et al., 2015, Sec 2.3). We refer the reader to the work by (Boutsidis et al., 2015) and references therein for more details."
+  }, {
+    "heading": "2.2. Compressive spectral clustering (CSC)",
+    "text": "To reduce the computational cost of spectral clustering, (Tremblay et al., 2016) proposed to approximate Uk using a filtering of random vectors (a similar idea was also examined by (Boutsidis et al., 2015)). The former work also introduced the benefits of compressed sampling techniques reducing the total cost down toO(k2 log2(k)+cn(log(n)+ k)), where c is the order of the polynomial approximation. Their algorithm consists of two steps:\nStep 1. Approximate features. Feature matrix Uk is approximated by the projection of a random matrix over the same subspace. In particular, let R ∈ RN×d be a random (gaussian) matrix with centered i.i.d. entries, each having variance 1d . We can project R onto span{Uk} by multiplying each one of its columns by a projector H defined as\nH = U ( Ik 0 0 0 ) U>. (3)\nIt is then a simple consequence of the JohnshonLindenstrauss lemma that the rowsψ>i of matrix Ψ = HR can act as a replacement of the features used in spectral clustering, i.e., the rows φ>i of Φ = Uk.\nTheorem 2.1 (adapted from (Tremblay et al., 2016)). For every two nodes vi and vj the restricted isometry relation\n(1−ε)‖φi−φj‖2 ≤ ‖ψi−ψj‖2 ≤ (1+ε)‖φi−φj‖2 (4)\nholds with probability larger than 1 − n−β , as long as the dimension is d > 4+2βε2/2−ε3/3 log(n).\nWe note that, even though HR is also expensive to compute exactly, it can be easily approximated by applying the graph filter h(L) on each column of R, which entailsO(dc) sparse matrix-vector multiplications (each costing O(m)) using graph Chebychev polynomials (Shuman et al., 2011a; Hammond et al., 2011) or rational graph filters (Isufi et al., 2017; Loukas et al., 2015) (c relates to the quality of the\napproximation and is usually below 100). A more elaborate discussion on the approximation of HR can be found in the appendix.\nStep 2. Compressive k-means. The complexity is reduced further by computing the k-means step for only a subset of the nodes. The remaining cluster assignments are then inferred by solving a graph Tikhonov regularized interpolation problem involving k additional graph filtering operations, each with a cost linear in cm. To guarantee a good approximation, it is sufficient to sample O(k log(k)) nodes using variable density sampling (Puy et al., 2016). For simplicity, in the following, we present our theoretical results w.r.t. the non-compressed version of their algorithm. The proofs can be generalized using similar arguments as in (Tremblay et al., 2016)."
+  }, {
+    "heading": "3. The Approximation Quality of Static CSC",
+    "text": "Before delving to the dynamic setting, we refine the analysis of compressive spectral clustering. Our objective is to move from assertions about distance preservation currently known (see Thm. 2.1) to guarantees about the quality of the solution of CSC itself. Formally, let\nXΨ = arg min X∈X\n‖Ψ−XX>Ψ‖F (5)\nbe the clustering assignment obtained from using k-means with Ψ as features (CSC assignment), and define the CSC cost CΨ as\nCΨ = ‖Φ−XΨX>ΨΦ‖F . (6)\nThe question we ask is: how close is CΨ to the cost CΦ of the same problem, where the assignment has been computed using Φ as features, i.e., the SC cost corresponding to (1)? Note that, as in previous work (Boutsidis et al., 2015), we express the approximation quality in terms of the difference of clustering assignment costs and not of the distance between the assignments themselves. We are not aware of any analysis that would allow us to characterize (the perhaps more intuitive goal of) how well XΨ approximates XΦ, which is a combinatorial objective. Yet, our approach exhibits the benefit of not penalizing approximation algorithms that choose alternative assignments of the same or similar quality1.\nOur central theorem asserts that with high probability the assignments of SC and CSC have similar costs.\nTheorem 3.1. The SC cost CΦ and the CSC cost CΨ are related by\n1The k-means objective is a non convex objective and has multiple minima. For instance, any of the k! re-labelings of the optimal assignment are valid solutions with the same cost.\nCΦ ≤ CΨ ≤ CΦ + 2 √ k\nd ( √ k + ε), (7)\nwith probability at least 1− exp(−ε2/2).\nThis result emphasizes the importance of the number of random vectors d and directly links it to the distance with the optimal assignment for the spectral features. Indeed, one can see that the difference between the two costs vanishes when d is sufficiently large. Importantly, d ∝ k2 is sufficient to guarantee a small error."
+  }, {
+    "heading": "3.1. The approximation quality of CSC",
+    "text": "The first step in proving Thm. 3.1 is to establish the relation between CΦ and CΨ. The following lemma relates the two costs by an additive error term that depends on the feature’s differences ‖Ψ−ΦIk×dQ‖F when d ≥ k.Since Φ and Ψ have different sizes we introduced the multiplication by a unitary matrix Q. We will first show that any unitary Q can be picked in Lem. 3.1 and then derive the optimal Q, the one minimizing the additive term, in Thm. 3.2.\nLemma 3.1. For any unitary matrix Q ∈ Rd×d, the SC cost CΦ and the CSC cost CΨ are related by\nCΦ ≤ CΨ ≤ CΦ + 2‖Ψ−ΦIk×dQ‖F , (8)\nwhere, the matrix I`×m of size ` ×m above contains only ones on its diagonal and serves to resize matrices.\nBeing able to show that the additive term is small encompasses the result of Thm. 2.1, ensuring distance preservation. However, this statement is stronger than the previous one as our lemma is not necessarily true under distance preservation only.\nThe remaining of this section is devoted to bounding the Frobenius error ‖Ψ−ΦIk×dQ‖F between the features of SC and CSC. In order to prove this result, we will first express our Frobenius norm exclusively in terms of the singular values of the random matrix R and then in a second step we will study the distribution of these singular values.\nOur next result, which remarkably is an equality, reveals that the achieved error is exactly determined by how close a Gaussian matrix is to a unitary matrix.\nTheorem 3.2. There exists a d× d unitary matrix Q, such that\n‖Ψ−ΦIk×dQ‖F = ‖Σ− Ik×d‖F , (9)\nwhere Σ is the diagonal matrix holding the singular values of R′ = Ik×nU>R.\nBefore presenting the proof, let us observe that R′ is an i.i.d. Gaussian random matrix of size k × d and its entries have zero mean and the same variance as that of R. We use\nthis fact in the following to control the error by appropriately selecting the number of random vectors d.\nTo bound the feature error further, we will use the following result by Vershynin, whose proof is not reproduced.\nCorollary 3.1 (adapted from Cor. 5.35 (Vershynin, 2010)). Let N be an d × k matrix whose entries are independent standard normal random variables. Then for every ε, i ≥ 0, with probability at least 1− exp(−ε2/2) one has\nσi(N)− √ d ≤ √ k + ε, (10)\nwhere σi(N) is the ith singular value of N.\nExploiting this result, the following corollary of Thm. 3.2 reveals the relation of the feature error and the number of random vectors d.\nCorollary 3.2. There exists a d×d unitary matrix Q, such that, for every ε ≥ 0, one has\n‖Ψ−ΦIk×dQ‖F ≤ √ k\nd ( √ k + ε), (11)\nwith probability at least 1− exp(−ε2/2).\nFinally, Cor. 3.2 combined with Lem. 3.1 provide the direct proof of Thm. 3.1 that we introduced earlier.\nBefore proceeding, we would like to make some remarks about the tightness of the bound. First, guaranteeing that the feature error is small is a stronger condition than distance preservation (though necessary for a complete analysis of CSC). For this reason, the bound derived can be larger than that of Thm. 2.1. Nevertheless, we should stress it is tight: the main inequality in our analysis stems from bounding the k largest singular values of the random matrix by Vershynin’s tight bound of the maximal singular value."
+  }, {
+    "heading": "3.2. Practical aspects",
+    "text": "The study presented above assumes that H is defined as in eq. (3), namely that it is a projector on the subspace spanned by the first k eigenvectors of L. However, as discussed in the appendix, to be computationally efficient we choose to compute H by an application of a polynomial function h on L (Shuman et al., 2011a). More specifically, we select a polynomial that approximates the ideal low-pass response (Allen-Zhu and Li, 2016). As long as λk is known, the approximated projector h(L) can be designed to be very close to H: using the arguments of (Shuman et al., 2011b, Proposition 3) and (Laurent and Massart, 2000, Lemma 1) it is easy to prove that w.h.p. using h(L) instead of H does not add more than O(c−c √ n) error to CΨ, where c is the polynomial order (the proof is omitted due to space limitations).\nMoreover, we need to estimate λk accurately (the design of h involves finding a polynomial which takes the value 1 when the input is smaller than λk and 0 otherwise). Towards this goal, we refer the readers to (Di Napoli et al., 2016; Paratte and Martin, 2016) and their respective eigencount techniques that allow to approximate the filter in O(cm log((λk+1 − λk)−1)) operations."
+  }, {
+    "heading": "4. Compressive Clustering of Dynamic Graphs",
+    "text": "In this section, we consider the problem of spectral clustering a sequence of graphs. We focus on graphs Gt where t ∈ {1, . . . , τ}, composed of a static node set V and evolving edge sets Et. Identifying each assignment from scratch (using SC or CSC) is a computationally demanding task, as the complexity increases linearly with the number of time-steps. However, when consecutive graphs are “appropriately similar”, we should be able to cut on this cost by reusing information. We will utilize two alternative similarity measures:\nDefinition 4.1 (Measures of graph similarity). Two graphs Gt−1 and Gt are:\n• (ρ, k)-spectrally similar if the spaces spanned by their first k eigenvectors are almost aligned: ‖Ht − Ht−1‖F ≤ ρ.\n• ρ-edge similar if the edge-wise difference of their Laplacians is bounded: ‖Lt − Lt−1‖F ≤ ρ.\nBoth measures are relevant in the context of dynamic clustering. Two spectrally similar graphs might have different connectivity, but possess similar clustering assignments. On the other hand, assuming that two graphs are edge similar is a stronger condition that postulates fine-grained similarities between them. It is however more intuitive and computationally economical to ascertain (see Section 4.3)."
+  }, {
+    "heading": "4.1. Algorithm",
+    "text": "We now present an accelerated method for spectral clustering an evolving network. Without loss of generality, suppose that we need to compute the assignment for Gt while knowing already that of Gt−1 and possessing the features Ψt−1 used to compute it.\nComponent 1. We reuse a portion of features Ψt−1 to cluster Gt. Let p be a number between 0 and 0.5, and set q = 1 − p.2 Instead of recomputing Ψt from scratch running a new CSC routine, we construct a feature matrix Θt which consists of dq new features (corresponding to Gt)\n2Although in practice p can go up to 1, the analysis only considers the case when reused features are only from Gt−1 (and not from earlier graphs).\nAlgorithm 1 Dynamic CSC Input: (G1,G2, . . . ,Gτ ), p, d Output: (X1,X2, . . . ,Xτ )\n1: Determine λk and filter h1 for G1. 2: Find X1 for G1 using CSC with Ψ1 = h1(L1)R. 3: for t from 2 to τ do 4: Select dp features from Ψt−1 and call them Ψ (1) t . 5: Generate d(1−p) features Ψ(2)t by filtering as many random vectors by ht−1(Lt). 6: Test whether λk ∈ [λk(Lt), λk+1(Lt)] with eigencount and using Ψ(2)t . 7: if the test fails then 8: Determine λk for Gt using eigencount. 9: Update ht and recompute Ψ (2) t based on ht(Lt). 10: end if 11: Find assignment Xt by applying the compressive k-\nmeans to features Θt = [Ψ (1) t ,Ψ (2) t ].\n12: Set Ψt = Ψ (2) t . 13: end for\nand dp randomly selected features of Gt−1:\nΘt = [Ht−1Rdp, HtRdq] = Ψt−1S d dp + ΨtS d dp (12)\nAbove, we use the sub-identity matrix Sddp = Id×dpIdp×d and its complement Sddp = Id×d − Sddp. Component 2. An important part of the complexity of CSC stems from using the eigencount algorithm to estimate λk and construct the Chebyshev polynomials (step 1 of their algorithm). To avoid recomputing λk, we start by assuming that the estimated value for λk at t − 1 is a also good candidate for t and proceed to use the same polynomial in order to filter the qd new random vectors Rdq in Gt. Notice that the eigencount method requires exactly these new features to determine if λk was correctly estimated and thus to validate our assumption. If our assumption is invalid, i.e., the λk has changed from t − 1 to t, then we rerun the eigencount method from scratch as in (Di Napoli et al., 2016) but providing λk as an initial estimate. The final set of features generated in the eigencount now serves as Ψt. When the assumption is valid, we proceed as is.\nComplexity analysis. There are two steps where the complexity is reduced with respect to CSC. First, the optimization proposed for the determination of λk avoids computing steps of dichotomy for every graph. Spectrally similar graphs generally possess close spectrum and close values for λk. One could then expect to recompute λk only intermittently, in which cases he/she would also benefit from a reduced number of iterations due to a good initialization3. If S are the total number of eigencount steps gained,\n3Though this trend has been confirmed by our numerical experiments, a formal proof remains elusive.\nthe total gain is O(Scm). Second, since we reuse random features from one graph to the next, the total number of computed random vectors will necessarily be reduced compared to the use of τ independent CSC calls. The gain here is O(cmdp) per time-step.\nAll reductions applied through compression can also benefit to our dynamic method. Indeed, we theoretically showed that reusing features from the past can replace the creation of new random vectors. Thus, sampling the combination of old and new vectors can be applied exactly as defined in CSC. Then, the result of the sub-assignment can be interpolated also as defined in (Tremblay et al., 2016)."
+  }, {
+    "heading": "4.2. Analysis of dynamic CSC",
+    "text": "Similarly to the static case, our objective is to provide probabilistic guarantees about the approximation quality of the proposed method. Let\nXΘt = arg min X∈X\n‖Θt −XX>Θt‖F . (13)\nbe the clustering assignment obtained from k-means with Θt as features, and define the dynamic CSC cost CΘt as\nCΘt = ‖Φ−XΘtX>ΘtΦ‖F . (14)\nAs the following theorem claims, the graph evolution introduces an additional error term that is a function of the graph similarity (spectral- or edge- wise).\nTheorem 4.1. At time t, the dynamic CSC cost CΘt and the SC cost CΦt are related by\nCΦt ≤ CΘt ≤ CΦt + 2 √ k d ( √ k + ε) + (1 + δ)p γ, (15)\nwith probability at least 1− exp ( −ε 2\n2\n) − exp ( 2 log(n)− dp ( δ2\n4 − δ\n3\n6\n)) ,\nwhere 0 < δ ≤ 1. Above, γ depends only on the similarity of the graphs in question. If graphs Gt−1 and Gt are\n• (ρ, k)-spectrally similar, then γ = ρ, • ρ-edge similar, then γ = ( √\n2 ρ)/α, where α = min{λtk, λ (t−1) k+1 − λtk} is the Laplacian eigen-gap.\nProof. Let XΦt and XΘt be respectively the optimal SC and dCSC clustering assignments at time t, and denote E = Θt −ΦtIk×dQ. We have that,\nCΘt ≤ CΦt + 2‖Θt −ΦtIk×dQ‖F , (16)\nfollowing the exact same steps as in the proof of Lemma 3.1. By completing the matrices containing the filtering of both graphs, we can see that the error term can be\nrewritten as\n‖E‖F = ‖Ψt−1Sddp + ΨtSddp −ΦtIk×dQ‖F (17)\n= ‖(Ψt−1 −Ψt)Sddp + Ψt −ΦtIk×dQ‖F ≤ ‖(Ψt −Ψt−1)Sddp‖F + ‖Ψt −ΦtIk×dQ‖F .\nThe rightmost term of eq. (17) corresponds to the effects of random filtering and has been studied in depth in Thm. 3.2 and Cor. 3.2. The rest of the proof is devoted to studying the leftmost term.\nWe apply the Johnson-Lindenstrauss lemma (Johnson and Lindenstrauss, 1984) on the term of interest. Setting R′ = 1√pRId×dp, we have that\n‖(Ψt −Ψt−1)Sddp‖2F = ‖(Ht −Ht−1)RId×dp‖2F\n= p n∑ i=1 ‖R′> (Ht −Ht−1)>δi‖22.\nMatrix R′ = p−1/2RId×dp has n × dp Gaussian i.i.d. entries with zero-mean and variance 1/dp. It follows from the Johnson-Lindenstrauss lemma that ‖(Ψt −Ψt−1)Sddp‖2F ≤ p (1 + δ) n∑ i=1 ‖(Ht −Ht−1)>δi‖22\n≤ p (1 + δ)‖Ht −Ht−1‖2F ,\nwith probability at least 1 − n−β and for dp ≥ 4+2β δ2( 12− δ 3 ) log(n). Coupling the two together we obtain a probability at least equal to 1−exp(2 log(n)−dpδ 2\n2 ( 1 2− δ 3 )),\nwhere δ can be set between 0 and 1. A loose bound gives 2p‖H(2)−H(1)‖2F with probability 1−exp(2 log(n)− dp 12 ).\nThis concludes the part of the proof concerning spectrally similar graphs. The result for edge-wise similarity follows from Cor. 5.1 found in the appendix."
+  }, {
+    "heading": "4.3. Controlling the approximation error",
+    "text": "Theorem 4.1 can be used to adaptively determine p at each time-step with the objective of attaining a bounded error for the term (1+δ)pρ. For instance, if the graph did not evolve much between the last two time-steps, more signals should be reused than otherwise. For that, one needs to be able to approximate the graph similarity, without computing the spectral basis.\nThis can be quite easily achieved for the edge similarity measure, by simply computing the Frobenius norm of the edge weight difference between the two graph Laplacian matrices. As we show next, the spectral similarity measure ρ can also be estimated as follows:\nρ̂ := ‖HtR−Ht−1R‖F (18)\nAlgorithm 2 Dynamic CSC with adaptive p Input: (G1,G2, . . . ,Gτ ), d, k, δ, Output: (X1,X2, . . . ,Xτ )\n1: Determine λk and filter h1 for G1. 2: Find X1 for G1 using CSC with Ψ1 = h1(L1)R. 3: for t from 2 to τ do 4: Split features Ψt−1 = [Ψ (1) t−1,Ψ (2) t−1] s.t. Ψ (1) t−1 con-\ntains d2 vectors. Let R (1) be random vectors used to\ngenerate Ψ(1)t−1. 5: Set ht = ht−1 and compute Ψ (1) t = ht(Lt)R\n(1). 6: Test whether λk ∈ [λk(Lt), λk+1(Lt)] with eigencount and using Ψ(1)t . 7: if the test fails then 8: Determine λk for Gt using eigencount. 9: Update ht and recompute Ψ (1) t = ht(Lt)R\n(1). 10: end if 11: Set p = min ( 1 2 , ε2 1+δ‖Ψ (1) t −Ψ (1) t−1‖ −1 F ) . 12: Select dp features from Ψ(2)t−1 and call them Ψ (2) t . 13: Generate d( 12 − p) features Ψ (3) t = ht(Lt)R\n(3), where R(3) are new random vectors.\n14: Find assignment Xt by applying the compressive kmeans to features Θt = [Ψ (1) t ,Ψ (2) t ,Ψ (3) t ]. 15: Set Ψt = [Ψ (1) t ,Ψ (3) t ]. 16: end for\nTo motivate this, observe that ρ̃2 is an unbiased estimator:\nE [ ρ̂2 ] = E [ tr ( R> (Ht −Ht−1)> (Ht −Ht−1) R )] = tr ( (Ht −Ht−1)E [ RR> ] (Ht −Ht−1)>\n) = tr ( (Ht −Ht−1) (Ht −Ht−1)> ) = ρ2, (19)\nwhich implies that ρ̃ approaches ρ as d grows.\nWith this in place, we proceed to modify Alg. 4.1 so as to include the estimation of ρ and the adaptive estimation of p. The detailed procedure is summarized in Alg. 2, focusing on the case of spectral similarity (i.e., γ = ρ). Since Thm. 4.1 proved an additive error of at most (1 + δ)pρ, we fix an upper bound on the error that we tolerate ε2 and δ that controls the probability of success, and set p = ε2(1+δ)ρ̂ .\nThough the adaptive algorithm features the same complexity, it is slightly more involved than Alg. 4.1. The main difference is that ρ is estimated based on features Ψ(1)t and Ψ(1)t−1 that correspond to the same random vectors R(1) ∈ Rn×d filtered on two consecutive graphs (i.e., Gt and Gt−1). Features Ψ(1)t are combined with the pd reused features Ψ(2)t and the d(1/2−p) new features Ψ (3) t to identify assignment Xt."
+  }, {
+    "heading": "5. Experiments",
+    "text": "This section complements the theoretical results described in Section 4. All our experiments are designed using the GSPBox (Perraudin et al., 2014)."
+  }, {
+    "heading": "5.1. Experimental setup",
+    "text": "As is common practice, we use the Stochastic Block Model (SBM) to evaluate the efficiency of our spectral clustering method (e.g., Görke et al., 2013; Tremblay et al., 2016). In SBM, data are clustered in k classes and the n nodes are connected at random with edge-wise probability that depends if the two extremities belong to the same cluster (q1) or not (q2 with q2 q1). In the following, we qualify the SBM parameters in terms of the nodes’ average degree δ̄ and the ratio q2/q1 that captures the graph clusterability (Decelle et al., 2011). Following the recommendations of the former work, we set q2q1 = δ̄− √ δ̄ 2(δ̄+ √ δ̄(k−1))\nto construct non-trivially clusterable graphs.\nWe compare the quality and complexity of our dynamic method (dCSC) against the algorithm of Tremblay et al. (CSC) and an optimized spectral clustering (Ng et al., 2002) that uses the Lanczos algorithm to compute the first k-eigenvectors (this is significantly faster than doing the entire eigendecomposition while introducing negligible error). We use relative error measures to compare the achieved clustering accuracy of CSC and dCSC with that of SC (i.e., |CA − CSC |/CSC , where CA is the cost of algorithm A and CSC the cost of SC). We considered two cost measures: the k-means cost (eq. (6)) and the normalized cut (ncut) cost. Since the obtained results were almost identical, we only report the results for ncut in the rest of this section (except for Table 1). After all, the k-means cost of the spectral features is a relaxation of the ncut cost.\nOur analysis highlights the importance of the spectral similarity between consecutive graphs. It is thus important to define how the graph changes between consecutive steps. Starting from a SBM, we perform two types of perturbations: edge redrawing and node reassignment. Edge redrawing consists of removing some edges at random from the original graph and then adding the same number following the probabilities defined by the graph model (using q1 and q2). In node reassignment, one selects nodes, removes all edges that share at least one end with the nodes previously picked, reassigns those nodes to any other class at random and reconnects these nodes with new edges using again the same probabilities q1 and q2. Both perturbations are combined in the synthetic graph that we are studying. We replicate the construction of 100 different SBM with the same parameters, then we alter each with 1% of node reassignment and 1% of edges modifications. The modified graph is used for the evaluation of all methods."
+  }, {
+    "heading": "5.2. When does reusing features pay off?",
+    "text": "We first study the error-complexity trade-off achieved by the compressive clustering methods as a function of d. We set n = 15000, k = 25, δ̄ = 60. Each point in Figure 1 corresponds to a single graph being clustered. For each of the two methods, there are 1600 points resulting from 100 repetitions when the number of features is d ∈ [6, 200] with logarithmic increments. To comprehend the results, it is helpful to consider each of the six sextants in the figure separately. The top-middle sextant shows that when d is large enough (left side), the relative error of CSC and dCSC is close to zero. Increasing d reduces the error but increases the time required for the computation, following the elbow from right to left. The top-right and top-left sextants occur because Lloyd’s algorithm (despite being rerun 100 times) sometimes fails to retrieve the optimal solution to the k-means problem: the top-left (resp. right) sextant corresponds to cases when Lloyd’s algorithm produces a suboptimal assignment for SC (resp. CSC/dCSC). The bot-\ntom three sextants correspond to cases when dCSC did not have to recompute λk (step 7 of Alg. 4.1). In these cases, dCSC is up to 2× faster than CSC. Though the frequency of this phenomenon depends on many factors, such as the size of the eigengap and the spectral similarity of consecutive graphs, we report that in our experiment dCSC could avoid recomputing λk, roughly 50% of the times.\nIn summary, reusing features produces a clear computational benefit with a reasonable loss of accuracy. Most benefit comes from λk estimation (component 2) that can be often avoided when consecutive graphs are spectrally similar, especially for well-clusterable graphs (where the gap λk+1 − λk is large). To quantify the benefit of reusing a portion of features (component 1), we compare here the execution time of CSC and dCSC, excluding the time for λk estimation. Increasing p by 0.25 saved 0.97 and 9.98 seconds respectively when n = 10′000 and 50′000—the later corresponds to a speedup of 1.29x w.r.t. feature estimation."
+  }, {
+    "heading": "5.3. Comparison with state-of-the-art",
+    "text": "To evaluate the efficiency of dCSC, we varied the number of nodes n (while fixing k = 25, d = 50, δ̄ = 60). Figure 2 shows the results. As expected, the difference of complexity between spectral clustering using the partial eigen-decomposition and dCSC is clearly visible. Increasing p from 0.25 to 0.5 incurs a non-negligible computational benefit for larger n (14.5 seconds when n =30’000, corresponding to a 12% improvement). We also report that the achieved relative error for both methods remained consistently below 0.1% and did not grow as n increased. We do not present values of n above 30’000 as, for such cases, SC took too long to complete. For example, with 64Gb of RAM, SC took one hour to process the graph and return an assignment when n = 50′000. For the same graph, dCSC run in 6.5 minutes and resulted in a similar k-means cost.\nTable 1 further compares our proposed method to SC, CSC and IASC, the state-of-the-art method for spectral clustering suitable for dynamic graphs (Dhanjal et al., 2014). Note that there is a long list of heuristic-based clustering algo-\nrithms optimized for speed (Dhillon et al., 2007; Karypis and Kumar, 1998), but we only consider here algorithms that provably approximate spectral clustering. We can see that dCSC achieves a significant improvement in timing when n is large enough. Note that IASC results were obtained by running the optimized and parallel implementation kindly provided by the original authors4. Our hypothesis is that the poor complexity of IASC is attributed to the fact that, in our tests (and as is frequently the case) the eigengap was not particularly large."
+  }, {
+    "heading": "6. Conclusion and Future Work",
+    "text": "The major contribution of this paper has been the presentation of a clustering algorithm for dynamic graphs that achieves solution quality provably approximating that of Spectral Clustering. Numerical experiments suggest that our method is faster than previous approximation methods.\nRecent advances in spectral clustering, including this work, can provide a huge complexity gain. Nevertheless, practitioners must pay attention because these works require a proper setup. In particular, n must be large for the approximated method to make sense. Moreover, when working with dynamic networks, the spectral similarity should remain bounded for our algorithm to perform best.\nWe highlight in this paper two open directions of research. It appears clearly in the experiments that the majority of the remaining complexity lies in the estimation of H and more precisely the capability to reuse the previous determination of λk. Finally, expressing the approximation error in function of the assignment instead of ncut could produce a more insightful explaination of the impact of the various factors."
+  }, {
+    "heading": "Acknowledgements",
+    "text": "We would like to acknowledge the reviewers for their valuable comments. Their suggestions helped us clarify and improve our work.\n4Available at https://github.com/charanpald/sandbox"
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Faster principal component regression via optimal polynomial approximation to sgn (x). arXiv preprint arXiv:1608.04773",
+    "authors": ["Z. Allen-Zhu", "Y. Li"],
+    "year": 2016
+  }, {
+    "title": "Spectral clustering via the power method-provably",
+    "authors": ["C. Boutsidis", "A. Gittens", "P. Kambadur"],
+    "venue": "In Proceedings of the 24th International Conference on Machine Learning (ICML)",
+    "year": 2015
+  }, {
+    "title": "Evolutionary clustering",
+    "authors": ["D. Chakrabarti", "R. Kumar", "A. Tomkins"],
+    "venue": "In Proceedings of the 12th ACM SIGKDD international conference on Knowledge discovery and data mining,",
+    "year": 2006
+  }, {
+    "title": "Evolutionary spectral clustering by incorporating temporal smoothness",
+    "authors": ["Y. Chi", "X. Song", "D. Zhou", "K. Hino", "B.L. Tseng"],
+    "venue": "In Proceedings of the 13th ACM SIGKDD international conference on Knowledge discovery and data mining,",
+    "year": 2007
+  }, {
+    "title": "Dimensionality reduction for k-means clustering and low rank approximation",
+    "authors": ["M.B. Cohen", "S. Elder", "C. Musco", "M. Persu"],
+    "venue": "In Proceedings of the Forty-Seventh Annual ACM on Symposium on Theory of Computing,",
+    "year": 2015
+  }, {
+    "title": "Asymptotic analysis of the stochastic block model for modular networks and its algorithmic applications",
+    "authors": ["A. Decelle", "F. Krzakala", "C. Moore", "L. Zdeborová"],
+    "venue": "Physical Review E,",
+    "year": 2011
+  }, {
+    "title": "Efficient eigen-updating for spectral graph clustering",
+    "authors": ["C. Dhanjal", "R. Gaudel", "S. Clémençon"],
+    "year": 2014
+  }, {
+    "title": "Weighted graph cuts without eigenvectors a multilevel approach",
+    "authors": ["I.S. Dhillon", "Y. Guan", "B. Kulis"],
+    "venue": "IEEE transactions on pattern analysis and machine intelligence,",
+    "year": 2007
+  }, {
+    "title": "Efficient estimation of eigenvalue counts in an interval",
+    "authors": ["E. Di Napoli", "E. Polizzi", "Y. Saad"],
+    "year": 2016
+  }, {
+    "title": "Community detection in graphs",
+    "authors": ["S. Fortunato"],
+    "venue": "Physics reports,",
+    "year": 2010
+  }, {
+    "title": "Spectral grouping using the nystrom method",
+    "authors": ["C. Fowlkes", "S. Belongie", "F. Chung", "J. Malik"],
+    "venue": "IEEE transactions on pattern analysis and machine intelligence,",
+    "year": 2004
+  }, {
+    "title": "Detecting the community structure and activity patterns of temporal networks: a non-negative tensor factorization approach",
+    "authors": ["L. Gauvin", "A. Panisson", "C. Cattuto"],
+    "venue": "PloS one,",
+    "year": 2014
+  }, {
+    "title": "Approximate spectral clustering via randomized sketching",
+    "authors": ["A. Gittens", "P. Kambadur", "C. Boutsidis"],
+    "venue": "Ebay/IBM Research Technical Report",
+    "year": 2013
+  }, {
+    "title": "Dynamic graph clustering combining modularity and smoothness",
+    "authors": ["R. Görke", "P. Maillard", "A. Schumm", "C. Staudt", "D. Wagner"],
+    "venue": "Journal of Experimental Algorithmics (JEA),",
+    "year": 2013
+  }, {
+    "title": "Wavelets on graphs via spectral graph theory",
+    "authors": ["D.K. Hammond", "P. Vandergheynst", "R. Gribonval"],
+    "venue": "Applied and Computational Harmonic Analysis,",
+    "year": 2011
+  }, {
+    "title": "Autoregressive moving average graph filtering",
+    "authors": ["E. Isufi", "A. Loukas", "A. Simonetto", "G. Leus"],
+    "venue": "IEEE Transactions on Signal Processing,",
+    "year": 2017
+  }, {
+    "title": "Extensions of lipschitz mappings into a hilbert space",
+    "authors": ["W.B. Johnson", "J. Lindenstrauss"],
+    "venue": "Contemporary mathematics,",
+    "year": 1984
+  }, {
+    "title": "A fast and high quality multilevel scheme for partitioning irregular graphs",
+    "authors": ["G. Karypis", "V. Kumar"],
+    "venue": "SIAM Journal on scientific Computing,",
+    "year": 1998
+  }, {
+    "title": "Adaptive estimation of a quadratic functional by model selection",
+    "authors": ["B. Laurent", "P. Massart"],
+    "venue": "Annals of Statistics,",
+    "year": 2000
+  }, {
+    "title": "Time and space efficient spectral clustering via column sampling",
+    "authors": ["M. Li", "Lian", "X.-C", "J.T. Kwok", "Lu", "B.-L"],
+    "venue": "In Computer Vision and Pattern Recognition (CVPR),",
+    "year": 2011
+  }, {
+    "title": "Distributed autoregressive moving average graph filters",
+    "authors": ["A. Loukas", "A. Simonetto", "G. Leus"],
+    "venue": "Signal Processing Letters,",
+    "year": 2015
+  }, {
+    "title": "Spectrally approximating large graphs with smaller graphs",
+    "authors": ["A. Loukas", "P. Vandergheynst"],
+    "venue": "In Interenational Conference on Machine Learning (ICML)",
+    "year": 2018
+  }, {
+    "title": "On spectral clustering: Analysis and an algorithm. Advances in neural information processing systems, 2:849–856",
+    "authors": ["A.Y. Ng", "M.I. Jordan", "Y Weiss"],
+    "year": 2002
+  }, {
+    "title": "Incremental spectral clustering with application to monitoring of evolving blog communities",
+    "authors": ["H. Ning", "W. Xu", "Y. Chi", "Y. Gong", "T. Huang"],
+    "venue": "In Proceedings of the 2007 SIAM International Conference on Data Mining,",
+    "year": 2007
+  }, {
+    "title": "Fast eigenspace approximation using random signals. arXiv preprint arXiv:1611.00938",
+    "authors": ["J. Paratte", "L. Martin"],
+    "year": 2016
+  }, {
+    "title": "GSPBOX: A toolbox for signal processing on graphs. ArXiv e-prints",
+    "authors": ["N. Perraudin", "J. Paratte", "D. Shuman", "L. Martin", "V. Kalofolias", "P. Vandergheynst", "D.K. Hammond"],
+    "year": 2014
+  }, {
+    "title": "Random sampling of bandlimited signals on",
+    "authors": ["G. Puy", "N. Tremblay", "R. Gribonval", "P. Vandergheynst"],
+    "year": 2016
+  }, {
+    "title": "Spectral clustering via graph filtering: Consistency on the highdimensional stochastic block model",
+    "authors": ["M.S. Pydi", "A. Dukkipati"],
+    "venue": "arXiv preprint arXiv:1702.03522",
+    "year": 2017
+  }, {
+    "title": "Compressive spectral embedding: sidestepping the svd",
+    "authors": ["D. Ramasamy", "U. Madhow"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2015
+  }, {
+    "title": "Normalized cuts and image segmentation",
+    "authors": ["J. Shi", "J. Malik"],
+    "venue": "IEEE Transactions on pattern analysis and machine intelligence,",
+    "year": 2000
+  }, {
+    "title": "Chebyshev polynomial approximation for distributed signal processing",
+    "authors": ["D.I. Shuman", "P. Vandergheynst", "P. Frossard"],
+    "venue": "In 2011 International Conference on Distributed Computing in Sensor Systems and Workshops (DCOSS),",
+    "year": 2011
+  }, {
+    "title": "Distributed signal processing via chebyshev polynomial approximation",
+    "authors": ["D.I. Shuman", "P. Vandergheynst", "P. Frossard"],
+    "venue": "arXiv preprint arXiv:1111.5239",
+    "year": 2011
+  }, {
+    "title": "Compressive Spectral Clustering",
+    "authors": ["N.T. Tremblay", "G. Puy", "R. Gribonval", "P. Vandergheynst"],
+    "venue": "In 33rd International Conference on Machine Learning,",
+    "year": 2016
+  }, {
+    "title": "Detecting cluster with temporal information in sparse dynamic graph. arXiv preprint arXiv:1605.08074",
+    "authors": ["K. Tu", "B. Ribeiro", "A. Swami", "D. Towsley"],
+    "year": 2016
+  }, {
+    "title": "Introduction to the non-asymptotic analysis of random matrices. arXiv preprint arXiv:1011.3027",
+    "authors": ["R. Vershynin"],
+    "year": 2010
+  }, {
+    "title": "A tutorial on spectral clustering",
+    "authors": ["U. Von Luxburg"],
+    "venue": "Statistics and computing,",
+    "year": 2007
+  }],
+  "id": "SP:302c4de3de2bd42eeb9b5c83a801af48ae498c48",
+  "authors": [{
+    "name": "Lionel Martin",
+    "affiliations": []
+  }, {
+    "name": "Andreas Loukas",
+    "affiliations": []
+  }, {
+    "name": "Pierre Vandergheynst",
+    "affiliations": []
+  }],
+  "abstractText": "Spectral clustering is a widely studied problem, yet its complexity is prohibitive for dynamic graphs of even modest size. We claim that it is possible to reuse information of past cluster assignments to expedite computation. Our approach builds on a recent idea of sidestepping the main bottleneck of spectral clustering, i.e., computing the graph eigenvectors, by a polynomialbased randomized sketching technique. We show that the proposed algorithm achieves clustering assignments with quality approximating that of spectral clustering and that it can yield significant complexity benefits when the graph dynamics are appropriately bounded. In our experiments, our method clusters 30k node graphs 3.9× faster in average and deviates from the correct assignment by less than 0.1%.",
+  "title": "Fast Approximate Spectral Clustering for Dynamic Networks"
+}

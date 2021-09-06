@@ -1,0 +1,227 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "In clinical medicine, prognosis refers to the risk of future health outcomes in patients with given features. Prognostic research aims at building actionable predictive models that can inform clinicians about future course of patients’\n1University of California, Los Angeles, USA 2University of Oxford, Oxford, UK 3Alan Turing Institute, London, UK. Correspondence to: Ahmed M. Alaa <ahmedmalaa@ucla.edu>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\nclinical conditions in order to guide screening and therapeutic decisions. With the recent abundance of data linkages, electronic health records, and bio-repositories, clinical researchers have become aware that the value conferred by big, heterogeneous clinical data can only be realized with prognostic models based on flexible machine learning (ML) approaches. There is, however, a concerning gap between the potential and actual utilization of ML in prognostic research; the reason being that clinicians with no expertise in data science find it hard to manually design and tune ML pipelines (Luo et al., 2017).\nTo fill this gap, we developed AUTOPROGNOSIS, an automated ML (AutoML) framework tailored for clinical prognostic modeling. AUTOPROGNOSIS takes as an input data from a patient cohort, and uses such data to automatically configure ML pipelines. Every ML pipeline comprises all stages of prognostic modeling: missing data imputation, feature preprocessing, prediction, and calibration. The system handles different types of clinical data, including longitudinal and survival (time-to-event) data, and automatically explains its predictions to the clinicians via an “interpreter” module which outputs clinically interpretable associations between patients’ features and predicted risk strata. An overview of the system is provided in Figure 1.\nThe core component of AUTOPROGNOSIS is an algorithm for configuring ML pipelines using Bayesian optimization (BO) (Snoek et al., 2012). Our BO algorithm models the pipelines’ performances as a black-box function, the input to which is a “pipeline configuration”, i.e. a selection of algorithms and hyperparameter settings, and the output of which is the performance (predictive accuracy) achieved by such a configuration. We implement BO with a Gaussian process (GP) prior on the black-box function. To deal with the high-dimensionality of the pipeline configuration space, we capitalize on the fact that for a given dataset, the performance of one ML algorithm may not be correlated with that of another algorithm. For instance, it may be the case that the observed empirical performance of logistic regression on a given dataset does not tell us much information about how a neural network would perform on the same dataset. In such a case, both algorithms should not share the same GP prior, but should rather be\nmodeled independently. Our BO learns such a decomposition of algorithms from data in order to break down the high-dimensional optimization problem into a set of lowerdimensional sub-problems. We model the decomposition of algorithms via an additive kernel with a Dirichlet prior on its structure, and learn the decomposition from data in concurrence with the BO iterations. We also propose a batched (parallelized) version of the BO procedure, along with a computationally efficient algorithm for maximizing the BO acquisition function.\nAUTOPROGNOSIS follows a principled Bayesian approach in all of its components. The system implements post-hoc construction of pipeline ensembles via Bayesian model averaging, and implements a meta-learning algorithm that utilizes data from external cohorts of “similar” patients using an empirical Bayes method. In order to resolve the tension between accuracy and interpretability, which is crucial for clinical decision-making (Cabitza et al., 2017), the system presents the clinicians with a rule-based approximation for the learned ML pipeline by mining for logical associations between patients’ features and the model’s predicted risk strata using a Bayesian associative classifier (Agrawal et al., 1993; Kruschke, 2008).\nWe conclude the paper by conducting a set of experiments on multiple patient cohorts representing various aspects of cardiovascular patient care, and show that prognostic models learned by AUTOPROGNOSIS outperform widely used clinical risk scores and existing AutoML frameworks.\nRelated work: To the best of our knowledge, none of the existing AutoML frameworks, such as AUTO-WEKA (Kotthoff et al., 2016), AUTO-SKLEARN (Feurer et al., 2015), and TPOT (Olson & Moore, 2016) use principled GP-based BO to configure ML pipelines. All of the existing frameworks model the sparsity of the pipelines’ hyperparameter space via frequentist tree-based structures. Both AUTO-WEKA and AUTO-SKLEARN use BO, but through tree-based heuristics, such as random forest models and tree Parzen estimators,\nwhereas TPOT uses a tree-based genetic programming algorithm. Previous works have refrained from using principled GP-based BO because of its statistical and computational complexity in high-dimensional hyperparameter spaces. Our algorithm makes principled, high-dimensional GP-based BO possible by learning a sparse additive kernel decomposition for the GP prior. This approach confers many advantages as it captures the uncertainty about the sparsity structure of the GP prior, and allows for principled approaches for (Bayesian) meta-learning and ensemble construction that are organically connected to the BO procedure. In Section 5, we compare the performance of AUTOPROGNOSIS with that of AUTO-WEKA, AUTO-SKLEARN, and TPOT, demonstrating the superiority of our algorithm.\nVarious previous works have addressed the problem of high-dimensional GP-based BO. (Wang et al., 2013) identifies a low-dimensional effective subspace for the black-box function via random embedding. However, in the AutoML setup, this approach cannot incorporate our prior knowledge about dependencies between the different hyperparameters (we know the sets of hyperparameters that are “activated” upon selecting an algorithm (Hutter et al., 2011)). This prior knowledge was captured by the Arc-kernel proposed in (Swersky et al., 2014), and similarly in (Jenatton et al., 2017), where a BO algorithm for domains with treestructured dependencies was proposed. Unfortunately, both methods require full prior knowledge of the dependencies between the hyperparameters, and hence cannot be used when jointly configuring hyperparameters across multiple algorithms, since the correlations of the performances of different algorithms are not known a priori. (Bergstra et al., 2011) proposed a naı̈ve approach that defines an independent GP for every set of hyperparameters that belong to the same algorithm. Since it does not share any information between the different algorithms, this approach would require trying all combinations of algorithms in a pipeline exhaustively. (In our system, there are 4,800 possible pipelines.) Our model solves the problems above via a data-driven kernel decomposition, through which only relevant groups of hyperparameters share a common GP prior, thereby balancing the trade-off between “information sharing” among hyperparameters and statistical efficiency."
+  }, {
+    "heading": "2. AUTOPROGNOSIS: A Practical System for Automated Clinical Prognostic Modeling",
+    "text": "Consider a dataset D = {(xi, yi)}ni=1 for a cohort of n patients, with xi being patient i’s features, and yi being the patient’s clinical endpoint. AUTOPROGNOSIS takes D as an input, and outputs an automatically configured prognostic model which predicts the patients’ risks, along with “explanations” for the predicted risk strata. This Section provides an overview of the components of AUTOPROGNOSIS;\na schematic depiction of the system is shown in Figure 2.\nThe core component of AUTOPROGNOSIS is an algorithm that automatically configures ML pipelines, where every pipeline comprises algorithms for missing data imputation ( ), feature preprocessing (♣), prediction (•), and calibration (⋆). Table 1 lists the baseline algorithms adopted by the system in all the stages of a pipeline. The imputation and calibration stages are particularly important for clinical prognostic modeling (Blaha, 2016), and are not supported in existing AutoML frameworks. The total number of hyperparameters in AUTOPROGNOSIS is 106, which is less than those of AUTO-WEKA (786) and AUTO-SKLEARN (110). The pipeline configuration algorithm uses Bayesian optimization to estimate the performance of different pipeline configurations in a scalable fashion by learning a structured kernel decomposition that identifies algorithms with correlated performance. Details of the Bayesian optimization algorithm are provided in Sections 3 and 5.\nIn order to cope with the diverse nature of clinical data and health outcomes, AUTOPROGNOSIS pipelines are enriched with three modes of operation: (a) classification mode, (b) temporal mode, and (c) survival mode. The classification mode handles datasets with binary clinical outcomes (Yoon et al., 2017). In this mode, the baseline predictive models include all algorithms in the scikit-learn library (Pedregosa et al., 2011), in addition to other powerful algorithms, such as XGBoost (Chen & Guestrin, 2016). The temporal mode handles longitudinal and time series data (Alaa et al., 2017) by applying the classification algorithms above on data residing in a sliding window within the time series, which we parametrize by the sequence time (Hripcsak et al., 2015). The survival mode handles time-to-event data, and involves all the classification algorithms above, in addition to survival models such as Cox proportional hazards model and survival forests (Ishwaran et al., 2008), and models for multiple competing risks (Fine & Gray, 1999).\nThe meta-learning module is a pre-processing step that is used to warmstart BO using data from external cohorts,\nwhereas the ensemble construction and interpreter modules post-process the BO outputs. All of the three module run with a relatively low computational burden. Details of the three modules are provided in Sections 4 and 5."
+  }, {
+    "heading": "3. Pipeline Configuration via Bayesian Optimization with Structured Kernels",
+    "text": "Let (Ad,Af ,Ap,Ac) be the sets of all missing data imputation, feature processing, prediction, and calibration algorithms considered in AUTOPROGNOSIS (Table 1), respectively. A pipeline P is a tuple of the form: P = (Ad, Af , Ap, Ac) where Av ∈ Av, ∀v ∈ {d, f, p, c}. The space of all possible pipelines is given by P = Ad ×Af ×Ap ×Ac. Thus, a pipeline is a selection of algorithms from the elements of Table 1. An exemplary pipeline can be specified as follows: P = {MICE,PCA,Random Forest, Sigmoid}. The total number of pipelines in AUTOPROGNOSIS is |P| = 4, 800.\nThe specification of a pipeline configuration is completed by determining the hyperparameters of its constituting algorithms. The space of hyperparameter configurations for a pipeline is Θ = Θd×Θf ×Θp×Θc, where Θv = ∪aΘav , for v ∈ {d, f, p, c}, with Θav being the space of hyperparameters associated with the ath algorithm in Av. Thus, a pipeline configuration Pθ ∈ PΘ is a selection of algorithms P ∈ P , and hyperparameter settings θ ∈ Θ; PΘ is the space of all possible pipeline configurations."
+  }, {
+    "heading": "3.1. The Pipeline Selection & Configuration Problem",
+    "text": "The main goal of AUTOPROGNOSIS is to identify the best pipeline configuration P ∗θ∗ ∈ PΘ for a given patient cohort D via J-fold cross-validation as follows:\nP ∗θ∗ ∈ argmaxPθ∈PΘ 1J ∑J i=1 L(Pθ;D (i) train,D (i) valid), (1)\nwhere L is a given accuracy metric (AUC-ROC, c-index, etc), D(i)train and D (i) valid are training and validation splits of D\nin the ith fold. The optimization problem in (1) is dubbed the Pipeline Selection and Configuration Problem (PSCP). The PSCP can be thought of as a generalization for the combined algorithm selection and hyperparameter optimization (CASH) problem in (Feurer et al., 2015; Kotthoff et al., 2016), which maximizes an objective with respect to selections of single algorithms from the set Ap, rather than selections of full-fledged pipelines from PΘ."
+  }, {
+    "heading": "3.2. Solving the PSCP via Bayesian Optimization",
+    "text": "The objective in (1) has no analytic form, and hence we treat the PSCP as a black-box optimization problem. In particular, we assume that 1\nJ ∑J i=1 L(Pθ;D (i) train,D (i) valid) is a\nnoisy version of a black-box function f : Λ → R, were Λ = Θ× P, and use BO to search for the pipeline configuration P ∗θ∗ that maximizes the black-box function f(.) (Snoek et al., 2012). The BO algorithm specifies a Gaussian process (GP) prior on f(.) as follows:\nf ∼ GP(µ(Λ), k(Λ,Λ′)), (2)\nwhere µ(Λ) is the mean function, encoding the expected performance of different pipeline, and k(Λ,Λ′) is the covariance kernel (Rasmussen & Williams, 2006), encoding the similarity between the different pipelines."
+  }, {
+    "heading": "3.3. Bayesian Optimization via Structured Kernels",
+    "text": "The function f is defined over the D-dimensional space Λ, where D = dim(Λ) is given by\nD = dim(P) + ∑ v∈{d,f,p,c} ∑ a∈Avdim(Θ a v). (3)\nIn AUTOPROGNOSIS, the domain Λ is high-dimensional, with D = 106. (The dimensionality of Λ can be calculated by summing up the number of pipeline stages and the number of hyperparameters in Table 1.) High-dimensionality renders standard GP-based BO infeasible as both the sample complexity of nonparametric estimation and the computational complexity of maximizing the acquisition function are exponential in D (Györfi et al., 2006; Kandasamy\net al., 2015). For this reason, existing AutoML frameworks have refrained from using GP priors, and relied instead on scalable tree-based heuristics (Feurer et al., 2015; Kotthoff et al., 2016). Despite its superior performance, recent empirical findings have shown that plain-vanilla GP-based BO is feasible only for problems with D ≤ 10 (Wang et al., 2013). Thus, the deployment of GP-based BO has been limited to hyperparameter optimization for single, predefined ML models via tools such as Google’s Visier and HyperTune (Golovin et al., 2017). AUTOPROGNOSIS overcomes this challenge by leveraging the structure of the PSCP problem as we show in what follows."
+  }, {
+    "heading": "3.3.1. THE STRUCTURE OF THE PSCP PROBLEM",
+    "text": "The key idea of our BO algorithm is that for a given dataset, the performance of a given group of algorithms may not be informative of the performance of another group of algorithms. Since the kernel k(Λ,Λ′) encodes the correlations between the performances of the different pipeline configurations, the underlying “informativeness” structure that relates the different hyperparameters can be expressed via the following sparse additive kernel decomposition:\nk(Λ,Λ′) = ∑M\nm=1km(Λ (m),Λ′ (m) ), (4)\nwhere Λ(m) ∈ Λ(m), ∀m ∈ {1, . . .,M}, with {Λ(m)}m being a set of disjoint subspaces of Λ. (That is, ∪mΛ(m) = Λ, and Λ(m) ∩ Λ(m\n′) = ∅.) The subspaces are assigned mutually exclusive subsets of the dimensions of Λ, so that∑\nmdim(Λ (m)) = D. The structure of the kernel in (4) is unknown a priori, and needs to be learned from data. The kernel decomposition breaks down f as follows:\nf(Λ) = ∑M\nm=1fm(Λ (m)). (5)\nThe additively sparse structure in (4) gives rise to a statistically efficient BO procedure. That is, if f is γ-smooth, then our additive kernels reduce sample complexity from O(n −γ 2γ+D ) to O(n −γ 2γ+Dm ), where Dm is the maximum number of dimensions in any subspace (Raskutti et al.,\n2009; Yang et al., 2015). (Similar improvements hold for the cumulative regret (Kandasamy et al., 2015).)\nEach subspace Λ(m) ⊂ Λ contains the hyperparameters of algorithms with correlated performances, whereas algorithms residing in two different subspaces Λ(m) and Λ(m ′) have uncorrelated performances. Since a hyperparameter in Θ is only relevant to f(.) when the corresponding algorithm in P is selected (Hutter et al., 2009), then the decomposition {Λ(m)}m must ensure that all the hyperparameters of the same algorithm are bundled together in the same subspace. This a priori knowledge about the “conditional relevance” of the dimensions of Λ makes it easier to learn the kernel decomposition from data. Figure 3 provides an illustration for an exemplary subspace decomposition for the hyperparameters of a set of prediction, feature processing and imputation algorithms. Since the structured kernel in (4) is not fully specified a priori, we propose an algorithm to learn it from the data in the next Section."
+  }, {
+    "heading": "3.3.2. STRUCTURED KERNEL LEARNING",
+    "text": "AUTOPROGNOSIS uses a Bayesian approach to learn the subspace decomposition {Λ(m)}m in concurrence with the BO procedure, where the following Dirichlet-Multinomial prior is placed on the structured kernel (Wang et al., 2017):\nα ∼ Dirichlet(M,γ), zv,a ∼ Multi(α), (6)\n∀a ∈ Av, v ∈ {d, f, p, c}, where γ = {γm}m is the parameter of a Dirichlet prior, α = {αm}m are the Multinomial mixing proportions, and zv,a is an indicator variable that determines the subspace to which the ath algorithm in Av belongs. The kernel decomposition in (4) is learned by updating the posterior distribution of {Λ(m)}m in every iteration of the BO procedure. The posterior distribution over\nthe variables {zv,a}v,a and α is given by:\nP(z, α |Ht, γ) ∝ P(Ht | z)P(z |α)P(α, γ), (7)\nwhere z = {zv,a : ∀a ∈ Av,∀v ∈ {d, f, p, c}}, and Ht is the history of evaluations of the black-box function up to iteration t. Since the variables {zv,a}v,a are sufficient statistics for the subspace decomposition, the posterior over {Λ(m)}m is fully specified by (7) marginalized over α, which can be evaluated using Gibbs sampling as follows:\nP(zv,a = m | z/{zv,a},Ht) ∝ P(Ht | z) (|A(m)v |+ γm),\nwhere P(Ht | z) is the GP likelihood under the kernel induced by z. The Gibbs sampler is implemented via the Gumble-Max trick (Maddison et al., 2014) as follows:\nωm i.i.d∼ Gumbel(0, 1), m ∈ {1, . . .,M}, (8)\nzv,a∼ argmaxm P(Ht | z, zv,a = m)(|A(m)v |+ γm) + ωm."
+  }, {
+    "heading": "3.3.3. EXPLORATION VIA DIVERSE BATCH SELECTION",
+    "text": "The BO procedure solves the PSCP problem by exploring the performances of a sequence of pipelines {P 1θ1 , P 2 θ2 , . . .} until it (hopefully) converges to the optimal pipeline P ∗θ∗ . In every iteration t, BO picks a pipeline to evaluate using an acquisition function A(Pθ;Ht) that balances between exploration and exploitation. AUTOPROGNOSIS deploys a 2- step batched (parallelized) exploration scheme that picks B pipelines for evaluation at every iteration t as follows:\nStep 1: Select the frequentist kernel decomposition {Λ̂ (m)}m that maximizes the posterior P(z |Ht).\nStep 2: Select the B pipelines {P bθ }Bb=1 with the highest values for the acquisition function {A(P bθ ;Ht)}Bb=1, such that each pipeline P bθ , b ∈ {1, . . ., B}, involves a distinct prediction algorithm from a distinct subspace in {Λ̂(m)}m.\nWe use the well-known Upper Confidence Bound (UCB) as acquisition function (Snoek et al., 2012). The decomposition in (5) offers an exponential speed up in the overall computational complexity of Step 2 since the UCB acquisition function is maximized separately for every (lowdimensional) component fm; this reduces the number of computations from to O(n−D) to O(n−Dm). The batched implementation is advantageous since sequential evaluations of f(.) are time consuming as it involves training the selected ML algorithms.\nStep 2 in the algorithm above encourages exploration as follows. In every iteration t, we select a “diverse” batch of pipelines for which every pipeline is representative of a distinct subspace in {Λ̂(m)}m. The batch selection scheme above encourages diverse exploration without the need for sampling pipelines via a determinantal point process with an exponential complexity as in (Kathuria et al., 2016; Nikolov, 2015; Wang et al., 2017). We also devise an efficient backward induction algorithm that exploits the structure of a pipeline to maximize the acquisition function efficiently. (Details are provided in the supplement.)"
+  }, {
+    "heading": "4. Ensemble Construction & Meta-learning",
+    "text": "In this Section, we discuss the details of the ensemble Construction and meta-learning modules; details of the interpreter module are provided in the next Section."
+  }, {
+    "heading": "4.1. Post-hoc Ensemble Construction",
+    "text": "The frequentist approach to pipeline configuration is to pick the pipeline with the best observed performance from the set {P 1θ1 , . . ., P t θt} explored by the BO algorithm in Section 3.3.3. However, such an approach does not capture the uncertainty in the pipelines’ performances, and wastefully throws away t− 1 of the evaluated pipelines. On the contrary, AUTOPROGNOSIS makes use of all such pipelines via post-hoc Bayesian model averaging, where it creates an ensemble of weighted pipelines ∑ i wiP i θi . Model averaging is particularly useful in cohorts with small sample sizes, where large uncertainty about the pipelines’ performances would render frequentist solutions unreliable.\nThe ensemble weight wi = P(P i ∗\nθi ∗ = P iθi |Ht) is the poste-\nrior probability of P iθ being the best performing pipeline:\nwi= ∑ z P(P i∗ θi ∗ = P iθi | z,Ht) · P(z |Ht), (9)\nwhere i∗ is the pipeline configuration with the best (true) generalization performance. The weights in (9) are computed by Monte Carlo sampling of kernel decompositions via the posterior P(z |Ht), and then sampling the pipelines’ performances from the posterior f | z,Ht. Note that, unlike the ensemble builder of AUTOSKLEARN (Feurer et al., 2015), the weights in (9) account for correlations between\ndifferent pipelines, and hence it penalizes combinations of “similar” pipelines even if they are performing well. Moreover, our post-hoc approach allows building ensembles without requiring extra hyperparameters: in AUTOWEKA, ensemble construction requires a 5-fold increase in the number of hyperparameters (Kotthoff et al., 2016)."
+  }, {
+    "heading": "4.2. Meta-learning via Empirical Bayes",
+    "text": "The Bayesian model used for solving the PSCP problem in Section 3 can be summarized as follows:\nf ∼ GP(µ, k | z), z ∼ Multi(α), α ∼ Dirichlet(M,γ).\nThe speed of convergence of BO depends on the calibration of the prior’s hyperparameters (M,γ, µ, k). An agnostic prior would require many iterations to converge to satisfactory pipeline configurations. To warmstart the BO procedure for a new cohort D, we incorporate prior information obtained from previous runs of AUTOPROGNOSIS on a repository of K complementary cohorts {D1, . . .,DK}. Our meta-learning approach combines {H1t1 , . . .,H M tK} (optimizer runs on the K complementary cohorts) with the data in D to obtain an empirical Bayes estimate (M̂, γ̂, µ̂, k̂).\nOur approach to meta-learning works as follows. For every complementary dataset Dk, we create a set of 55 metafeatures M(Dk), 40 of which are statistical meta-features (e.g. number of features, size of data, class imbalance, etc), and the remaining 15 are clinical meta-features (e.g. lab tests, vital signs, ICD-10 codes, diagnoses, etc). For every complementary dataset in Dj , we optimize the hyperparameters (M̂j , γ̂j , µ̂j , k̂j) via marginal likelihood maximization. For a new cohort D, we compute a set of weights {ηj}j , with ηj = ℓj/ ∑ k ℓk, where ℓj = ∥M(D)−M(Dj)∥1, and calibrate its prior (M,γ, µ, k) by setting it to be the average of the estimates (M̂j , γ̂j , µ̂j , k̂j), weighted by {ηj}j .\nExisting methods for meta-learning focus only on identifying well-performing pipelines from other datasets, and use them for initializing the optimization procedure (Brazdil et al., 2008; Feurer et al., 2015). Conceptualizing metalearning as an empirical Bayes calibration procedure allows the transfer of a much richer set of information across datasets. Through the method described above, AUTOPROGNOSIS can import information on the smoothness of the black-box function (k), the similarities among baseline algorithms (γ,M), and the expected pipelines’ performances (µ). This improves not only the initialization of the BO procedure, but also the mechanism by which it explores the pipelines’ design space."
+  }, {
+    "heading": "5. Evaluation of AUTOPROGNOSIS",
+    "text": "In this section, we assess the ability of AUTOPROGNOSIS to automatically make the right prognostic modeling choices\nwhen confronted with a variety of clinical datasets with different meta-features."
+  }, {
+    "heading": "5.1. Cardiovascular Disease Cohorts",
+    "text": "We conducted experiments on 9 cardiovascular cohorts that correspond to the following aspects of patient care:\n• Preventive care: We considered a major cohort for preventive cardiology: the Meta-analysis Global Group in Chronic heart failure database (MAGGIC), which holds data for 46,817 patients gathered from multiple clinical studies (Wong et al., 2014).\n• Heart transplant wait-list management: We extracted data from the United Network for Organ Sharing (UNOS) database, which holds information on all heart transplants conducted in the US between the years 1985 to 2015. Cohort UNOS-I is a pre-transplant population of 36,329 cardiac patients who were enrolled in a transplant wait-list.\n• Post-transplant follow-up: Cohort UNOS-II is a posttransplant population of 60,400 patients in the US who underwent a transplant between the years 1985 to 2015.\n• Cardiovascular comorbidities: We extracted 6 cohorts from the Surveillance, Epidemiology, and End Results (SEER) cancer registries, which cover approximately 28% of the US population (Yoo & Coughlin, 2018). We predict cardiac deaths in patients diagnosed with breast cancer (SEER-I), colorectal cancer (SEER-II), Leukemia (SEERIII), respiratory cancers (SEER-IV), digestive system cancer (SEER-V), and urinary system cancer (SEER-VI).\nThe first three groups of datasets (colored in red) were collected for cohorts of patients diagnosed with (or at risk for) cardiac diseases, and so they shared a set of meta-features, including a large number of cardiac risk factors, low censoring rate, and moderate class imbalance. The last group of datasets (colored in blue) was collected for cohorts of\ncancer patients for whom cardiac diseases are potential comorbidities. These datasets shared a different set of metafeatures, including a small number of cardiac risk factors, high censoring rate, and severe class imbalance. Our experiments will demonstrate the ability of AUTOPROGNOSIS to adapt its modeling choices to these different clinical setups."
+  }, {
+    "heading": "5.2. Performance of AUTOPROGNOSIS",
+    "text": "Table 2 shows the performance of various competing prognostic modeling approaches evaluated in terms of the area under receiver operating characteristic curve (AUC-ROC) with 5-fold cross-validation1. We compared the performance of AUTOPROGNOSIS with the clinical risk scores used for predicting prognosis in each cohort (MAGGIC score in MAGGIC and UNOS-I (Wong et al., 2014) and IMPACT score in UNOS-II (Weiss et al., 2011)). We also compared with various AutoML frameworks, including AUTO-WEKA (Kotthoff et al., 2016), AUTO-SKLEARN (Feurer et al., 2015), and TPOT (Olson & Moore, 2016). Finally, we compared with a standard Cox proportional hazards (Cox PH) model, which is the model most commonly used in clinical prognostic research.\nTable 2 demonstrates the superiority of AUTOPROGNOSIS to all the competing models on all the cohorts under consideration. This reflects the robustness of our system since the 9 cohorts had very different characteristics. In many experiments, the learned kernel decomposition reflected an intuitive clustering of algorithms by the similarity of their structure. For instance, Figure 4 shows one subspace in the frequentist decomposition learned by AUTOPROGNOSIS over the BO iterations for the MAGGIC cohorts. We can see that all ensemble methods in the imputation and prediction stages that use decision-trees as their base learners were lumped together in the same subspace.\n1All algorithms were allowed to run for a maximum of 10 hours to ensure a fair comparison."
+  }, {
+    "heading": "5.3. The “Interpreter”",
+    "text": "Albeit accurate, models built by AUTOPROGNOSIS would generally be hard for a clinician to “interpret”. To address this issue, AUTOPROGNOSIS deploys an interpreter module (see Figure 2) that takes as an input the learned model for a given cohort, in addition to a set of actionable risk strata R, and outputs an “explanation” for its predictions in terms of a set of logical association rules of the form:\nC1 ∧ C2 ∧ . . . ∧ Cl(r) =⇒ r, ∀r ∈ R, (10)\nwhere {C1, . . ., Cl(r)} is a set of Boolean conditions associated with risk stratum r. The association rules are obtained via a Bayesian associative classifier (Ma & Liu, 1998; Agrawal et al., 1993; Kruschke, 2008; Luo, 2016), with a prior over association rules, and a posterior computed based on target labels that correspond to the outputs of the learned model discretized via the strata in R. The Bayesian approach allows incorporating prior knowledge (from clinical literature) about “likely” association rules.\nWe report one example for an explanation provided by the interpreter module based on our experiments on the MAGGIC cohort. For this cohort, the standard risk score exhibited a low AUC-ROC for patients with Type-2 Diabetes. On the contrary, AUTOPROGNOSIS performed almost equally well in the two subgroups. The interpreter provided an explanation for the improved predictions through the following association rule: Diabetic ∧ Lipid-lowering ∧ (Age ≥ 40) =⇒ High risk None of these risk factors were included in the standard guidelines. That is, the interpreter indicates that a better stratification, with new risk factors such the usage of lipidlowering drugs, is possible for diabetic patients. Clinicians can use the interpreter as a data-driven hypothesis generator that prompts new risk factors and strata for subsequent research."
+  }, {
+    "heading": "5.4. Learning to Pick the Right Model and AUTOPROGNOSIS as a Clairvoyant",
+    "text": "We split up Table 2 into 2 groups of columns: group 1 (left) contains cohorts obtained from cardiology studies, whereas group 2 (right) contains cohorts obtained from cancer studies, with cardiac secondary outcomes. As mentioned earlier, the two groups had different meta-features. We tracked the modeling choices made by vanilla AUTOPROGNOSIS (no ensembles or meta-learning) in both groups (“best predictor” row in Table 2). For all datasets in group 2, AUTOPROGNOSIS decided that survival modeling (using Cox PH model or survival forests) is the right model. This is because, with the high prevalence of censored time-to-event data, survival models are more data-efficient than operating on binarized survival labels and removing patients lost to follow-up. When given richer datasets with a large number of relevant features, low rates of censoring and moderate imbalance (group 1), AUTOPROGNOSIS spent more iterations navigating ML classifiers, and learned that an algorithm like AdaBoost is a better choice for a dataset like UNOS-I. Such a (non-intuitive) choice would have not been possibly identified by a clinical researcher; researchers typically use the Cox PH model, which on the UNOS-I cohort provides an inferior performance.\nMeta-learning was implemented via leave-one-dataset-out validation: we run vanilla AUTOPROGNOSIS on all of the 9 cohorts, and then for every cohort, we use the other 9 cohorts as the complementary datasets used to implement the meta-learning algorithm. Since the pool of complementary cohorts contained 5 datasets for cardiovascular comorbidities, meta-learning was most useful for group 2 datasets as they all had very similar meta-features. With meta-learning, AUTOPROGNOSIS had a strong prior on survival models for group 2 datasets, and hence it converges quickly to a decision on using a survival model having observed the dataset’s meta-features. Ensemble construction was most useful for the MAGGIC and UNOS cohorts, since those datasets had more complex hypotheses to learn.\nClinical researchers often ask the question: when should I use machine learning for my prognostic study? The answer depends on the nature of the dataset involved. As we have see in Table 2, a simple Cox model may in some cases be sufficient to issue accurate predictions. The metalearning module in AUTOPROGNOSIS can act as a clairvoyant that tells whether ML models would add value to a given prognostic study without even training any model. That is, by looking at the “meta-learned” GP prior calibrated by a new dataset’s meta-features, we can see whether the prior assigns high scores to ML models compared to a simple Cox model, and hence decide on whether ML has gains to offer for such a dataset."
+  }, {
+    "heading": "Acknowledgements",
+    "text": "The authors would like to thank the reviewers for their helpful comments. The research presented in this paper was supported by the Office of Naval Research (ONR) and the NSF (Grant number: ECCS1462245, ECCS1533983, and ECCS1407712)."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Mining association rules between sets of items in large databases",
+    "authors": ["Agrawal", "Rakesh", "Imieliński", "Tomasz", "Swami", "Arun"],
+    "venue": "In Acm sigmod record,",
+    "year": 1993
+  }, {
+    "title": "Learning from clinical judgments: Semi-markovmodulated marked hawkes processes for risk prognosis",
+    "authors": ["Alaa", "Ahmed M", "Hu", "Scott", "van der Schaar", "Mihaela"],
+    "venue": "International Conference on Machine Learning,",
+    "year": 2017
+  }, {
+    "title": "Implementations of algorithms for hyper-parameter optimization",
+    "authors": ["Bergstra", "James", "Bardenet", "Rémi", "B Kégl", "Y. Bengio"],
+    "venue": "In NIPS Workshop on Bayesian optimization,",
+    "year": 2011
+  }, {
+    "title": "The critical importance of risk score calibration, 2016",
+    "authors": ["Blaha", "Michael J"],
+    "year": 2016
+  }, {
+    "title": "Metalearning: Applications to data mining",
+    "authors": ["Brazdil", "Pavel", "Carrier", "Christophe Giraud", "Soares", "Carlos", "Vilalta", "Ricardo"],
+    "venue": "Springer Science & Business Media,",
+    "year": 2008
+  }, {
+    "title": "Unintended consequences of machine learning in medicine",
+    "authors": ["Cabitza", "Federico", "Rasoini", "Raffaele", "Gensini", "Gian Franco"],
+    "venue": "Jama,",
+    "year": 2017
+  }, {
+    "title": "Xgboost: A scalable tree boosting system",
+    "authors": ["Chen", "Tianqi", "Guestrin", "Carlos"],
+    "venue": "In Proceedings of the 22nd acm sigkdd international conference on knowledge discovery and data mining,",
+    "year": 2016
+  }, {
+    "title": "Efficient and robust automated machine learning",
+    "authors": ["Feurer", "Matthias", "Klein", "Aaron", "Eggensperger", "Katharina", "Springenberg", "Jost", "Blum", "Manuel", "Hutter", "Frank"],
+    "venue": "In Advances in Neural Information Processing Systems (NIPS),",
+    "year": 2015
+  }, {
+    "title": "A proportional hazards model for the subdistribution of a competing risk",
+    "authors": ["Fine", "Jason P", "Gray", "Robert J"],
+    "venue": "Journal of the American statistical association,",
+    "year": 1999
+  }, {
+    "title": "A distribution-free theory of nonparametric regression",
+    "authors": ["Györfi", "László", "Kohler", "Michael", "Krzyzak", "Adam", "Walk", "Harro"],
+    "venue": "Springer Science & Business Media,",
+    "year": 2006
+  }, {
+    "title": "Parameterizing time in electronic health record studies",
+    "authors": ["Hripcsak", "George", "Albers", "David J", "Perotte", "Adler"],
+    "venue": "Journal of the American Medical Informatics Association,",
+    "year": 2015
+  }, {
+    "title": "Paramils: an automatic algorithm configuration framework",
+    "authors": ["Hutter", "Frank", "Hoos", "Holger H", "Leyton-Brown", "Kevin", "Stützle", "Thomas"],
+    "venue": "Journal of Artificial Intelligence Research,",
+    "year": 2009
+  }, {
+    "title": "Sequential model-based optimization for general algorithm configuration",
+    "authors": ["Hutter", "Frank", "Hoos", "Holger H", "Leyton-Brown", "Kevin"],
+    "venue": "LION, 5:507–523,",
+    "year": 2011
+  }, {
+    "title": "Random survival forests",
+    "authors": ["Ishwaran", "Hemant", "Kogalur", "Udaya B", "Blackstone", "Eugene H", "Lauer", "Michael S"],
+    "venue": "The annals of applied statistics,",
+    "year": 2008
+  }, {
+    "title": "Bayesian optimization with tree-structured dependencies",
+    "authors": ["Jenatton", "Rodolphe", "Archambeau", "Cedric", "González", "Javier", "Seeger", "Matthias"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2017
+  }, {
+    "title": "High dimensional bayesian optimisation and bandits via additive models",
+    "authors": ["Kandasamy", "Kirthevasan", "Schneider", "Jeff", "Póczos", "Barnabás"],
+    "venue": "In International Conference on Machine Learning (ICML),",
+    "year": 2015
+  }, {
+    "title": "Batched gaussian process bandit optimization via determinantal point processes",
+    "authors": ["Kathuria", "Tarun", "Deshpande", "Amit", "Kohli", "Pushmeet"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2016
+  }, {
+    "title": "Auto-weka 2.0: Automatic model selection and hyperparameter optimization in weka",
+    "authors": ["Kotthoff", "Lars", "Thornton", "Chris", "Hoos", "Holger H", "Hutter", "Frank", "Leyton-Brown", "Kevin"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2016
+  }, {
+    "title": "Bayesian approaches to associative learning: From passive to active learning",
+    "authors": ["Kruschke", "John K"],
+    "venue": "Learning & behavior,",
+    "year": 2008
+  }, {
+    "title": "Automatically explaining machine learning prediction results: a demonstration on type 2 diabetes risk prediction",
+    "authors": ["Luo", "Gang"],
+    "venue": "Health information science and systems,",
+    "year": 2016
+  }, {
+    "title": "Integrating classification and association rule mining",
+    "authors": ["Ma", "Bing Liu Wynne Hsu Yiming", "Liu", "Bing"],
+    "venue": "In Proceedings of the fourth international conference on knowledge discovery and data mining,",
+    "year": 1998
+  }, {
+    "title": "Randomized rounding for the largest simplex problem",
+    "authors": ["Nikolov", "Aleksandar"],
+    "venue": "In Proceedings of the forty-seventh annual ACM symposium on Theory of computing,",
+    "year": 2015
+  }, {
+    "title": "Tpot: A tree-based pipeline optimization tool for automating machine learning",
+    "authors": ["Olson", "Randal S", "Moore", "Jason H"],
+    "venue": "In ICML Workshop on Automatic Machine Learning,",
+    "year": 2016
+  }, {
+    "title": "Lower bounds on minimax rates for nonparametric regression with additive sparsity and smoothness",
+    "authors": ["Raskutti", "Garvesh", "Yu", "Bin", "Wainwright", "Martin J"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2009
+  }, {
+    "title": "Gaussian processes for machine learning, volume 1",
+    "authors": ["Rasmussen", "Carl Edward", "Williams", "Christopher KI"],
+    "venue": "MIT press Cambridge,",
+    "year": 2006
+  }, {
+    "title": "Practical bayesian optimization of machine learning algorithms. In Advances in neural information processing systems (NIPS)",
+    "authors": ["Snoek", "Jasper", "Larochelle", "Hugo", "Adams", "Ryan P"],
+    "year": 2012
+  }, {
+    "title": "Raiders of the lost architecture: Kernels for bayesian optimization in conditional parameter spaces",
+    "authors": ["Swersky", "Kevin", "Duvenaud", "David", "Snoek", "Jasper", "Hutter", "Frank", "Osborne", "Michael A"],
+    "venue": "arXiv preprint arXiv:1409.4011,",
+    "year": 2014
+  }, {
+    "title": "Batched high-dimensional bayesian optimization via structural kernel learning",
+    "authors": ["Wang", "Zi", "Li", "Chengtao", "Jegelka", "Stefanie", "Kohli", "Pushmeet"],
+    "venue": "International Conference on Machine Learning (ICML),",
+    "year": 2017
+  }, {
+    "title": "Bayesian optimization in high dimensions via random embeddings",
+    "authors": ["Wang", "Ziyu", "Zoghi", "Masrour", "Hutter", "Frank", "Matheson", "David", "De Freitas", "Nando"],
+    "venue": "In IJCAI,",
+    "year": 2013
+  }, {
+    "title": "Minimax-optimal nonparametric regression in high dimensions",
+    "authors": ["Yang", "Yun", "Tokdar", "Surya T"],
+    "venue": "The Annals of Statistics,",
+    "year": 2015
+  }, {
+    "title": "Surveillance, epidemiology, and end results (seer) data for monitoring cancer trends",
+    "authors": ["Yoo", "Wonsuk", "Coughlin", "Steven S"],
+    "venue": "Journal of the Georgia Public Health Association,",
+    "year": 2018
+  }, {
+    "title": "Personalized donor-recipient matching for organ transplantation",
+    "authors": ["Yoon", "Jinsung", "Alaa", "Ahmed M", "Cadeiras", "Martin", "van der Schaar", "Mihaela"],
+    "venue": "In AAAI,",
+    "year": 2017
+  }],
+  "id": "SP:048023bae3f9b272117b8a395d664af5050c026f",
+  "authors": [{
+    "name": "Ahmed M. Alaa",
+    "affiliations": []
+  }, {
+    "name": "Mihaela van der Schaar",
+    "affiliations": []
+  }],
+  "abstractText": "Clinical prognostic models derived from largescale healthcare data can inform critical diagnostic and therapeutic decisions. To enable off-theshelf usage of machine learning (ML) in prognostic research, we developed AUTOPROGNOSIS: a system for automating the design of predictive modeling pipelines tailored for clinical prognosis. AUTOPROGNOSIS optimizes ensembles of pipeline configurations efficiently using a novel batched Bayesian optimization (BO) algorithm that learns a low-dimensional decomposition of the pipelines’ high-dimensional hyperparameter space in concurrence with the BO procedure. This is achieved by modeling the pipelines’ performances as a black-box function with a Gaussian process prior, and modeling the “similarities” between the pipelines’ baseline algorithms via a sparse additive kernel with a Dirichlet prior. Meta-learning is used to warmstart BO with external data from “similar” patient cohorts by calibrating the priors using an algorithm that mimics the empirical Bayes method. The system automatically explains its predictions by presenting the clinicians with logical association rules that link patients’ features to predicted risk strata. We demonstrate the utility of AUTOPROGNOSIS using 9 major patient cohorts representing various aspects of cardiovascular patient care.",
+  "title": "AutoPrognosis: Automated Clinical Prognostic Modeling via Bayesian Optimization with Structured Kernel Learning"
+}

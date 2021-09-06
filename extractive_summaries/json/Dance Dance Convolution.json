@@ -1,0 +1,112 @@
+{
+  "sections": [{
+    "text": "1 INTRODUCTION\nDance Dance Revolution (DDR) is a popular rhythm-based video game with millions of players worldwide (Hoysniemi, 2006). Players perform steps atop a dance platform, containing four buttons, each labeled with an arrow. An on-screen step chart prompts players to step on the buttons at specific, musically salient points in time. Scores depend upon both hitting the right buttons and hitting them at the right time. Step charts vary in difficulty with harder charts containing more steps and more complex sequences.\nDespite the game’s popularity, players have some reasonable complaints: For one, packs are limited to songs with favorable licenses, meaning players may be unable to dance to their favorite songs. Even when charts are available, players may tire of repeatedly performing the same charts. Although players can produce their own charts, the process is painstaking and requires significant expertise.\nThis paper introduces learning to choreograph, the task of producing a step chart from raw audio. We break the problem into two subtasks: First, step placement consists of identifying a set of timestamps in the song at which to place steps. This process can be conditioned on a user-specified difficulty level. Second, step selection consists of choosing which steps to place at each timestamp. Running these two steps in sequence yields a playable step chart (Figure 1). 1\nFor both prediction stages of learning to choreograph, we demonstrate the superior performance of neural networks over strong alternatives. Our best model for step placement jointly learns convolutional neural network (CNN) representations and a recurrent neural network (RNN), which\n1 Demonstration video showing human choreography and the output of Dance Dance Convolution side-byside: https://youtu.be/yUc3O237p9M\nintegrates information across consecutive time slices. Our best model for step selection consists of a conditional LSTM generative model which receives high-level rhythm features as auxiliary information."
+  }, {
+    "heading": "2 METHODS",
+    "text": "Before applying our step placement algorithms, we transform raw audio samples into perceptuallyinformed representations. Music files arrive as lossy encodings at 44.1kHz . We decode the audio files into stereo PCM and average the two channels to produce a monophonic representation. We then compute a multiple-timescale short-time Fourier transform (STFT) using window lengths of 23ms , 46ms , and 93ms and a stride of 10ms . We reduce the dimensionality of the STFT magnitude spectrum by applying a Mel-scale filterbank yielding 80 frequency bands. Then we scale the filter outputs logarithmically in accordance with human perception of loudness. Finally, we prepend and append seven frames of past and future context to each frame.\n2.1 STEP PLACEMENT\nWe consider several models to address the step placement task. Each model’s output consists of a single sigmoid unit which estimates the probability that a step is placed. For all models, we augment the audio features with a one-hot representation of difficulty.\nFollowing state-of-the-art work on musical onset detection (Schlüter & Böck, 2014), we adopt a convolutional neural network (CNN) architecture. This model consists of two convolutional layers followed by two fully connected layers. Our first convolutional layer has 10 filter kernels that are 7-wide in time and 3-wide in frequency. The second layer has 20 filter kernels that are 3-wide in time and 3-wide in frequency. We apply 1D max-pooling after each convolutional layer, only in the frequency dimension, with a width and stride of 3. Both convolutional layers use rectified linear units (ReLU) (Glorot et al.). Following the convolutional layers, we add two fully connected layers with ReLU activation functions and 256 and 128 nodes respectively.\nTo improve upon the CNN, we propose a C-LSTM model (Figure 2), combining a convolutional encoding with an LSTM-RNN (Hochreiter & Schmidhuber, 1997) that integrates information across longer windows of time. Our C-LSTM contains two convolutional layers (of the same shape as the CNN) applied across the full unrolling length. The output of the second convolutional layer is a 3D tensor, which we flatten along the channel and frequency axes (preserving the temporal dimension). The flattened features at each time step then become the inputs to a two-layer LSTM with 200 nodes per layer. We train this model using 100 unrollings for backpropagation through time."
+  }, {
+    "heading": "2.2 STEP SELECTION",
+    "text": "We treat the step selection task as a sequence generation problem. Our approach follows related work in language modeling where RNNs are well-known to produce coherent text that captures long-range relationships (Mikolov et al., 2010; Sutskever et al., 2011; Sundermeyer et al., 2012).\nOur LSTM model passes over the ground truth step placements and predicts the next token given the previous sequence of tokens. The output is a softmax distribution over the game’s 256 possible steps. As inputs, we use a more compact bag-of-arrows representation containing 16 features (4 per\narrow) to depict the previous step. For each arrow, the 4 corresponding features represent the states on, off, hold, and release. We add an additional feature that functions as a start token to denote the first step of a chart. For this task, our LSTM consists of 2 layers of 128 cells each. We use 64 steps of unrolling, an average of 100 seconds for the easiest charts and 9 seconds for the hardest.\nTo inform our LSTM of the non-uniform rhythmic spacing of the step placements, we provide the following two pieces of auxiliary information: (1) ∆-beat adds two features representing the number of beats since the previous and until the next step; (2) beat phase adds four features representing which sixteenth note subdivision of the beat the current step most closely aligns to."
+  }, {
+    "heading": "3 EXPERIMENTS",
+    "text": "We collected a dataset consisting of 203 songs, labeled by 9 annotators. One particularly prolific annotator, Fraxtil, annotated 90 of these songs for all five difficulty levels. The remaining songs are from a large multi-author collection called In The Groove (ITG). In total, across all five difficulty settings, we obtain around 35 hours of annotated audio and 350, 000 steps. 2 We augment our dataset for step selection by synthesizing mirror images of each chart (i.e., interchanging left and right) which we found to improve performance for all models\nFor step placement, we compare the performance of our proposed CNN and C-LSTM models against a logistic regressor (LogReg) and a 2-layer MLP. For step selection, we compare our proposed LSTM model against a fixed-window MLP and an n-gram model using modified Kneser-Ney smoothing (Chen & Goodman, 1998) with backoff. Both the MLP (MLP5) and n-gram model (KN5) predict the next step from four steps of history and the MLP received the same auxiliary information as the LSTM. We also show the performance of an LSTM model trained with only 5 steps of unrolling (LSTM5) to demonstrate the advantage of longer context.\nModel Dataset PPL AUC F-score\nLogReg Fraxtil 1.205 0.601 0.609 MLP Fraxtil 1.097 0.659 0.665 CNN Fraxtil 1.082 0.671 0.678 C-LSTM Fraxtil 1.070 0.682 0.681\nLogReg ITG 1.123 0.599 0.634 MLP ITG 1.090 0.637 0.671 CNN ITG 1.083 0.677 0.689 C-LSTM ITG 1.072 0.680 0.697\nTable 1: Perplexity, area under curve and Fscore assessed for the step placement task.\nModel Dataset PPL Acc.\nKN5 Fraxtil 3.681 0.528 MLP5 Fraxtil 3.428 0.557 LSTM5 Fraxtil 3.185 0.581 LSTM64 Fraxtil 3.011 0.613\nKN5 ITG 5.847 0.356 MLP5 ITG 4.786 0.401 LSTM5 ITG 4.447 0.441 LSTM64 ITG 4.342 0.444\nTable 2: Perplexity and per-token accuracy assessed for the step selection task.\nOur experiments demonstrate that on both the step placement (Table 1) and the step selection (Table 2) tasks, deep neural network models outperform traditional baselines. For the step placement task, the best performing method by all metrics is the C-LSTM. For the step selection task, LSTMs outperform other models.\nData augmentation and the inclusion of ∆-beat and beat phase side information give a significant increase in performance to both the MLP and LSTMs for step selection. For example, the LSTM64 model trained on the Fraxtil dataset without side information or data augmentation only achieves a PPL of 3.526 and accuracy of 0.562. Step selection models perform better on the single-author Fraxtil dataset in comparison to the multi-author ITG. Author style tends to be distinctive and thus a collection of single-author sequences is more predictable."
+  }, {
+    "heading": "4 RELATED WORK",
+    "text": "A few prior systems attempt automatic synthesis of step charts (O’Keeffe, 2003; Nogaj, 2005), however neither establishes a reproducible evaluation methodology or learns the semantics of steps from data. The most closely related work to our step placement task is concerned with onset detection\n2All data shall be made available at publication time\n(Bello et al., 2005; Dixon, 2006), which has previously been attempted with deep neural networks (Eyben et al., 2010; Schlüter & Böck, 2014). Our step selection task most closely resembles conditional language modeling. A recent wave of work in RNNs for language modeling began with (Mikolov et al., 2010; Sutskever et al., 2011). Inspired by this work, several recent papers extend the methods to polyphonic music generation and transcription (Boulanger-Lewandowski et al., 2012; Chu et al., 2016; Sigtia et al., 2016). To our knowledge, ours is the first paper to attempt end-to-end DDR choreography from raw audio with deep learning."
+  }],
+  "year": 2017,
+  "references": [{
+    "title": "A tutorial on onset detection in music signals",
+    "authors": ["Juan Pablo Bello", "Laurent Daudet", "Samer Abdallah", "Chris Duxbury", "Mike Davies", "Mark B Sandler"],
+    "venue": "IEEE Transactions on speech and audio processing,",
+    "year": 2005
+  }, {
+    "title": "Modeling temporal dependencies in high-dimensional sequences: Application to polyphonic music generation and transcription",
+    "authors": ["Nicolas Boulanger-Lewandowski", "Yoshua Bengio", "Pascal Vincent"],
+    "year": 2012
+  }, {
+    "title": "An empirical study of smoothing techniques for language modeling",
+    "authors": ["Stanley F Chen", "Joshua Goodman"],
+    "venue": "Technical Report TR-10-98,",
+    "year": 1998
+  }, {
+    "title": "Song from pi: A musically plausible network for pop music generation",
+    "authors": ["Hang Chu", "Raquel Urtasun", "Sanja Fidler"],
+    "year": 2016
+  }, {
+    "title": "Onset detection revisited",
+    "authors": ["Simon Dixon"],
+    "venue": "In Proceedings of the 9th International Conference on Digital Audio Effects. Citeseer,",
+    "year": 2006
+  }, {
+    "title": "Universal onset detection with bidirectional long short-term memory neural networks",
+    "authors": ["Florian Eyben", "Sebastian Böck", "Björn W Schuller", "Alex Graves"],
+    "venue": "In ISMIR,",
+    "year": 2010
+  }, {
+    "title": "Deep sparse rectifier neural networks",
+    "authors": ["Xavier Glorot", "Antoine Bordes", "Yoshua Bengio"],
+    "venue": "In AISTATS,",
+    "year": 2011
+  }, {
+    "title": "Long short-term memory",
+    "authors": ["Sepp Hochreiter", "Jürgen Schmidhuber"],
+    "venue": "Neural computation,",
+    "year": 1997
+  }, {
+    "title": "International survey on the dance dance revolution game",
+    "authors": ["Johanna Hoysniemi"],
+    "venue": "Computers in Entertainment (CIE),",
+    "year": 2006
+  }, {
+    "title": "Recurrent neural network based language model",
+    "authors": ["Tomas Mikolov", "Martin Karafiát", "Lukas Burget", "Jan Cernockỳ", "Sanjeev Khudanpur"],
+    "venue": "In Interspeech,",
+    "year": 2010
+  }, {
+    "title": "A genetic algorithm for determining optimal step patterns in dance dance revolution",
+    "authors": ["Adam Nogaj"],
+    "venue": "Technical report, State University of New York at Fredonia,",
+    "year": 2005
+  }, {
+    "title": "Dancing monkeys (automated creation of step files for dance dance revolution)",
+    "authors": ["Karl O’Keeffe"],
+    "venue": "Technical report, Imperial College London,",
+    "year": 2003
+  }, {
+    "title": "Improved musical onset detection with convolutional neural networks",
+    "authors": ["Jan Schlüter", "Sebastian Böck"],
+    "venue": "IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP)",
+    "year": 2014
+  }, {
+    "title": "An end-to-end neural network for polyphonic piano music transcription",
+    "authors": ["Siddharth Sigtia", "Emmanouil Benetos", "Simon Dixon"],
+    "venue": "IEEE/ACM Transactions on Audio, Speech, and Language Processing,",
+    "year": 2016
+  }, {
+    "title": "Lstm neural networks for language modeling",
+    "authors": ["Martin Sundermeyer", "Ralf Schlüter", "Hermann Ney"],
+    "venue": "In Interspeech,",
+    "year": 2012
+  }, {
+    "title": "Generating text with recurrent neural networks",
+    "authors": ["Ilya Sutskever", "James Martens", "Geoffrey E Hinton"],
+    "venue": "In ICML,",
+    "year": 2011
+  }],
+  "id": "SP:f3c5b6b90284202ddedbdb086efc75acc3bb7014",
+  "authors": [{
+    "name": "DANCE DANCE CONVOLUTION",
+    "affiliations": []
+  }, {
+    "name": "Chris Donahue",
+    "affiliations": []
+  }, {
+    "name": "Zachary C. Lipton",
+    "affiliations": []
+  }, {
+    "name": "Julian McAuley",
+    "affiliations": []
+  }],
+  "abstractText": "Dance Dance Revolution (DDR) is a popular rhythm-based video game. Players perform steps on a dance platform in synchronization with music as directed by on-screen step charts. While many step charts are available in standardized packs, users may grow tired of existing charts, or wish to dance to a song for which no chart exists. We introduce the task of learning to choreograph. Given a raw audio track, the goal is to produce a new step chart. This task decomposes naturally into two subtasks: deciding when to place steps and deciding which steps to select. We demonstrate deep learning solutions for both tasks and establish strong benchmarks for future work."
+}

@@ -1,0 +1,388 @@
+{
+  "sections": [{
+    "text": "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 1325–1337 Brussels, Belgium, October 31 - November 4, 2018. c©2018 Association for Computational Linguistics\n1325"
+  }, {
+    "heading": "1 Introduction",
+    "text": "Dependency parsing is a core task in natural language processing (NLP). Given a sentence, a dependency parser produces a dependency tree, which specifies the typed head-modifier relations between pairs of words. While supervised dependency parsing has been successful (McDonald and Pereira, 2006; Nivre, 2008; Kiperwasser and Goldberg, 2016), unsupervised parsing can hardly produce useful parses (Mareček, 2016). So it is extremely helpful to have some treebank of supervised parses for training purposes."
+  }, {
+    "heading": "1.1 Past work: Cross-lingual transfer",
+    "text": "Unfortunately, manually constructing a treebank for a new target language is expensive (Böhmová et al., 2003). As an alternative, cross-lingual transfer parsing (McDonald et al., 2011) is sometimes possible, thanks to the recent development of multi-lingual treebanks (McDonald et al., 2013; Nivre et al., 2015; Nivre et al., 2017). The idea is to parse the sentences of the target language with a supervised parser trained on the treebanks of one or more source languages. Although the parser cannot be expected to know the words of the target language, it can make do with parts of\nspeech (POS) (McDonald et al., 2011; Täckström et al., 2013; Zhang and Barzilay, 2015) or crosslingual word embeddings (Duong et al., 2015; Guo et al., 2016; Ammar et al., 2016). A more serious challenge is that the parser may not know how to handle the word order of the target language, unless the source treebank comes from a closely related language (e.g., using German to parse Luxembourgish). Training the parser on trees from multiple source languages may mitigate this issue (McDonald et al., 2011) because the parser is more likely to have seen target part-of-speech sequences somewhere in the training data. Some authors (Rosa and Žabokrtský, 2015a,b; Wang and Eisner, 2016) have shown additional improvements by preferring source languages that are “close” to the target language, where the closeness is measured by distance between POS language models trained on the source and target corpora."
+  }, {
+    "heading": "1.2 This paper: Tailored synthetic data",
+    "text": "We will focus on delexicalized dependency parsing, which maps an input POS tag sequence to a dependency tree. We evaluate single-source transfer—train a parser on a single source language, and evaluate it on the target language. This is the setup of Zeman and Resnik (2008) and Søgaard (2011a).\nOur novel ingredient is that rather than seek a close source language that already exists, we create one. How? Given a dependency treebank of a possibly distant source language, we stochastically permute the children of each node, according to some distribution that makes the permuted language close to the target language.\nAnd how do we find this distribution? We adopt the tree-permutation model of Wang and Eisner (2016). We design a dynamic programming algorithm which, for any given distribution p in Wang and Eisner’s family, can compute the expected counts of all POS bigrams in the permuted source treebank. This allows us to evaluate p by computing the divergence between the bigram POS language model formed by these expected counts,\nand the one formed by the observed counts of POS bigrams in the unparsed target language. In order to find a p that locally minimizes this divergence, we adjust the model parameters by stochastic gradient descent (SGD)."
+  }, {
+    "heading": "1.3 Key limitations in this paper",
+    "text": "Better measures of surface closeness between two languages might be devised. However, even counting the expected POS N -grams is moderately expensive, taking time exponential in N if done exactly. So we compute only these local statistics, and only for N = 2. We certainly need N > 1 because the 1-gram distribution is not affected by permutation at all. N = 2 captures useful bigram statistics: for example, to mimic a verb-final language with prenominal modifiers, we would seek constituent permutations that result in matching its relatively high rate of VERB–PUNCT and ADJ–NOUN bigrams. While N > 2 might have improved the results, it was too slow for our large-scale experimental design. §7 discusses how richer measures could be used in the future.\nWe caution that throughout this paper, we assume that our corpora are annotated with gold POS tags, even in the target language (which lacks any gold training trees). This is an idealized setting that has often been adopted in work on unsupervised and cross-lingual transfer.§7 discusses a possible avenue for doing without gold tags."
+  }, {
+    "heading": "2 Modeling Surface Realization",
+    "text": "We begin by motivating the idea of tree permutation. Let us suppose that the dependency tree for a sentence starts as a labeled graph—a tree in which siblings are not yet ordered with respect to their parent or one another. Each language has some systematic way to realize its unordered trees as surface strings:1 it imposes a particular order on the tree’s word tokens. More precisely, a language specifies a distribution p(string | unordered tree) over a tree’s possible realizations.\nAs an engineering matter, we now make the strong assumption that the unordered dependency trees are similar across languages. That is, we suppose that different languages use similar underlying syntactic/semantic graphs, but differ in how they realize this graph structure on the surface.\n1Modeling this process was the topic of the recent Surface Realization Shared Task (Mille et al., 2018). Most relevant is work on tree linearization (Filippova and Strube, 2009; Futrell and Gibson, 2015; Puzikov and Gurevych, 2018).\nThus, given a gold POS corpus u of the unknown target language, we may hope to explain its distribution of surface POS bigrams as the result of applying some target-language surface realization model to the distribution of cross-linguistically “typical” unordered trees. To obtain samples of the latter distribution, we use the treebanks of one or more other languages. The present paper evaluates our method when only a single source treebank is used. In the future, we could try tuning a mixture of all available source treebanks."
+  }, {
+    "heading": "2.1 Realization is systematic",
+    "text": "We presume that the target language applies the same stochastic realization model to all trees. All that we can optimize is the parameter vector of this model. Thus, we deny ourselves the freedom to realize each individual tree in an ad hoc way. To see why this is important, suppose the target language is French, whose corpus u contains many NOUN–ADJ bigrams. We could achieve such a bigram from the unordered source tree\nDET NOUN VERB PROPN ADJ\nthe cake made Sue sleepy\ndet nsubj dobj xcomp\nby ordering\nit to yield DET NOUN ADJ VERB PROPN the cake sleepy made Sue\ndet dobjxcomp nsubj\n. However, that realization is not in fact appropriate for French, so that ordered tree would not be a useful training tree for French. Our approach should disprefer this tempting but incorrect realization, because any model with a high probability of this realization would, if applied systematically over the whole corpus, also yield sentences like He sleepy made Sue, with unwanted PRON–ADJ bigrams that would not match the surface statistics of French. We hope our approach will instead choose the realization model that is correct for French, in which the NOUN–ADJ bigrams arise instead from source trees where the ADJ is a dependent of the NOUN, yielding (e.g.)\nDET NOUN ADJ VERB PROPN the cake tasty pleased Sue\ndobjdet amod nsubj\n. This has the same POS sequence as the example above (as it happens), but now assigns the correct tree to it."
+  }, {
+    "heading": "2.2 A parametric realization model",
+    "text": "As our family of realization distributions, we adopt the log-linear model used for this purpose by Wang and Eisner (2016). The model assumes that the root node a of the unordered dependency tree selects an ordering π(a) of the na nodes consisting\nof a and its na − 1 dependent children. The procedure is repeated recursively at the child nodes. This method can produce only projective trees.\nEach node a draws its ordering π(a) independently according to\npθ(π | a) = 1\nZ(a) exp ∑ 1≤i<j≤na θ · f(π, i, j) (1)\nwhich is a distribution over the na! possible orderings. Z(a) is a normalizing constant. f is a feature vector extracted from the ordered pair of nodes πi, πj , and θ is the model’s parameter vector of feature weights. See Appendix A for the feature templates, which are a subset of those used by Wang and Eisner (2016). These features are able to examine the tree’s node labels (POS tags) and edge labels (dependency relations). Thus, when a is a verb, the model can assign a positive weight to “subject precedes verb” or “subject precedes object,” thus preferring orderings with these features.\nFollowing Wang and Eisner (2016, §3.1), we choose new orderings for the noun and verb nodes only,2 preserving the source treebank’s order at all other nodes a."
+  }, {
+    "heading": "2.3 Generating training data",
+    "text": "Given a source treebank B and some parameters θ, we can use equation (1) to randomly sample realizations of the trees inB. The effect is to reorder dependent phrases within those trees. The resulting permuted treebank B′ can be used to train a parser for the target language."
+  }, {
+    "heading": "2.4 Choosing parameters θ",
+    "text": "So how do we choose θ that works for the target language? Suppose u is a corpus of targetlanguage POS sequences, using the same set of POS tags as B. We evaluate parameters θ according to whether POS tag sequences in B′ will be distributed like POS tag sequences in u.\nTo do this, first we estimate a bigram language model q̂ from the actual distribution q of POS sequences observed in u. Second, let pθ denote the distribution of POS sequences that we expect to see in B′, that is, POS sequences obtained by\n2Specifically, the 93% of nodes tagged with NOUN, PROPN, PRON or VERB in Universal Dependencies format. In retrospect, this restriction was unnecessary in our setting, but it skipped only 4.4% of nodes on average (from 2% to 11% depending on language). The remaining nodes were nouns, verbs, or childless.\nstochastically realizing observed trees in B according to θ. We estimate another bigram model p̂θ from this distribution pθ.\nWe then try to set θ, using SGD, to minimize a divergence D(p̂θ, q̂) that we will define below."
+  }, {
+    "heading": "2.4.1 Estimation of bigram models",
+    "text": "Estimating q̂ is straightforward: q̂(t | s) = cq(st)/cq(s), where cq(st) is the count of POS bigram st in the average3 sentence of u and cq(s) =∑\nt′ cq(st ′). We estimate p̂θ in the same way, where cp(st) denotes the expected count of st in a random POS sequence y ∼ pθ. This is equivalent to choosing q̂, p̂θ to minimize the KL-divergences KL(q || q̂),KL(pθ || p̂θ). It ensures that each model’s expected bigram counts match those in the POS sequences.\nHowever, these maximum-likelihood estimates might overfit on our finite data, u and B. We therefore smooth both models by first adding λ = 0.1 to all bigram counts cq(st) and cp(st).4"
+  }, {
+    "heading": "2.4.2 Divergence of bigram models",
+    "text": "We need a metric to evaluate θ. If p and q are bigram language models over POS sequences y (sentences), their Kullback-Leibler divergence is\nKL(p || q) def= Ey∼p[log p(y)− log q(y)] (2) = ∑ s,t cp(st) (3)\n· (log p(t | s)− log q(t | s))\nwhere y ranges over POS sequences and st ranges over POS bigrams. These include bigrams where s = BOS (“beginning of sequence”) or t = EOS (“end of sequence”), which are boundary tags that we take to surround y.\nAll quantities in equation (3) can be determined directly from the (expected) bigram counts given by cp and cq. No other model estimation is needed.\nA concern about equation (3) is that a single bigram st that is badly underrepresented in q may contribute an arbitrarily large term log p(t|s)q(t|s) . To limit this contribution to at most log 1α , for some small α ∈ (0, 1), we define KLα(p || q) by a variant of equation (3) in which q(t | s) has been replaced by q̃(t | s) def= αp(t | s) + (1− α)q(t | s).5\n3A more familiar definition of cq would use the total count in u. Our definition, which yields the same bigram probabilities, is analogous to our definition of cp. This cp is needed for KL(p || q) in (3), and cq symmetrically for KL(q || p).\n4Ideally one should tune λ to minimize the language model perplexity on held-out data (e.g., by cross-validation).\n5This is inspired by the α-skew divergence of Lee (1999,\nOur final divergence metric D(p̂θ, q̂) defines D as a linear combination of exclusive and inclusive KLα divergences, which respectively emphasize pθ’s precision and recall at matching q’s bigrams:\nD(p, q) = (1−β)·KLα1(p || q) Ey∼p[ |y| ] +β·KLα2(q || p) Ey∼q[ |y| ] (4) where β, α1, α2 are tuned by cross-validation to maximize the downstream parsing performance. The division by average sentence length converts KL from nats per sentence to nats per word,6 so that the KL values have comparable scale even if B has much longer or shorter sentences than u."
+  }, {
+    "heading": "3 Algorithms",
+    "text": ""
+  }, {
+    "heading": "3.1 Efficiently computing expected counts",
+    "text": "We now present a polynomial-time algorithm for computing the expected bigram counts cp under pθ (or equivalently p̂θ), for use above. This averages expected counts from each unordered tree x ∈ B. Algorithm 1 in the supplement gives pseudocode.\nThe insight is that rather than sampling a single realization of x (as B′ does), we can use dynamic programming to sum efficiently over all of its exponentially many realizations. This gives an exact answer. It algorithmically resembles tree-to-string machine translation, which likewise considers the possible reorderings of a source tree and incorporates a language model by similarly tracking their surface N -grams (Chiang, 2007, §5.3.2).\nFor each node a of the tree x, let the POS string ya be the realization of the subtree rooted at a. Let ca(st) be the expected count of bigram st in ya, whose distribution is governed by equation (1). We allow s = BOS or t = EOS as defined in §2.4.2.\nThe ca function can be represented as a sparse map from POS bigrams to reals. We compute ca at each node a of x in a bottom-up order. The final step computes croot, giving the expected bigram counts in x’s realization y (that is, cp in §2.4).\nWe find ca as follows. Let n = na and recall from §2.2 that π(a) is an ordering of a1, . . . , an, where a1, . . . , an−1 are the child nodes of a, and an is a dummy node representing a’s head token.\n2001). Indeed, we may regard KLα(p || q) as the α-skew divergence between the unigram distributions p(· | s) and q(· | s), averaged over all s in proportion to cp(s). In principle, we could have used the α-skew divergence between the distributions p(·) and q(·) over POS sequences y, but computing that would have required a sampling-based approximation (§7).\n6Recall that the units of negated log-probability are called bits for log base 2, but nats for log base e.\nAlso, let a0 and an+1 be dummy nodes that always appear at the start and end of any ordering.\nFor all 0 ≤ i ≤ n and 1 ≤ j ≤ n + 1, let pa(i, j) denote the expected count of the aiaj node bigram—the probability that π(a) places node ai immediately before node aj . These node bigram probabilities can be obtained by enumerating all possible orderings π, a matter we return to below.\nIt is now easy to compute ca:\nca(st) = c within a (st) + c between a (st) (5)\ncwithina (st) =\n{∑n i=1 cai(st) if s 6= BOS, t 6= EOS\n0 otherwise\ncacrossa (st) = n∑ i=0 n+1∑ j=1 pa(i, j)cai(s EOS)caj (BOS t)\nThat is, ca inherits all non-boundary bigrams st that fall within its child constituents (via cwithina ). It also counts bigrams st that cross the boundary between consecutive nodes (via cacrossa ), where nodes ai and aj are consecutive with probability pa(i, j).\nWhen computing ca via (5), we will have already computed ca1 , . . . , can−1 bottom-up. As for the dummy nodes, an is realized by the length-1 string hwhere h is the head token of node a, while a0 and an+1 are each realized by the empty string. Thus, can simply assigns count 1 to the bigrams BOS h and h EOS, and ca0 and can+1 each assign expected count 1 to BOS EOS. (Notice that thus, cacrossa (st) counts ya’s boundary bigrams—the bigrams stwhere s = BOS or t = EOS—when i = 0 or j = n+ 1 respectively.)"
+  }, {
+    "heading": "3.2 Efficient enumeration over permutations",
+    "text": "The main challenge above is computing the node bigram probabilities pa(i, j). These are marginals of p(π | a) as defined by (1), which unfortunately is intractable to marginalize: there is no better way than enumerating all n! permutations.\nThat said, there is a particularly efficient way to enumerate the permutations. The SteinhausJohnson-Trotter (SJT) algorithm (Sedgewick, 1977) does so in O(1) time per permutation, obtaining each permutation by applying a single swap to the previous one. Only the features that are affected by this swap need to be recomputed. For our features (Appendix A), this cuts the runtime per permutation from O(n2) to O(n).\nFurthermore, the single swap of adjacent nodes only changes 3 bigrams (possibly including boundary bigrams). As a result, it is possible to\nobtain the marginal probabilities with O(1) additional work per permutation. When a node bigram is destroyed, we increment its marginal probability by the total probability of permutations encountered since the node bigram was last created. This can be found as a difference of partial sums. The final partial sum is the normalizing constant Z(a), which can be applied at the end. Pseudocode is given in supplementary material as Algorithm 2.\nWhen we train the parameters θ (§2.4), we must back-propagate through the whole computation of equation (4), which depends on tag bigram counts ca(st), which depend via (5) on expected node bigram counts pa(i, j), which depend via Algorithm 2 on the permutation probabilities p(π | a), which depend via (1) on the feature weights θ."
+  }, {
+    "heading": "4 Heuristics",
+    "text": ""
+  }, {
+    "heading": "4.1 Pruning high-degree trees",
+    "text": "As a further speedup, we only train on trees with number of words < 40 and maxa na ≤ 5, so na! ≤ 120.7 We then produce the synthetic treebank B′ (§2.3) by drawing a single realization of each tree in B for which maxa na ≤ 7. This requires sampling from up to 7! = 5040 candidates per node, again using SJT.8\nThat is, in this paper we run exact algorithms (§3), but only on a subset of B. The subset is not necessarily representative. An improvement would use importance sampling, with a proposal distribution that samples the slower trees less often during SGD but upweights them to compensate. §7 suggests a future strategy that would run on all trees in B via approximate, sampling-based algorithms. The exact methods would remain useful for calibrating the approximation quality."
+  }, {
+    "heading": "4.2 Minibatch estimation of cp",
+    "text": "To minimize (4), we use the Adam variant of SGD (Kingma and Ba, 2014), with learning rate 0.01 chosen by cross-validation (§5.1).\nSGD requires a stochastic estimate of the gradient of the training objective. Ordinarily this is done by replacing an expectation over the entire training set with an expectation over a minibatch.\n7We found that this threshold worked much better than ≤ 4 and about as well as the much slower ≤ 6.\n8This pruning heuristic retains 36.1% of the trees (averaging over the 20 development treebanks (§5.1)) for training, and 66.6% for actual realization. The latter restriction follows Wang and Eisner (2016, §4.2): they too discarded trees with nodes having na ≥ 8.\nEquation (2) with p = p̂θ is indeed an expectation over sentences of B. It can be stochastically estimated as (3) where cp gives the expected bigram counts averaged over only the sentences in a minibatch of B. These are found using §3’s algorithms with the current θ. Unfortunately, the term log p(t | s) depends on bigram counts that should be derived from the entire corpus B in the same way. Our solution is to simply reuse the minibatch estimate of cp for the latter counts. We use a large minibatch of 500 sentences from B so that this drop-in estimate does not introduce too much bias into the stochastic gradient: after all, we only need to estimate bigram statistics on 17 POS types.9\nBy contrast, the cq values that are used for the expectation in the second term of (4) and in log q(t | s) do not change during optimization, so we simply compute them once from all of u."
+  }, {
+    "heading": "4.3 Informed initialization",
+    "text": "Unfortunately the objective (4) is not convex, so the optimizer is sensitive to initialization (see §5.3 below for empirical discussion). Initializing θ = 0 (so that p(π | a) is uniform) gave poor results in pilot experiments. Instead, we initially choose θ to be the realization parameters of the source language, as estimated from the source treebank B. This is at least a linguistically realistic θ, although it may not be close to the target language.10\nFor this initial estimation, we follow Wang and Eisner (2016) and perform supervised training on B of the log-linear realization model (1), by maximizing the conditional log-likelihood of B, namely ∑ (x,t)∈B log pθ(t | x), where (x, t) are an unordered tree and its observed ordering in B. This initial objective is convex.11"
+  }, {
+    "heading": "5 Experiments",
+    "text": "We performed a large-scale experiment requiring hundreds of thousands of CPU-hours. To our knowledge, this is the largest study of parsing transfer yet attempted.\n9We also used the minibatch to estimate the average sentence length Ey∼p[ |y| ] in (4), although here we could have simply used all of B since this value does not change.\n10As an improvement, one could also try initial realization parameters for B that are estimated from treebanks of other languages. Concretely, the optimizer could start by selecting a “galactic” treebank from Wang and Eisner (2016) that is already close to the target language, according to (4), and try to make it even closer. We leave this to future work.\n11Unfortunately, we did not regularize it, which probably resulted in initializing some parameters too close to ±∞ for the optimizer to change them meaningfully."
+  }, {
+    "heading": "5.1 Data and setup",
+    "text": "As our main dataset, we use Universal Dependencies version 1.2 (Nivre et al., 2015)—a set of 37 dependency treebanks for 33 languages, with a unified POS-tag set and relation label set.\nOur evaluation metric was unnormalized attachment score (UAS) when parsing a target treebank with a parser trained on a (possibly permuted) source treebank. For both evaluation and training, we used only the training portion of each treebank.\nOur parser was Yara (Rasooli and Tetreault, 2015), a fast and accurate transition-based dependency parser that can be rapidly retrained. We modified Yara to ignore the input words and use only the input gold POS tags (see §1.3). To train the Yara parser on a (possibly permuted) source treebank, we first train on 80% of the trees and use the remaining 20% to tune Yara’s hyperparameters. We then retrain Yara on 100% of the source trees and evaluate it on the target treebank.\nSimilar to Wang and Eisner (2017), we use 20 treebanks (18 distinct languages) as development data, and hold out the remaining 17 treebanks for the final evaluation. We chose the hyperparameters (α1, α2, β) of (4) to maximize the target-language UAS, averaged over all 376 transfer experiments where the source and target treebanks were development treebanks of different languages.12 (See Appendix C for details.)\nThe next few sections perform some exploratory analysis on these 376 experiments. Then, for the final test in §5.4, we will evaluate UAS on all 337 transfer experiments where the source is a development treebank and the target is a test treebank of a different language.13"
+  }, {
+    "heading": "5.2 Exploratory analysis",
+    "text": "We have assumed that a smaller divergence between source and target treebanks results in better transfer parsing accuracy. Figure 1 shows that these quantities are indeed correlated, both for the original source treebanks and for their “made to order” permuted versions.\n12We have 19*20=380 pairs in total, minus the four excluded pairs (grc, grc proiel), (grc proiel, grc), (la proiel, la itt) and (la itt, la proiel). Unlike Wang and Eisner (2017), we exclude duplicated languages in development and testing.\n13Specifically, there are 3 duplicated sets: {grc, grc proiel}, {la, la proiel, la itt}, and {fi, fi ftb}. Whenever one treebank is used as the target language, we exclude the other treebanks in the same set.\n15According to the family (and sub-family) information at http://universaldependencies.org.\nThus, we hope that the optimizer will find a systematic permutation that reduces the divergence. Does it? Yes: Figures 5 and 6 in the supplementary material show that the optimizer almost always manages to reduce the objective on training data, as expected.\nOne concern is that our divergence metric might misguide us into producing dysfunctional languages whose trees cannot be easily recovered from their surface strings, i.e., they have no good parser. In such a language, the word order might be extremely free (e.g., θ = 0), or common constructions might be syntactically ambiguous. Fortunately, Appendix D shows that our synthetic languages appear natural with respect to their their parsability.\nThe above findings are promising. So does permuting the source language in fact result in better transfer parsing of the target language? We experiment on the 376 development pairs.\nThe solid lines in Figure 2 show our improvements on the dev data, with a simpler scatterplot given by in Figure 7 in the supplementary material. The upshot is that the synthetic source treebanks yield a transfer UAS of 52.92 on average. This is not yet a result on held-out test data: recall that 52.92 was the best transfer UAS achieved by any hyperparameter setting. That said, it is 1.00 points better than transferring from the original source treebanks, a significant difference (paired permutation test by language pair, p < 0.01).\nFigure 2 shows that this average improvement is mainly due to the many cases where the source and target languages come from different families.\nPermutation tends to improve source languages that were doing badly to start with. However, it tends to hurt a source language that is already in the target language family.\nA hypothetical experiment shows that permuting the source does have good potential to help (or at least not hurt) in both cases. The dashed lines in Figure 2—and the scatterplot in Figure 8— show the potential of the method, by showing the improvement we would get from permuting each source treebank using an “oracle” realization policy—the supervised realization parameters θ that are estimated from the actual target treebank. The usefulness of this oracle-permuted source varies depending on the source language, but it is usually much better than the automaticallypermuted version of the same source.\nThis shows that large improvements would be possible if we could only find the best permutation policy allowed by our model family. The question for future work is whether such gains can be achieved by a more sensitive permutation model than (1), a better divergence objective than (4), or a better search algorithm than §4.2. Identifying the best available source treebank, or the best mixture of all source treebanks, would also help greatly."
+  }, {
+    "heading": "5.3 Sensitivity to initializer",
+    "text": "Figure 2 makes clear that performance of the synthetic source treebanks is strongly correlated with that of their original versions. Most points in Figure 7 lie near the diagonal (Kendall’s τ = 0.85). Even with oracle permutation in Figure 8, the correlation remains strong (τ = 0.59), suggesting that the choice of source treebank is important even beyond its effect on search initialization.\nWe suspected that when “made to order” source treebanks (more than the oracle versions) have performance close to their original versions, this is in part because the optimizer can get stuck near the initializer (§4.3). To examine this, we experimented with random restarts, as follows. In addition to informed initialization (§4.3), we optimized from 5 other starting points θ ∼ N (0, I). From these 6 runs, we selected the final parameters that achieved the best divergence (4). As shown by\nFigure 9 in the supplement, greater gains appear to be possible with more aggressive search methods of this sort, which we leave to future work. We could also try non-random restarts based on the realization parameters of other languages, as suggested in footnote 10."
+  }, {
+    "heading": "5.4 Final evaluation on the test languages",
+    "text": "For our final evaluation (§5.1), we use the same hyperparameters (Appendix C) and report on single-source transfer to the 17 held-out treebanks.\nThe development results hold up in Figure 3. Using the synthetic languages yields 50.36 UAS on average—1.75 points over the baseline, which is significant (paired permutation test, p < 0.01).\nIn the supplementary material (Appendix E), we include some auxiliary experiments on multisource transfer."
+  }, {
+    "heading": "6 Related Work",
+    "text": ""
+  }, {
+    "heading": "6.1 Unsupervised parsing",
+    "text": "Unsupervised parsing has remained challenging for decades (Mareček, 2016). Classical grammar induction approaches (Lari and Young, 1990; Carroll and Charniak, 1992; Klein and Manning, 2004; Headden III et al., 2009; Naseem et al., 2010) estimate a generative grammar to explain the sentences, for example by the ExpectationMaximization (EM) algorithm, and then use it to parse. Some such approaches try to improve the grammar model. For example, Klein and Manning (2004)’s dependency model with valence was the first to beat a trivial baseline; later improvements considered higher-order effects and punctuation (Headden III et al., 2009; Spitkovsky et al., 2012). Other approaches try to avoid search error, using strategies like convexified objectives (Wang et al., 2008; Gimpel and Smith, 2012), informed initialization (Klein and Manning, 2004; Mareček and Straka, 2013), search bias (Smith and Eisner, 2005, 2006; Naseem et al., 2010; Gillenwater et al., 2010), branch-and-bound search (Gormley and Eisner, 2013), and switching objectives (Spitkovsky et al., 2013).\nThe alternative of cross-lingual transfer has recently flourished thanks to the development of consistent cross-lingual datasets of POS-tagged (Petrov et al., 2012) and dependency-parsed (McDonald et al., 2013) sentences. McDonald et al. (2011) showed a significant improvement over grammar induction by simply using the delexicalized parser trained on other language(s). Subsequent improvements have come from re-weighting source languages (Søgaard, 2011b; Rosa and Žabokrtský, 2015a,b; Wang and Eisner, 2016), adapting the model to the target language using WALS (Dryer and Haspelmath, 2013) features (Naseem et al., 2012; Täckström et al., 2013;\nZhang and Barzilay, 2015; Ammar et al., 2016), and improving the lexical representations via multilingual word embeddings (Duong et al., 2015; Guo et al., 2016; Ammar et al., 2016) and synthetic data generation (§6.2)."
+  }, {
+    "heading": "6.2 Synthetic data generation",
+    "text": "Our novel proposal ties into the recent interest in data augmentation in supervised machine learning. In unsupervised parsing, the most widely\nadopted synthetic data method has been annotation projection, which generates synthetic analyses of target-language sentences by “projecting” the analysis from a source-language translation. Of course, this requires bilingual corpora as an additional resource. Annotation projection was proposed by Yarowsky et al. (2001), gained promising results on sequence labelling tasks, and was later developed for unsupervised parsing (Hwa et al., 2005; Ganchev et al., 2009; Smith and Eisner, 2009; Tiedemann, 2014; Ma and Xia, 2014; Tiedemann et al., 2014). Recent work in this vein has mainly focused on improving the synthetic data, including reweighting the training trees (Agić et al., 2016) or pruning those that cannot be aligned well (Rasooli and Collins, 2015, 2017; Lacroix et al., 2016).\nOn the other hand, Wang and Eisner (2016) proposed to permute source language treebanks using word order realization models trained on other source languages. They generated on the order of 50,000 synthetic languages by “mixing and matching” a few dozen source languages. Their idea was that with a large set of synthetic languages, they could use them as supervised examples to train an unsupervised structure discovery system that could analyze any new language. Systems built with this dataset were competitive in single-source parser transfer (Wang and Eisner, 2016), typology\nprediction (Wang and Eisner, 2017), and parsing unknown languages (Wang and Eisner, 2018).\nOur work in this paper differs in that our synthetic treebanks are “made to order.” Rather than combine aspects of different treebanks and hope to get at least one combination that is close to the target language, we “combine” the source treebank with a POS corpus of the target language, which guides our customized permutation of the source.\nBeyond unsupervised parsing, synthetic data has been used for several other tasks. In NLP, it has been used for complex tasks such as questionanswering (QA) (Serban et al., 2016) and machine reading comprehension (Weston et al., 2016; Hermann et al., 2015; Rajpurkar et al., 2016), where highly expressive neural models are used and not enough real data is available to train them. In the playground of supervised parsing, Gulordava and Merlo (2016) conduct a controlled study on the parsibility of languages by generating treebanks with short dependency length and low variability of word order."
+  }, {
+    "heading": "7 Conclusion & Future Work",
+    "text": "We have shown how cross-lingual transfer parsing can be improved by permuting the source treebank to better resemble the target language on the surface (in its distribution of gold POS bigrams). The code is available at https://github. com/wddabc/ordersynthetic. Our work is grounded in the notion that by trying to explain the POS bigram counts in a target corpus, we can discover a stochastic realization policy for the target language, which correctly “translates” the source trees into appropriate target trees.\nWe formulated an objective for evaluating such a policy, based on KL-divergence between bigram models. We showed that the objective could be computed efficiently by dynamic programming, thanks to the limitation to bigram statistics.\nExperimenting on the Universal Dependencies treebanks v1.2, we showed that the synthetic treebanks were—on average—modestly but significantly better than the corresponding real treebanks for single-source transfer (and in Appendix E, on multi-source transfer).\nOn the downside, Figure 7 shows that with our current method, permuting the source language to be more like the target language is helpful (on average) only when the source language is from a different language family. This contrast would be\neven more striking if we had a better optimizer:\nFigure 9 shows that SGD’s initialization bias limits permutation’s benefit for cross-family training, as well as its harm for within-family training.\nSeveral opportunities for future work have already been mentioned throughout the paper. We are also interested in experimenting with richer families of permutation distributions, as well as “conservative” distributions that tend to prefer the original source order. We could use entropy regularization (Grandvalet and Bengio, 2005) to encourage more “deterministic” patterns of realization in the synthetic languages.\nWe would also like to consider more sensitive divergence measures that go beyond bigrams, for example using recurrent neural network language models (RNNLMs) for q̂ and p̂θ. This means abandoning our exact dynamic programming methods; we would also like to abandon exact exhaustive enumeration in order to drop §4.1’s bounds on n. Fortunately, there exist powerful MCMC methods (Eisner and Tromble, 2006) that can sample from interesting distributions over the space of n! permutations, even for large n. Thus, we could approximately sample from pθ by drawing permuted versions of each tree in B.\nGiven this change, a very interesting direction would be to graduate from POS language models to word language models, using cross-lingual unsupervised word embeddings (Ruder et al., 2017). This would eliminate the need for the gold POS tags that we unrealistically assumed in this paper (which are typically unavailable for a low-resource target language). Furthermore, it would enable us to harness richer lexical information beyond the 17 UD POS tags. After all, even a (gold) POS corpus might not be sufficient to determine the word order of the target language: “NOUN VERB NOUN” could be either subject-verb-object or object-verbsubject. However, “water drink boy” is presumably object-verb-subject. Thus, using crosslingual embeddings, we would try to realize the unordered source trees so that their word strings, with few edits, can achieve high probability under a neural language model of the target."
+  }, {
+    "heading": "Acknowledgements",
+    "text": "This work was supported by National Science Foundation Grants 1423276 & 1718846. We are grateful to the state of Maryland for the Maryland Advanced Research Computing Center, a crucial resource. We thank Shijie Wu and Adithya Renduchintala for early discussion, Argo lab members for further discussion, and the 3 reviewers for quality comments."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Multilingual projection for parsing truly low-resource languages",
+    "authors": ["Željko Agić", "Anders Johannsen", "Barbara Plank", "Héctor Martı́nez Alonso", "Natalie Schluter", "Anders Søgaard"],
+    "venue": "Transactions of the Association for Computational Linguistics,",
+    "year": 2016
+  }, {
+    "title": "Many languages, one parser",
+    "authors": ["Waleed Ammar", "George Mulcaire", "Miguel Ballesteros", "Chris Dyer", "Noah Smith."],
+    "venue": "Transactions of the Association of Computational Linguistics, 4:431–444.",
+    "year": 2016
+  }, {
+    "title": "The Prague dependency treebank",
+    "authors": ["Alena Böhmová", "Jan Hajič", "Eva Hajičová", "Barbora Hladká."],
+    "venue": "Treebanks, pages 103–127. Springer.",
+    "year": 2003
+  }, {
+    "title": "Two experiments on learning probabilistic dependency grammars from corpora",
+    "authors": ["Glenn Carroll", "Eugene Charniak."],
+    "venue": "Statistically-Based Natural Language Processing Techniques: Papers from the Workshop, pages 1–13, Menlo Park: AAAI Press.",
+    "year": 1992
+  }, {
+    "title": "Hierarchical phrase-based translation",
+    "authors": ["David Chiang."],
+    "venue": "Computational Linguistics, 33(2):201–228.",
+    "year": 2007
+  }, {
+    "title": "The World Atlas of Language Structures Online. Max Planck Institute for Evolutionary Anthropology, Leipzig. http://wals.info",
+    "authors": ["Matthew S. Dryer", "Martin Haspelmath", "editors"],
+    "year": 2013
+  }, {
+    "title": "Cross-lingual transfer for unsupervised dependency parsing without parallel data",
+    "authors": ["Long Duong", "Trevor Cohn", "Steven Bird", "Paul Cook."],
+    "venue": "Proceedings of the Nineteenth Conference on Computational Natural Language Learning, pages 113–122.",
+    "year": 2015
+  }, {
+    "title": "Local search with very large-scale neighborhoods for optimal permutations in machine translation",
+    "authors": ["Jason Eisner", "Roy W. Tromble."],
+    "venue": "Proceedings of the HLT-NAACL Workshop on Computationally Hard Problems and Joint Inference in Speech and",
+    "year": 2006
+  }, {
+    "title": "Tree linearization in English: Improving language model based approaches",
+    "authors": ["Katja Filippova", "Michael Strube."],
+    "venue": "Proceedings of Human Language Technologies: The 2009 Annual Conference of the North American Chapter of the Association",
+    "year": 2009
+  }, {
+    "title": "Experiments with generative models for dependency tree linearization",
+    "authors": ["Richard Futrell", "Edward Gibson."],
+    "venue": "Proceedings of the 2015 Conference on Empirical Methods in Natural Language Processing, pages 1978–1983.",
+    "year": 2015
+  }, {
+    "title": "Dependency grammar induction via bitext projection constraints",
+    "authors": ["Kuzman Ganchev", "Jennifer Gillenwater", "Ben Taskar."],
+    "venue": "Proceedings of the Joint Conference of the 47th Annual Meeting of the ACL and the 4th International Joint Conference on",
+    "year": 2009
+  }, {
+    "title": "Sparsity in dependency grammar induction",
+    "authors": ["Jennifer Gillenwater", "Kuzman Ganchev", "Joo Graa", "Fernando Pereira", "Ben Taskar."],
+    "venue": "Proceedings of the ACL 2010 Conference Short Papers, pages 194– 199.",
+    "year": 2010
+  }, {
+    "title": "Concavity and initialization for unsupervised dependency parsing",
+    "authors": ["Kevin Gimpel", "Noah A. Smith."],
+    "venue": "Proceedings of the 2012 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Tech-",
+    "year": 2012
+  }, {
+    "title": "Nonconvex global optimization for latent-variable models",
+    "authors": ["Matthew Gormley", "Jason Eisner."],
+    "venue": "Proceedings of the 51st Annual Meeting of the Association for Computational Linguistics (ACL), pages 444–454.",
+    "year": 2013
+  }, {
+    "title": "Semisupervised learning by entropy minimization",
+    "authors": ["Yves Grandvalet", "Yoshua Bengio."],
+    "venue": "L. K. Saul, Y. Weiss, and L. Bottou, editors, Advances in Neural Information Processing Systems 17, pages 529–536. MIT Press.",
+    "year": 2005
+  }, {
+    "title": "Multilingual dependency parsing evaluation: A largescale analysis of word order properties using artificial data",
+    "authors": ["Kristina Gulordava", "Paola Merlo."],
+    "venue": "Transactions of the Association for Computational Linguistics, 4:343–356.",
+    "year": 2016
+  }, {
+    "title": "A representation learning framework for multi-source transfer parsing",
+    "authors": ["Jiang Guo", "Wanxiang Che", "David Yarowsky", "Haifeng Wang", "Ting Liu."],
+    "venue": "AAAI, pages 2734–2740.",
+    "year": 2016
+  }, {
+    "title": "Improving unsupervised dependency parsing with richer contexts and smoothing",
+    "authors": ["William P. Headden III", "Mark Johnson", "David McClosky."],
+    "venue": "Proceedings of Human Language Technologies: The 2009 Annual Conference of the North American",
+    "year": 2009
+  }, {
+    "title": "Teaching machines to read and comprehend",
+    "authors": ["Karl Moritz Hermann", "Tomas Kocisky", "Edward Grefenstette", "Lasse Espeholt", "Will Kay", "Mustafa Suleyman", "Phil Blunsom."],
+    "venue": "Advances in Neural Information Processing Systems, pages 1684–",
+    "year": 2015
+  }, {
+    "title": "Bootstrapping parsers via syntactic projection across parallel texts",
+    "authors": ["Rebecca Hwa", "Philip Resnik", "Amy Weinberg", "Clara Cabezas", "Okan Kolak."],
+    "venue": "Natural Language Engineering, 11(3):311–325.",
+    "year": 2005
+  }, {
+    "title": "Adam: A method for stochastic optimization",
+    "authors": ["Diederik Kingma", "Jimmy Ba."],
+    "venue": "Proceedings of the International Conference on Learning Representations (ICLR).",
+    "year": 2014
+  }, {
+    "title": "Simple and accurate dependency parsing using bidirectional LSTM feature representations",
+    "authors": ["Eliyahu Kiperwasser", "Yoav Goldberg."],
+    "venue": "Transactions of the Association of Computational Linguistics, 4:313–327.",
+    "year": 2016
+  }, {
+    "title": "Corpusbased induction of syntactic structure: Models of dependency and constituency",
+    "authors": ["Dan Klein", "Christopher Manning."],
+    "venue": "Proceedings of the 42nd Annual Meeting of the Association for Computational Linguistics, pages 478–485.",
+    "year": 2004
+  }, {
+    "title": "Frustratingly easy cross-lingual transfer for transition-based dependency parsing",
+    "authors": ["Ophélie Lacroix", "Lauriane Aufrant", "Guillaume Wisniewski", "François Yvon."],
+    "venue": "Proceedings of the 2016 Conference of the North American Chapter of the Asso-",
+    "year": 2016
+  }, {
+    "title": "The estimation of stochastic context-free grammars using the inside-outside algorithm",
+    "authors": ["Karim Lari", "Steve J. Young."],
+    "venue": "Computer Speech and Language, 4(1):35–56.",
+    "year": 1990
+  }, {
+    "title": "Measures of distributional similarity",
+    "authors": ["Lillian Lee."],
+    "venue": "Proceedings of the 37th Annual Meeting of the Association for Computational Linguistics, pages 25–32.",
+    "year": 1999
+  }, {
+    "title": "On the effectiveness of the skew divergence for statistical language analysis",
+    "authors": ["Lillian Lee."],
+    "venue": "Proceedings of AISTATS.",
+    "year": 2001
+  }, {
+    "title": "Unsupervised dependency parsing with transferring distribution via parallel guidance and entropy regularization",
+    "authors": ["Xuezhe Ma", "Fei Xia."],
+    "venue": "Proceedings of the 52nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long",
+    "year": 2014
+  }, {
+    "title": "Stopprobability estimates computed on a large corpus improve unsupervised dependency parsing",
+    "authors": ["David Mareček", "Milan Straka."],
+    "venue": "Proceedings of the 51st Annual Meeting of the Association for Computational Linguistics (Volume 1: Long",
+    "year": 2013
+  }, {
+    "title": "Twelve years of unsupervised dependency parsing",
+    "authors": ["David Mareček."],
+    "venue": "Proceedings of the 16th ITAT Conference on Information Technologies— Applications and Theory, pages 56–62.",
+    "year": 2016
+  }, {
+    "title": "Discriminative Learning and Spanning Tree Algorithms for Dependency Parsing",
+    "authors": ["Ryan McDonald", "Fernando Pereira."],
+    "venue": "Ph.D. thesis, University of Pennsylvania.",
+    "year": 2006
+  }, {
+    "title": "Multi-source transfer of delexicalized dependency parsers",
+    "authors": ["Ryan McDonald", "Slav Petrov", "Keith Hall."],
+    "venue": "Proceedings of the 2011 Conference on Empirical Methods in Natural Language Processing, pages 62–72.",
+    "year": 2011
+  }, {
+    "title": "The first multilingual surface realisation shared task (SR’18): Overview and evaluation results",
+    "authors": ["Simon Mille", "Anja Belz", "Bernd Bohnet", "Yvette Graham", "Emily Pitler", "Leo Wanner."],
+    "venue": "Proceedings of the 1st Workshop on Multilingual Surface Realiza-",
+    "year": 2018
+  }, {
+    "title": "Selective sharing for multilingual dependency parsing",
+    "authors": ["Tahira Naseem", "Regina Barzilay", "Amir Globerson."],
+    "venue": "Proceedings of the 50th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 629–637.",
+    "year": 2012
+  }, {
+    "title": "Using universal linguistic knowledge to guide grammar induction",
+    "authors": ["Tahira Naseem", "Harr Chen", "Regina Barzilay", "Mark Johnson."],
+    "venue": "Proceedings of the 2010 Conference on Empirical Methods in Natural Language Processing, pages 1234–1244.",
+    "year": 2010
+  }, {
+    "title": "Algorithms for deterministic incremental dependency parsing",
+    "authors": ["Joakim Nivre."],
+    "venue": "Computational Linguistics, 34(4):513–553.",
+    "year": 2008
+  }, {
+    "title": "MSTParser model interpolation for multi-source delexicalized transfer",
+    "authors": ["Rudolf Rosa", "Zdeněk Žabokrtský."],
+    "venue": "Proceedings of the 14th International Conference on Parsing Technologies, pages 71–75.",
+    "year": 2015
+  }, {
+    "title": "A survey of cross-lingual word embedding models",
+    "authors": ["Sebastian Ruder", "Ivan Vulić", "Anders Søgaard."],
+    "venue": "Computing Research Repository, arXiv:1706.04902.",
+    "year": 2017
+  }, {
+    "title": "Permutation generation methods",
+    "authors": ["Robert Sedgewick."],
+    "venue": "ACM Computing Surveys, 9(2):137–164.",
+    "year": 1977
+  }, {
+    "title": "Generating factoid questions with recurrent neural networks: The 30M factoid question-answer corpus",
+    "authors": ["Iulian Vlad Serban", "Alberto Garcı́a-Durán", "Caglar Gulcehre", "Sungjin Ahn", "Sarath Chandar", "Aaron Courville", "Yoshua Bengio"],
+    "year": 2016
+  }, {
+    "title": "Parser adaptation and projection with quasi-synchronous grammar features",
+    "authors": ["David A. Smith", "Jason Eisner."],
+    "venue": "Proceedings of the Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 822–831.",
+    "year": 2009
+  }, {
+    "title": "Guiding unsupervised grammar induction using contrastive estimation",
+    "authors": ["Noah A. Smith", "Jason Eisner."],
+    "venue": "International Joint Conference on Artificial Intelligence (IJCAI) Workshop on Grammatical Inference Applications, pages 73–82.",
+    "year": 2005
+  }, {
+    "title": "Annealing structural bias in multilingual weighted grammar induction",
+    "authors": ["Noah A. Smith", "Jason Eisner."],
+    "venue": "Proceedings of the International Conference on Computational Linguistics and the Association for Computational Linguistics (COLING-ACL),",
+    "year": 2006
+  }, {
+    "title": "Data point selection for crosslanguage adaptation of dependency parsers",
+    "authors": ["Anders Søgaard."],
+    "venue": "Proceedings of the 49th Annual Meeting of the Association for Computational Linguistics: Human Language Technologies, pages 682–686. Association for",
+    "year": 2011
+  }, {
+    "title": "Data point selection for crosslanguage adaptation of dependency parsers",
+    "authors": ["Anders Søgaard."],
+    "venue": "Proceedings of the 49th Annual Meeting of the Association for Computational Linguistics: Human Language Technologies, pages 682–686.",
+    "year": 2011
+  }, {
+    "title": "Three dependency-and-boundary models for grammar induction",
+    "authors": ["Valentin I Spitkovsky", "Hiyan Alshawi", "Daniel Jurafsky."],
+    "venue": "Proceedings of the 2012 Joint Conference on Empirical Methods in Natural Language Processing and Computational",
+    "year": 2012
+  }, {
+    "title": "Breaking out of local optima with count transforms and model recombination: A study",
+    "authors": ["Valentin I. Spitkovsky", "Hiyan Alshawi", "Daniel Jurafsky"],
+    "year": 2013
+  }, {
+    "title": "Target language adaptation of discriminative transfer parsers",
+    "authors": ["Oscar Täckström", "Ryan McDonald", "Joakim Nivre."],
+    "venue": "Proceedings of the 2013 Conference of the North American Chapter of the Association for Computational Linguistics: Human Lan-",
+    "year": 2013
+  }, {
+    "title": "Rediscovering annotation projection for cross-lingual parser induction",
+    "authors": ["Jörg Tiedemann."],
+    "venue": "Proceedings of the 25th International Conference on Computational Linguistics (COLING): Technical Papers, pages 1854–1864. Dublin City University",
+    "year": 2014
+  }, {
+    "title": "Treebank translation for cross-lingual parser induction",
+    "authors": ["Jörg Tiedemann", "Željko Agić", "Joakim Nivre."],
+    "venue": "Proceedings of the Eighteenth Conference on Computational Natural Language Learning, pages 130–140.",
+    "year": 2014
+  }, {
+    "title": "The Galactic Dependencies treebanks: Getting more data by synthesizing new languages",
+    "authors": ["Dingquan Wang", "Jason Eisner."],
+    "venue": "Transactions of the Association of Computational Linguistics, 4:491– 505. Data available at https://github.com/",
+    "year": 2016
+  }, {
+    "title": "Fine-grained prediction of syntactic typology: Discovering latent structure with supervised learning",
+    "authors": ["Dingquan Wang", "Jason Eisner."],
+    "venue": "Transactions of the Association for Computational Linguistics (TACL), 5.",
+    "year": 2017
+  }, {
+    "title": "Surface statistics of an unknown language indicate how to parse it",
+    "authors": ["Dingquan Wang", "Jason Eisner."],
+    "venue": "Transactions of the Association for Computational Linguistics (TACL). To appear.",
+    "year": 2018
+  }, {
+    "title": "Semi-supervised convex training for dependency parsing",
+    "authors": ["Qin Iris Wang", "Dale Schuurmans", "Dekang Lin."],
+    "venue": "Proceedings of ACL-HLT, pages 532–540.",
+    "year": 2008
+  }, {
+    "title": "Towards AI-complete question answering: A set of prerequisite toy tasks",
+    "authors": ["Jason Weston", "Antoine Bordes", "Sumit Chopra", "Tomas Mikolov."],
+    "venue": "Proceedings of the International Conference on Learning Representations.",
+    "year": 2016
+  }, {
+    "title": "Inducing multilingual text analysis tools via robust projection across aligned corpora",
+    "authors": ["David Yarowsky", "Grace Ngai", "Richard Wicentowski."],
+    "venue": "Proceedings of the First International Conference on Human Language Technology Research.",
+    "year": 2001
+  }, {
+    "title": "Crosslanguage parser adaptation between related languages",
+    "authors": ["Daniel Zeman", "Philip Resnik."],
+    "venue": "Proceedings of the IJCNLP-08 Workshop on NLP for Less Privileged Languages.",
+    "year": 2008
+  }, {
+    "title": "Hierarchical low-rank tensors for multilingual transfer parsing",
+    "authors": ["Yuan Zhang", "Regina Barzilay."],
+    "venue": "Proceedings of the 2015 Conference on Empirical Methods in Natural Language Processing, pages 1857–1867.",
+    "year": 2015
+  }],
+  "id": "SP:218cdcf97898617754abc249b186269b9eb2ea1e",
+  "authors": [{
+    "name": "Dingquan Wang",
+    "affiliations": []
+  }, {
+    "name": "Jason Eisner",
+    "affiliations": []
+  }],
+  "abstractText": "To approximately parse an unfamiliar language, it helps to have a treebank of a similar language. But what if the closest available treebank still has the wrong word order? We show how to (stochastically) permute the constituents of an existing dependency treebank so that its surface part-of-speech statistics approximately match those of the target language. The parameters of the permutation model can be evaluated for quality by dynamic programming and tuned by gradient descent (up to a local optimum). This optimization procedure yields trees for a new artificial language that resembles the target language. We show that delexicalized parsers for the target language can be successfully trained using such “made to order” artificial languages.",
+  "title": "Synthetic Data Made to Order: The Case of Parsing"
+}

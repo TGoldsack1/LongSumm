@@ -1,0 +1,209 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Optical character recognition (OCR) is most commonly used to recognize natural language from an image; however, as early as the work of Anderson (1967), there has been research interest in converting images into structured language or markup that defines both the text itself and its presentational semantics. The primary target for this research is OCR for mathematical expressions, and how to handle presentational aspects such as sub and superscript notation, special symbols, and nested fractions (Belaid & Haton, 1984; Chan & Yeung, 2000). The most effective systems combine specialized character segmentation with grammars of the underlying mathematical layout language (Miller & Viola, 1998). A prime example of this approach is the INFTY system that is used to convert printed mathematical expressions to LaTeX and other markup formats (Suzuki et al., 2003). Other, mostly proprietary sys-\n1Harvard University 2University of Eastern Finland. Correspondence to: Yuntian Deng <dengyuntian@seas.harvard.edu>.\nProceedings of the 34 th International Conference on Machine Learning, Sydney, Australia, PMLR 70, 2017. Copyright 2017 by the author(s).\ntems, have competed on this task as part of the CROHME handwritten mathematics challenge (Mouchere et al., 2013; 2014).\nProblems like OCR that require joint processing of image and text data have recently seen increased research interest due to the refinement of deep neural models in these two domains. For instance, advances have been made in the areas of handwriting recognition (Ciresan et al., 2010), OCR in natural scenes (Jaderberg et al., 2015; 2016; Wang et al., 2012) and image caption generation (Karpathy & FeiFei, 2015; Vinyals et al., 2015). At a high-level, each of these systems learn an abstract encoded representation of the input image which is then decoded to generate a textual output. In addition to performing quite well on standard tasks, these models are entirely data driven, which makes them adaptable to a wide range of datasets without requiring heavy preprocessing or domain specific engineering.\nHowever, we note that tasks such as image captioning differ from the traditional mathematical OCR task in two respects: first, unlike image captioning, the traditional OCR task assumes a left-to-right ordering, so neural systems addressing this problem have primarily relied on Connectionist Temporal Classification (CTC) (Graves et al., 2006) or stroke-based approaches. Second, the image captioning task theoretically allows for systems to focus their attention anywhere, and thus does not directly test a system’s ability to maintain consistent tracking with its attention.\nIn this work, we explore the use of attention-based imageto-text models (Xu et al., 2015) for the problem of generating structured markup. We consider whether a supervised model can learn to produce correct presentational markup from an image, without requiring a textual or visual grammar of the underlying markup language. Our model incorporates a multi-layer convolutional network over the image with an attention-based recurrent neural network decoder. To adapt this model to the OCR problem and capture the document’s layout, we also incorporate a new source encoder layer in the form of a multi-row recurrent model as part of the encoder.\nOur modeling contributions are twofold. First, we show that assumptions like the left-to-right ordering inherent in CTC-based models are not required for neural OCR, since general-purpose encoders can provide the necessary track-\ning for accurate attention (example shown in Figure 1). Second, in order to reduce attention computation overhead, we introduce a novel two-layer hard-soft approach to attention, which we call coarse-to-fine attention, inspired by coarse-to-fine inference (Raphael, 2001) from graphical models.1 Sparse memory and conditional computation with neural networks have also been explored with various levels of success in several previous works (Bengio et al., 2015; Shazeer et al., 2017; Rae et al., 2016; Andrychowicz & Kurach, 2016). We demonstrate here that this coarse-tofine method, when trained with REINFORCE, significantly reduces the overhead of attention, and leads to only a small drop in accuracy.\nTo make these experiments possible, we also construct a new public dataset, IM2LATEX-100K, which consists of a large collection of rendered real-world mathematical expressions collected from published articles2. This dataset provides a challenging test-bed for the image-to-markup task based on reconstructing mathematical markup from rendered images, originally written by scientists. A model is trained to generate LaTeX markup with the goal of rendering to the exact source image.\nExperiments compare the output of the model with several research and commercial baselines, as well as ablations of these models. The full system for mathematical expression generation is able to reproduce the same image on more than 75% of real-world test examples. Additionally, the use of a multi-row encoder leads to a significant increase in performance. We also experiment with training on a simulated handwritten version of the dataset to recognize handwritten textual expressions. Even with only a small in-domain training set, the model is able to\n1Note that ideas with the same name have been proposed in previous work (Mei et al., 2016), albeit in a different formulation without the goal of reducing computation.\n2This dataset is based on the challenge originally proposed as an OpenAI Request for Research under the title Im2Latex.\nproduce over 30% exact match output. All data, models, and evaluation scripts are publicly available at http: //lstm.seas.harvard.edu/latex/."
+  }, {
+    "heading": "2. Problem: Image-to-Markup Generation",
+    "text": "We define the image-to-markup problem as converting a rendered source image to target presentational markup that fully describes both its content and layout. The source, x, consists of an image. The target, y, consists of a sequence of tokens y1, y2, · · · , yT where T is the length of the output, and each y is a token in the markup language. The rendering is defined by a possibly unknown, many-to-one, compile function, compile. In practice this function may be quite complicated, e.g a browser, or ill-specified, e.g. the LaTeX language.\nThe supervised task is to learn to approximately invert the compile function using supervised examples of its behavior. We assume that we are given instances (x,y), with possibly differing dimensions and that, compile(y) ≈ x, for all training pairs (x,y) (assuming possible noise).\nAt test time, the system is given a raw input x rendered from ground-truth y. It generates a hypothesis ŷ that can then be rendered by the black-box function x̂ = compile(ŷ). Evaluation is done between x̂ and x, i.e. the aim is to produce similar rendered images while ŷ may or may not be similar to the ground-truth markup y."
+  }, {
+    "heading": "3. Model",
+    "text": "Contrary to most past work on neural OCR, our model uses a full grid encoder over the input image, so that it can support non left-to-right order in the generated markup. The base model is adapted from the encoder of Xu et al. (2015) developed for image captioning. Notably, though, our model also includes a row encoder which helps the performance of the system.\nThe model first extracts image features using a convolutional neural network (CNN) and arranges the features in a grid. Each row is then encoded using a recurrent neural network (RNN). These encoded features are then used by an RNN decoder with a visual attention mechanism. The decoder implements a conditional language model over the vocabulary, and the whole model is trained to maximize the likelihood of the observed markup. The full structure is illustrated in Figure 2.\nConvolutional Network The visual features of an image are extracted with a multi-layer convolutional neural network interleaved with max-pooling layers. This network architecture is now standard; we model it specifically after the network used by Shi et al. (2015) for OCR from images (specification is given in Table 1). Unlike some recent OCR work (Jaderberg et al., 2015; Lee & Osindero, 2016), we do not use final fully-connected layers (Ioffe & Szegedy, 2015), since we want to preserve the locality of CNN features in order to use visual attention. The CNN takes the raw input and produces a feature grid Ṽ of size D×H×W , where D denotes the number of channels and H and W are the resulted feature map height and width.\nRow Encoder In image captioning, the CNN features are used as is. For OCR, however, it is important for the encoder to localize the relative positions within the source image. In past work this localization has been handled by CTC, which in effect partitions the source into regions. We instead implicitly allow the encoder to localize its input by running RNNs over each of the rows of CNN features. This extension turns out to be crucial for performance.\nFormally, a recurrent neural network (RNN) is a parameterized function RNN that recursively maps an input vector and a hidden state to a new hidden state. At time t, the hidden state is updated with an input vt in the following manner: ht = RNN(ht−1,vt; θ), with h0 an initial state. In practice there are many different variants of RNN; however, long short-term memory networks (LSTMs) (Hochreiter & Schmidhuber, 1997) have been shown to be very effective for most NLP tasks. For simplicity we will describe the model as an RNN, but all experiments use LSTM networks.\nIn this model, the new feature grid V is created from Ṽ by running an RNN across each row of that input. Recursively for all rows h ∈ {1, . . . ,H} and columns w ∈ {1, . . . ,W}, the new features are defined as Vhw = RNN(Vh,w−1,Vhw). In order to capture the sequential order information in vertical direction, we use a trainable initial hidden state Vh,0 for each row, which we refer to as positional embeddings.\nDecoder The target markup tokens {yt} are then generated by a decoder based only on the grid V. The decoder is trained as a conditional language model to give the probability of the next token given the history and the annotations. This language model is defined on top of a decoder RNN,\np(yt+1|y1, . . . , yt,V) = softmax(Woutot)\nwhere ot = tanh(Wc[ht; ct]) and Wout,Wc are learned linear transformations. The vector ht is used to summarize the decoding history: ht = RNN(ht−1, [yt−1;ot−1]). The context vector ct is used to capture the context information from the annotation grid. We describe how to compute ct in the next section."
+  }, {
+    "heading": "4. Attention in Markup Generation",
+    "text": "The accuracy of the model is dependent on being able to track the next current position of the image for generating markup, which is conveyed through an attentive context vector ct. Formally, we define a latent categorical variable zt ∈ {1, · · · , H} × {1, · · · ,W} to denote which cell the model is attending to. If we assume access to an attention distribution zt ∼ p(zt), then the context is defined as an\nexpectation of source side features: ct = ∑ h,w p(zt = (h,w))Vhw\nIn practice, the attention distribution is parameterized as part of the model. We consider three forms of attention: standard, hierarchical, and coarse-to-fine.\nStandard Attention In standard attention (Bahdanau et al., 2014), we use a neural network to approximate the attention distribution p(zt):\np(zt) = softmax(a(ht, {Vhw}))\nwhere a(·) is a neural network to produce unnormalized attention weights. Note there are different choices for a – we follow past empirical work and use at,h,w = βT tanh(W1ht +W2Vhw) (Luong et al., 2015).\nFigure 1 shows an example of the attention distribution at each step of the model. Note several key properties about the attention distribution for the image-to-text problem. 1) It is important for the grid to be relatively small for attention to localize around the current symbol. For this reason we use a fine grid with a large H and W . 2) In practice, the support of the distribution is quite small as a single markup symbol is in a single region. 3) As noted above, attention is run every time step and requires an expectation over all cells. Therefore the decoding complexity of such an attention mechanism is O(THW ), which can be prohibitive when applied to large images.\nHierarchical Attention When producing a target symbol from an image, we can infer the rough region where it is likely to appear from the last generated symbol with high probability. In addition to the fine grid, we therefore also impose a grid over the image, such that each cell belongs to a larger region. When producing the markup, we first attend to the coarse grid to get the relevant coarse cell(s), and then attend to the inside fine cells to get the context vector, a method known as hierarchical attention.\nFor this problem, define V′ as a coarse grid of size H ′ × W ′, which we construct by running additional convolution and pooling layers and row encoders on top of Ṽ. We also introduce a latent attention variable z′t that indicates the parent level cell of the attended cell, and write p(zt) as p(zt) = ∑ z′t p(z′t)p(zt|z′t), where we first generate a coarse-level cell z′t followed by a fine-level cell zt only from within it.\nWe parameterize p(z′t) and p(zt|z′t) as part of the model. For p(z′t), we employ a standard attention mechanism over V′ to approximate the probability in time O(H ′W ′). For the conditional p(zt|z′t), we also employ a standard attention mechanism to get as before, except that we only consider the fine-level cells within coarse-level cell z′t. Note\nthat computing p(zt|z′t) takes time O( HH′ W W ′ ). However to compute the p(zt) even with this hierarchical attention, still requires O(HW ) as in standard attention.\nCoarse-to-Fine Attention Ideally we could consider a reduced set of possible coarse cells in hierarchical attention to reduce time complexity. Borrowing the name coarse-tofine inference (Raphael, 2001) we experiment with methods to construct a coarse attention p(z′t) with a sparse support to reduce the number of fine attention cells we consider. We use two different approaches for training this sparse coarse distribution.\nFor the first approach we use sparsemax attention (Martins & Astudillo, 2016) where instead of using a softmax for p(z′t) at the coarse-level, we substitute a Euclidean projection onto the simplex. The sparsemax function is defined as, sparsemax(p) = argminq∈∆K−1 ‖q−p‖2, where ∆K−1 is the probability simplex and K denotes the number of classes. The sparsemax function can be computed efficiently and as a projection and can be shown to produce a sparser output than the standard softmax. If there are K+ nonzero entries returned by sparsemax, then the attention time complexity for one step is O(H ′W ′ +K+ HH′ W W ′ ). In practice, we find K+ to be suitably small.\nFor the second approach we use “hard” attention for z′t, an approach which has been shown to work in several image tasks (Xu et al., 2015; Mnih et al., 2014; Ba et al., 2015). Here we take a hard sample from p(z′t) as opposed to considering the full distribution. Due to this stochasticity, the objective is no longer differentiable. However, stochastic networks can be trained using the REINFORCE algorithm (Williams, 1992). We pose the problem in the framework of reinforcement learning by treating z′t as our agent’s stochastic action at time t and the log-likelihood of the symbol produced as the reward rt. We aim to maximize the total expected reward Ez′t [ ∑T t=1 rt], or equivalently minimize the negative expected reward as our loss.\nFor parameters θ that precede the nondifferentiable z′t in the stochastic computation graph, we backpropagate a gradient of the form rt · ∂ log p(z ′ t;θ)\n∂θ . This gives us an unbiased estimate of the loss function gradient (Schulman et al., 2015). Since our decoder RNN takes previous context vectors as input at each time step, each action z′t influences later rewards rt, rt+1, . . . , rT . Hence, we assume a multiplicative discount rate of γ for future rewards, and we use the reward r̃t = ∑T s=t γ srs in place of rt.\nIn practice, this gradient estimator is noisy and slow to converge. Following Xu et al. (2015), we include a moving average reward baseline for each timestep t that we update as bt ← βbt+(1−β)r̃t, where β is a tunable learning rate. We subtract these baselines from our rewards to reduce the\nvariance, giving final gradient update\n∂L ∂θ = (r̃t − bt) · ∂ log p(z′t; θ) ∂θ .\nAt train time, we sample z′t and update the network with stochastic gradients. At test time, we take an argmax over the coarse-level attentions to choose z′t. The attention time complexity for a single time step is thusO( HH′ W W ′+H\n′W ′). If we take H ′ = √ H , W ′ = √ W , we get O( √ HW ) attention complexity per decoding step."
+  }, {
+    "heading": "5. Dataset Construction",
+    "text": "To experiment on this task we constructed a new public dataset, IM2LATEX-100K, which collects a large-corpus of real-world mathematical expressions written in LaTeX. This dataset provides a difficult test-bed for learning how to reproduce naturally occurring rendered LaTeX markup.\nCorpus The IM2LATEX-100K dataset provides 103,556 different LaTeX math equations along with rendered pictures. We extract formulas by parsing LaTeX sources of papers from tasks I and II of the 2003 KDD cup (Gehrke et al., 2003), which contain over 60,000 papers.\nWe extract formulas from the LaTeX sources with regular expressions, and only keep matches whose number of characters fall in the range from 40 to 1024 to avoid single symbols or text sentences. With these settings we extract over 800,000 different formulas, out of which around 100,000 are rendered in a vanilla LaTeX environment. Rendering is done with pdflatex3 and formulas that fail to compile are excluded. The rendered PDF files are then converted to PNG format4. The final dataset we provide contains 103,556 images of resolution 1654× 2339, and the corresponding LaTeX formulas.\nThe dataset is separated into training set (83,883 equa-\n3LaTeX (version 3.1415926-2.5-1.40.14) 4 We use the ImageMagick convert tool with parameters\n-density 200 -quality 100\ntions), validation set (9,319 equations) and test set (10,354 equations) for a standardized experimental setup. The LaTeX formulas range from 38 to 997 characters, with mean 118 and median 98.\nTokenization Training the model requires settling on a token set. One option is to use a purely character-based model. While this method requires fewer assumptions, character-based models would be significantly more memory intensive than word-based models due to longer target sequences. Therefore original markup is simply split into minimal meaningful LaTeX tokens, e.g. for observed characters, symbols such as \\sigma, modifier characters such as ˆ, functions, accents, environments, brackets and other miscellaneous commands.\nFinally we note that naturally occurring LaTeX contains many different expressions that produce identical output. We therefore experiment with an optional normalization step to eliminate spurious ambiguity (prior to training). For normalization, we wrote a LaTeX parser5 to convert the markup to an abstract syntax tree. We then apply a set of safe normalizing tree transformation to eliminate common spurious ambiguity, such as fixing the order of sub-superscripts and transforming matrices to arrays. Surprisingly we find this additional step gives only a small accuracy gain, and is not necessary for strong results.\nSynthetic Data for Handwriting Recognition Our main results focus on rendered markup, but we also considered the problem of recognizing handwritten math. As there is very little labeled data for this task, we also synthetized a handwritten corpus of the IM2LATEX-100K dataset. We created this data set by replacing all individual symbols with handwritten symbols taken from Detexify’s training data6. We use the same set of formulas as in the original dataset, but when rendering each symbol we randomly pick a corresponding handwritten symbol from Detexify. An example of synthesized handwriting is shown in Figure 3. Note that although the images in this dataset look like handwritten formulas, they do not capture certain aspects such as varying baselines (Nagabhushan & Alaei, 2010). We use this dataset as a pretraining step for handwritten formulas recognition on a small labeled dataset.\n5Based on KaTeX parser https://khan.github.io/ KaTeX/\n6http://detexify.kirelabs.org/classify.html"
+  }, {
+    "heading": "6. Experiments",
+    "text": "Experiments compare the proposed model, which we refer to as IM2TEX to classical OCR baselines, neural models, and model ablations on the image-to-LaTeX task. We also compare the proposed model against commercial, OCR-based mathematical expression recognition system InftyReader. InftyReader is an implementation of the INFTY system of (Suzuki et al., 2003), combining symbol recognition and structural analysis phases.\nFor neural models, a natural comparison is to standard image captioning approaches (Xu et al., 2015), and CTCbased approaches (Shi et al., 2016). We simulate the image captioning setup with a model CAPTION which removes the row encoder, i.e. replacing V with Ṽ, and increases the number of CNN filters such that the number of parameters is the same. For CTC we use the implementation of Shi et al. (2016), designed for natural image OCR.\nTo better understand the role of attention in the model, we run several baseline experiments with different attention styles. To examine if fine-level features are necessary, we experiment with a standard attention system with the coarse feature maps only (coarse-only) and also with a twolayer hierarchical model. Additionally we experiment with different coarse-to-fine (C2F) mechanisms: hard reinforcement learning, and sparsemax.\nFinally, we run additional experiments comparing our approach to other models for handwritten mathematical expressions on the CROHME 2013 and 2014 shared tasks. The training set is same for both years, consisting of 8,836 training expressions (although teams also used external data). The dataset is in a different domain from our rendered images and is designed for stroke-based OCR. To handle these differences, we employ two extensions: (1) We convert the data to images by rendering the strokes and also augment data by randomly resizing and rotating symbols, (2) We also employ the simulated IM2LATEX100K handwriting dataset to pretrain a large out-of-domain model and then fine-tune it on this CROHME dataset.\nOur core evaluation method is to check the accuracy of the rendered markup output image x̂ compared to the true image x. The main evaluation reports exact match rendering between the gold and predicted images, and we additionally check the exact match accuracy with the original image as well as the value after eliminating whitespace columns.7 We also include standard intrinsic text generation metrics, conditional language model perplexity and BLEU score (Papineni et al., 2002), on both tokenized and normalized gold data.\n7 In practice we found that the LaTeX renderer often misaligns identical expressions by several pixels. To correct for this, only misalignments of ≥ 5 pixels wide are “exact” match errors.\nImplementation Details The CNN specifications are summarized in Table 1. Note that HH′ = W W ′ = 4. The model uses single-layer LSTMs for all RNNs. We use a bi-directional RNN for the encoder. The hidden state of the encoder RNN is of size 256, decoder RNN of 512, and token embeddings of size 80. The model with standard attention has 9.48 million parameters, and the models with hierarchical or coarse-to-fine attention have 15.85 million parameters due to the additional convolution layers and row encoders. We use mini-batch stochastic gradient descent to learn the parameters.\nFor the standard attention models, we use batch size of 20. The initial learning rate is set to 0.1, and we halve it once the validation perplexity does not decrease. We train the model for 12 epochs and use the validation perplexity to choose the best model. For the hierarchical and coarseto-fine attention models, we use batch size of 6. For hard attention, we use the pretrained weights of hierarchical to initialize the parameters. Then we use initial learning rate 0.005, average reward baseline learning rate β = 0.01, reward discount rate γ = 0.5.\nThe complete model is trained end-to-end to maximize the likelihood of the training data. Beyond the training data, the model is given no other information about the markup language or the generating process. To generate markup from unseen images, we use beam search with beam size 5 at test time. No further hard constraints are employed.\nThe system is built using Torch (Collobert et al., 2011) based on the OpenNMT system (Klein et al., 2017). Experiments are run on a 12GB Nvidia Titan X GPU (Maxwell).\nOriginal images are cropped to only the formula area, and padded with 8 pixels to the top, left, right and bottom. For efficiency we downsample all images to half of their original sizes. To facilitate batching, we group images into similar sizes and pad with whitespace.8 All images of larger sizes, LaTeX formulas with more than 150 tokens, or those that cannot be parsed are ignored during training and validation, but included during testing."
+  }, {
+    "heading": "7. Results",
+    "text": "The main experimental results, shown at the top of Table 2, compare different systems on the image-to-markup task. The INFTY system is able to do quite well in terms of text accuracy, but performs poorly on exact match image metrics. The poor results of the neural CTC system validate our expectation that the strict left-to-right order assumption is unsuitable in this case. Our reimplementation of im-\n8 Width-Height groups used are (128, 32), (128, 64), (160, 32), (160, 64), (192, 32), (192, 64), (224, 32), (224, 64), (256, 32), (256, 64), (320, 32), (320, 64), (384, 32), (384, 64), (384, 96), (480, 32), (480, 64), (480, 128), (480, 160).\nage captioning CAPTION does better, pushing the number above 50%. Our standard attention system IM2TEX with RNN encoder increases this value above 75%, achieving high accuracy on this task. The LaTeX normalizer provides a few points of accuracy gain and achieves high normalized BLEU. This indicates that the decoder LM is able to learn well despite the ambiguities in real-world LaTeX.\nWe next compare the different hierarchical and coarse-tofine extensions to the system. We first note that the use of the coarse-only system leads to a large drop in accuracy,\nindicating that fine attention is crucial to performance. On the other hand, the high performance of hierarchical indicates that two layers of soft-attention do not hurt the performance of the model. Table 4 shows the average number of cells being attended to at both the coarse and fine layers by each of the models. Both the hard REINFORCE system and sparsemax reduce lookups at a small cost in accuracy. Hard is the most aggressive, selecting a single coarse cell. Sparsemax achieves higher accuracy, at the cost of selecting multiple coarse cells. Depending on the application, these are both reasonable alternatives to reduce the number of lookups in standard attention.\nOur final experiments look at the CROHME 2013 and 2014 datasets, which were designed as a stroke recognition task, but are the closest existing dataset to our task. For this dataset we first train with our synthetic handwriting dataset and then fine-tune on the CROHME training set. We find our models achieve comparable performance to all best systems excepting MyScript, a commercial system with access to additional in-domain data. Note that our synthetic dataset does not contain variation in baselines, font sizes,\nor other noise, which are common in real data. We expect increased performance from the system when trained with well-engineered data. For these datasets we also use the hierarchical and coarse-to-fine models, and find that they are similarly effective. Interestingly, contrary to the full data for some problems hard performs better than sparsemax.\nAnalysis To better understand the contribution of each part of the standard IM2TEX model, we run ablation experiments removing different features from the model, which are shown in Table 3. The simplest model is a basic (nonconditional) NGRAM LM on LaTeX which achieves a perplexity of around 8. Simply switching to an LSTM-LM reduces the value to 5, likely due to its ability to count parentheses and nesting-levels. These values are quite low, indicating strong regularity just in the LaTeX alone. Adding back the image data with a CNN further reduces the perplexity down to 1.18. Adding the encoder LSTM adds a small gain to 1.12, but makes a large difference in final accuracy. Adding the positional embeddings (trainable initial states for each row) provides a tiny gain. Hard attention leads to a small increase in perplexity. We also consider the effect of training data on performance. Figure 4 shows accuracy of the system with different training set size using standard attention. As with many neural systems, the model is quite data hungry. In order for the model to reach ≥ 50% accuracy, at least 16k training examples are needed.\nFinally Figure 5 illustrates several common errors. Qualitatively the system is quite accurate on difficult LaTeX constructs. Typically the structure of the expression is preserved with one or two symbol recognition errors. We find that the most common presentation-affecting errors come from font or sizing issues, such as using small parentheses instead of large ones, using standard math font instead of escaping or using mathcal."
+  }, {
+    "heading": "8. Conclusion",
+    "text": "We have presented a visual attention-based model for OCR of presentational markup. We also introduce a new dataset IM2LATEX-100K that provides a test-bed for this task. In\norder to reduce the attention complexity, we propose a coarse-to-fine attention layer, which selects a region by using a coarse view of the image, and use the fine-grained cells within. These contributions provide a new view on the task of structured text OCR, and show data-driven models can be effective without any knowledge of the language. The coarse-to-fine attention mechanism is general and directly applicable to other domains, including applying the proposed coarse-to-fine attention layer to other tasks such as document summarization, or combining the proposed model with neural inference machines such as memory networks."
+  }, {
+    "heading": "Acknowledgements",
+    "text": "We would like to thank Daniel Kirsch for providing us Detexify data, and Sam Wiseman and Yoon Kim for the helpful feedback on this paper. This research is supported by a Bloomberg Data Science Research Award."
+  }],
+  "year": 2017,
+  "references": [{
+    "title": "Syntax-directed recognition of handprinted two-dimensional mathematics",
+    "authors": ["Anderson", "Robert H"],
+    "venue": "In Symposium on Interactive Systems for Experimental Applied Mathematics: Proceedings of the Association for Computing Machinery Inc. Symposium,",
+    "year": 1967
+  }, {
+    "title": "Learning Efficient Algorithms with Hierarchical Attentive Memory",
+    "authors": ["Andrychowicz", "Marcin", "Kurach", "Karol"],
+    "year": 2016
+  }, {
+    "title": "Multiple Object Recognition with Visual Attention",
+    "authors": ["Ba", "Jimmy", "Mnih", "Volodymyr", "Kavukcuoglu", "Koray"],
+    "venue": "Proceedings of the International Conference on Learning Representations (ICLR),",
+    "year": 2015
+  }, {
+    "title": "Neural machine translation by jointly learning to align and translate",
+    "authors": ["Bahdanau", "Dzmitry", "Cho", "Kyunghyun", "Bengio", "Yoshua"],
+    "venue": "arXiv preprint arXiv:1409.0473,",
+    "year": 2014
+  }, {
+    "title": "A syntactic approach for handwritten mathematical formula recognition",
+    "authors": ["Belaid", "Abdelwaheb", "Haton", "Jean-Paul"],
+    "venue": "IEEE Transactions on Pattern Analysis and Machine Intelligence,",
+    "year": 1984
+  }, {
+    "title": "Conditional Computation in Neural Networks for faster models",
+    "authors": ["Bengio", "Emmanuel", "Bacon", "Pierre-Luc", "Pineau", "Joelle", "Precup", "Doina"],
+    "venue": "CoRR, abs/1511.06297,",
+    "year": 2015
+  }, {
+    "title": "Mathematical expression recognition: a survey",
+    "authors": ["Chan", "Kam-Fai", "Yeung", "Dit-Yan"],
+    "venue": "IJDAR,",
+    "year": 2000
+  }, {
+    "title": "Deep, big, simple neural nets for handwritten digit recognition",
+    "authors": ["Ciresan", "Dan Claudiu", "Meier", "Ueli", "Gambardella", "Luca Maria", "Schmidhuber", "Jürgen"],
+    "venue": "Neural computation,",
+    "year": 2010
+  }, {
+    "title": "Torch7: A matlab-like environment for machine learning",
+    "authors": ["Collobert", "Ronan", "Kavukcuoglu", "Koray", "Farabet", "Clément"],
+    "venue": "In BigLearn, NIPS Workshop, number EPFL-CONF-192376,",
+    "year": 2011
+  }, {
+    "title": "Overview of the 2003 kdd cup",
+    "authors": ["Gehrke", "Johannes", "Ginsparg", "Paul", "Kleinberg", "Jon"],
+    "venue": "ACM SIGKDD Explorations Newsletter,",
+    "year": 2003
+  }, {
+    "title": "Long shortterm memory",
+    "authors": ["Hochreiter", "Sepp", "Schmidhuber", "Jürgen"],
+    "venue": "Neural computation,",
+    "year": 1997
+  }, {
+    "title": "Batch normalization: Accelerating deep network training by reducing internal covariate shift",
+    "authors": ["Ioffe", "Sergey", "Szegedy", "Christian"],
+    "venue": "In Proceedings of The 32nd International Conference on Machine Learning,",
+    "year": 2015
+  }, {
+    "title": "Deep structured output learning for unconstrained text recognition",
+    "authors": ["Jaderberg", "Max", "Simonyan", "Karen", "Vedaldi", "Andrea", "Zisserman", "Andrew"],
+    "year": 2015
+  }, {
+    "title": "Reading text in the wild with convolutional neural networks",
+    "authors": ["Jaderberg", "Max", "Simonyan", "Karen", "Vedaldi", "Andrea", "Zisserman", "Andrew"],
+    "venue": "International Journal of Computer Vision,",
+    "year": 2016
+  }, {
+    "title": "Deep visual-semantic alignments for generating image descriptions",
+    "authors": ["Karpathy", "Andrej", "Fei-Fei", "Li"],
+    "venue": "In Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition,",
+    "year": 2015
+  }, {
+    "title": "Opennmt: Open-source toolkit for neural machine translation",
+    "authors": ["Klein", "Guillaume", "Kim", "Yoon", "Deng", "Yuntian", "Senellart", "Jean", "Rush", "Alexander M"],
+    "venue": "arXiv preprint arXiv:1701.02810,",
+    "year": 2017
+  }, {
+    "title": "Recursive recurrent nets with attention modeling for ocr in the wild",
+    "authors": ["Lee", "Chen-Yu", "Osindero", "Simon"],
+    "venue": "arXiv preprint arXiv:1603.03101,",
+    "year": 2016
+  }, {
+    "title": "Effective approaches to attention-based neural machine translation",
+    "authors": ["Luong", "Minh-Thang", "Pham", "Hieu", "Manning", "Christopher D"],
+    "year": 2015
+  }, {
+    "title": "From softmax to sparsemax: A sparse model of attention and multi-label classification",
+    "authors": ["Martins", "André FT", "Astudillo", "Ramón Fernandez"],
+    "year": 2016
+  }, {
+    "title": "What to talk about and how? Selective Generation using LSTMs with Coarse-to-Fine Alignment",
+    "authors": ["Mei", "Hongyuan", "Bansal", "Mohit", "Walter", "Matthew R"],
+    "venue": "Proceedings of NAACL-HLT,",
+    "year": 2016
+  }, {
+    "title": "Ambiguity and constraint in mathematical expression recognition",
+    "authors": ["Miller", "Erik G", "Viola", "Paul A"],
+    "venue": "In AAAI/IAAI, pp",
+    "year": 1998
+  }, {
+    "title": "Recurrent models of visual attention",
+    "authors": ["Mnih", "Volodymyr", "Heess", "Nicolas", "Graves", "Alex", "koray Kavukcuoglu"],
+    "venue": "Advances in Neural Information Processing Systems,",
+    "year": 2014
+  }, {
+    "title": "crohme: Third international competition on recognition of online handwritten mathematical expressions",
+    "authors": ["Mouchere", "Harold", "Viard-Gaudin", "Christian", "Zanibbi", "Richard", "Garain", "Utpal", "Kim", "Dae Hwan", "Jin Hyung"],
+    "venue": "Icdar",
+    "year": 2013
+  }, {
+    "title": "Icfhr 2014 competition on recognition of on-line handwritten mathematical expressions (crohme 2014)",
+    "authors": ["Mouchere", "Harold", "Viard-Gaudin", "Christian", "Zanibbi", "Richard", "Garain", "Utpal"],
+    "venue": "In Frontiers in handwriting recognition (icfhr),",
+    "year": 2014
+  }, {
+    "title": "Tracing and straightening the baseline in handwritten persian/arabic text-line: A new approach based on painting-technique",
+    "authors": ["P Nagabhushan", "Alaei", "Alireza"],
+    "venue": "International Journal on Computer Science and Engineering,",
+    "year": 2010
+  }, {
+    "title": "Coarse-to-fine dynamic programming",
+    "authors": ["Raphael", "Christopher"],
+    "venue": "IEEE Transactions on Pattern Analysis and Machine Intelligence,",
+    "year": 2001
+  }, {
+    "title": "Gradient estimation using stochastic computation graphs",
+    "authors": ["Schulman", "John", "Heess", "Nicolas", "Weber", "Theophane", "Abbeel", "Pieter"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2015
+  }, {
+    "title": "An end-toend trainable neural network for image-based sequence recognition and its application to scene text recognition",
+    "authors": ["Shi", "Baoguang", "Bai", "Xiang", "Yao", "Cong"],
+    "venue": "arXiv preprint arXiv:1507.05717,",
+    "year": 2015
+  }, {
+    "title": "An end-toend trainable neural network for image-based sequence recognition and its application to scene text recognition",
+    "authors": ["Shi", "Baoguang", "Bai", "Xiang", "Yao", "Cong"],
+    "venue": "IEEE Transactions on Pattern Analysis and Machine Intelligence,",
+    "year": 2016
+  }, {
+    "title": "Infty: an integrated ocr system for mathematical documents",
+    "authors": ["Suzuki", "Masakazu", "Tamari", "Fumikazu", "Fukuda", "Ryoji", "Uchida", "Seiichi", "Kanahori", "Toshihiro"],
+    "venue": "In Proceedings of the 2003 ACM symposium on Document engineering,",
+    "year": 2003
+  }, {
+    "title": "Show and tell: A neural image caption generator",
+    "authors": ["Vinyals", "Oriol", "Toshev", "Alexander", "Bengio", "Samy", "Erhan", "Dumitru"],
+    "venue": "In Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition,",
+    "year": 2015
+  }, {
+    "title": "End-to-end text recognition with convolutional neural networks",
+    "authors": ["Wang", "Tao", "Wu", "David J", "Coates", "Andrew", "Ng", "Andrew Y"],
+    "venue": "In Pattern Recognition (ICPR),",
+    "year": 2012
+  }, {
+    "title": "Simple statistical gradient-following algorithms for connectionist reinforcement learning",
+    "authors": ["Williams", "Ronald J"],
+    "venue": "Machine learning,",
+    "year": 1992
+  }],
+  "id": "SP:071c0b3ec700758dd9b4164ede08b714ea7e3c38",
+  "authors": [{
+    "name": "Yuntian Deng",
+    "affiliations": []
+  }, {
+    "name": "Anssi Kanervisto",
+    "affiliations": []
+  }, {
+    "name": "Jeffrey Ling",
+    "affiliations": []
+  }, {
+    "name": "Alexander M. Rush",
+    "affiliations": []
+  }],
+  "abstractText": "We present a neural encoder-decoder model to convert images into presentational markup based on a scalable coarse-to-fine attention mechanism. Our method is evaluated in the context of imageto-LaTeX generation, and we introduce a new dataset of real-world rendered mathematical expressions paired with LaTeX markup. We show that unlike neural OCR techniques using CTCbased models, attention-based approaches can tackle this non-standard OCR task. Our approach outperforms classical mathematical OCR systems by a large margin on in-domain rendered data, and, with pretraining, also performs well on out-of-domain handwritten data. To reduce the inference complexity associated with the attention-based approaches, we introduce a new coarse-to-fine attention layer that selects a support region before applying attention.",
+  "title": "Image-to-Markup Generation with Coarse-to-Fine Attention"
+}

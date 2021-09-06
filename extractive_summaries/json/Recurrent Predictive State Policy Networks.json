@@ -1,0 +1,206 @@
+{
+  "sections": [{
+    "text": "We introduce Recurrent Predictive State Policy (RPSP) networks, a recurrent architecture that brings insights from predictive state representations to reinforcement learning in partially observable environments. Predictive state policy networks consist of a recursive filter, which keeps track of a belief about the state of the environment, and a reactive policy that directly maps beliefs to actions. The recursive filter leverages predictive state representations (PSRs) (Rosencrantz & Gordon, 2004; Sun et al., 2016) by modeling predictive state — a prediction of the distribution of future observations conditioned on history and future actions. This representation gives rise to a rich class of statistically consistent algorithms (Hefny et al., 2018) to initialize the recursive filter. Predictive state serves as an equivalent representation of a belief state. Therefore, the policy component of the RPSP-network can be purely reactive, simplifying training while still allowing optimal behaviour. We optimize our policy using a combination of policy gradient based on rewards (Williams, 1992) and gradient descent based on prediction error of the recursive filter. We show the efficacy of RPSP-networks under partial observability on a set of robotic control tasks from OpenAI Gym. We empirically show that RPSP-networks perform well compared with memory-preserving networks such as GRUs, as well as finite memory models, being the overall best performing method.\n*Equal contribution 1Machine Learning Department, Carnegie Mellon University, Pittsburgh, USA 2Robotics Institute, Carnegie Mellon University, Pittsburgh, USA 3ISR/IT, Instituto Superior Técnico, Lisbon, Portugal 4Paul G. Allen School of Computer Science & Engineering, University of Washington, Seattle, USA. Correspondence to: Ahmed Hefny <ahefny@cs.cmu.edu>, Zita Marinho <zmarinho@cmu.edu>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s)."
+  }, {
+    "heading": "1. Introduction",
+    "text": "Recently, there has been significant progress in deep reinforcement learning (Bojarski et al., 2016; Schulman et al., 2015; Mnih et al., 2013; Silver et al., 2016). Deep reinforcement learning combines deep networks as a representation of the policy with reinforcement learning algorithms and enables end-to-end training.\nWhile traditional applications of deep learning rely on standard architectures with sigmoid or ReLU activations, there is an emerging trend of using composite architectures that contain parts explicitly resembling other algorithms such as Kalman filtering (Haarnoja et al., 2016) and value iteration (Tamar et al., 2016). It has been shown that such architectures can outperform standard neural networks.\nIn this work, we focus on partially observable environments, where the agent does not have full access to the state of the environment, but only to partial observations thereof. The agent has to maintain instead a distribution over states, i.e., a belief state, based on the entire history of observations and actions. The standard approach to this problem is to employ recurrent architectures such as Long-Short-TermMemory (LSTM) (Hochreiter & Schmidhuber, 1997) and Gated Recurrent Units (GRU) (Cho et al., 2014). Despite their success (Hausknecht & Stone, 2015), these methods are difficult to train due to non-convexity, and their hidden states lack a predefined statistical meaning.\nModels based on predictive state representations (Littman et al., 2001; Singh et al., 2004; Rosencrantz & Gordon, 2004; Boots et al., 2013) offer an alternative method to construct a surrogate for belief state in a partially observable environment. These models represent state as the expectation of sufficient statistics of future observations, conditioned on history and future actions. Predictive state models admit efficient learning algorithms with theoretical guarantees. Moreover, the successive application of the predictive state update procedure (i.e., filtering equations) results in a recursive computation graph that is differentiable with respect to model parameters. Therefore, we can treat predictive state models as recurrent networks and apply backpropagation through time (BPTT) (Hefny et al., 2018; Downey et al., 2017) to optimize model parameters. We use this insight to construct a Recurrent Predictive State Policy (RPSP) network, a special recurrent architecture that consists of (1) a\npredictive state model acting as a recursive filter to keep track of a predictive state, and (2) a feed-forward neural network that directly maps predictive states to actions. This configuration results in a recurrent policy, where the recurrent part is implemented by a PSR instead of an LSTM or a GRU. As predictive states are a sufficient summary of the history of observations and actions, the reactive policy will have rich enough information to make its decisions, as if it had access to a true belief state. There are a number of motivations for this architecture:\n• Using a PSR means we can benefit from methods in the spectral learning literature to provide an efficient and statistically consistent initialization of a core component of the policy.\n• Predictive states have a well defined probabilistic interpretation as conditional distribution of observed quantities. This can be utilized for optimization.\n• The recursive filter in RPSP-networks is fully differentiable, meaning that once a good initialization is obtained from spectral learning methods, we can refine RPSP-nets using gradient descent.\nThis network can be trained end-to-end, for example using policy gradients in a reinforcement learning setting (Sutton et al., 2001) or supervised learning in an imitation learning setting (Ross et al., 2011). In this work we focus on the former. We discuss the predictive state model component in §3. The control component is presented in §4 and the learning algorithm is presented in §5. In §6 we describe the experimental setup and results on control tasks: we evaluate the performance of reinforcement learning using predictive state policy networks in multiple partially observable environments with continuous observations and actions."
+  }, {
+    "heading": "2. Background and Related Work",
+    "text": "Throughout the rest of the paper, we will define vectors in bold notation v, matrices in capital letters W . We will use ⊗ to denote vectorized outer product: x ⊗ y is xy> reshaped into a vector.\nWe assume an agent is interacting with the environment in episodes, where each episode consists of T time steps in each of which the agent takes an action at ∈ A, and observes an observation ot ∈ O and a reward rt ∈ R. The agent chooses actions based on a stochastic policy πθ parameterized by a parameter vector θ: πθ(at | o1:t−1,a1:t−1) ≡ p(at | o1:t−1,a1:t−1,θ). We would like to improve the policy rewards by optimizing θ based on the agent’s experience in order to maximize the expected long term reward J(πθ) = 1 T ∑T t=1 E [ γt−1rt | πθ ] , where γ ∈ [0, 1] is a discount factor.\nThere are two major approaches for model-free reinforcement learning. The first is the value function-based approach, where we seek to learn a function (e.g., a deep network (Mnih et al., 2013)) to evaluate the value of each action at each state (a.k.a. Q-value) under the optimal policy (Sutton & Barto, 1998). Given the Q function the agent can act greedily based on estimated values. The second approach is direct policy optimization, where we learn a function to directly predict optimal actions (or optimal action distributions). This function is optimized to maximize J(θ) using policy gradient methods (Schulman et al., 2015; Duan et al., 2016) or derivative-free methods (Szita & Lrincz, 2006). We focus on the direct policy optimization approach as it is more robust to noisy continuous environments and modeling uncertainty (Sutton et al., 2001; Wierstra et al., 2010).\nOur aim is to provide a new class of policy functions that combines recurrent reinforcement learning with recent advances in modeling partially observable environments using predictive state representations (PSRs). There have been previous attempts to combine predictive state models with policy learning. Boots et al. (2011) proposed a method for planning in partially observable environments. The method first learns a PSR from a set of trajectories collected using an explorative blind policy. The predictive states estimated by the PSR are then considered as states in a fully observable Markov Decision Process. A value function is learned on these states using least squares temporal difference (Boots & Gordon, 2010) or point-based value iteration (PBVI) (Boots et al., 2011). The main disadvantage of these approaches is that it assumes a one-time initialization of the PSR and does not propose a mechanism to update the model based on subsequent experience.\nHamilton et al. (2014) proposed an iterative method to simultaneously learn a PSR and use the predictive states to fit a Q-function. Azizzadenesheli et al. (2016) proposed a tensor decomposition method to estimate the parameters of a discrete partially observable Markov decision process (POMDP). One common limitation in the aforementioned methods is that they are restricted to discrete actions (some even assume discrete observations). Also, it has been shown that PSRs can benefit greatly from local optimization after a moment-based initialization (Downey et al., 2017; Hefny et al., 2018).\nVenkatraman et al. (2017) proposed predictive state decoders, where an LSTM or a GRU network is trained on a mixed objective function in order to obtain high cumulative rewards while accurately predicting future observations. While it has shown improvement over using standard training objective functions, it does not solve the initialization issue of the recurrent network.\nOur proposed RPSP networks alleviate the limitations of previous approaches: It supports continuous observations\nand actions, it uses a recurrent state tracker with consistent initialization, and it supports end-to-end training after the initialization."
+  }, {
+    "heading": "3. Predictive State Representations of Controlled Models",
+    "text": "In this section, we give a brief introduction to predictive state representations, which constitute the state tracking (filtering) component of our model.1 We provide more technical details in the appendix.\nGiven a history of observations and actions a1,o1,a2,o2, . . . ,at−1,ot−1, a recursive filter computes a belief state qt using a recursive update equation qt+1 = f(qt,at,ot). Given the state qt, one can predict observations through a function g(qt,at) ≡ E[ot | qt,at]. In a recurrent neural network (Figure 1 (a,b)), q is latent and the function g that connects states to the output is unknown and has to be learned. In this case, the output could be predicted from observations, when the RNN is used for prediction, see Figure 1 (a,b).\nPredictive state models use a predictive representation of the state. That means the qt is explicitly defined as the conditional distribution of future observations ot:t+k−1 conditioned on future actions at:t+k−1.2 (e.g., in the discrete case, qt could be a vectorized conditional probability table).\nPredictive states are thus defined entirely in terms of observable features with no latent variables involved. That means the mapping between the predictive state qt and the prediction of ot given at can be fully known or simple to learn consistently (Hefny et al., 2015b; Sun et al., 2016). This is in contrast to RNNs, where this mapping is unknown and requires non-convex optimization to be learned.\nSimilar to an RNN, a PSR employs a recursive state update that consists of the following two steps:3\n• State extension: A linear map Wext is applied to qt to obtain an extended state pt. This state defines a conditional distribution over an extended window of k + 1 observations and actions. Wext is a parameter to be learned.\npt = Wextqt (1) 1 We follow the predictive state controlled model formulation in Hefny et al. (2018). Alternative methods such as predictive state inference machines (Sun et al., 2016) could be contemplated.\n2 We condition on “intervention by actions” rather than “observing actions”. That means qt is independent of the policy that determines the actions. See (Pearl, 2009).\nThe length-k depends on the observability of the system. A system is k-observable if maintaining the predictive state is equivalent to maintaining the distribution of the system’s latent state.\n3See the appendix Section 9 for more details.\n• Conditioning: Given at and ot, and a known conditioning function fcond:\nqt+1 = fcond(pt,at,ot). (2)\nFigure 1 (c, d) depicts the PSR state update. The conditioning function fcond depends on the representation of qt and pt. For example, in a discrete system, qt and pt could represent conditional probability tables and fcond amounts to applying Bayes rule. In continuous systems we can use Hilbert space embedding of distributions (Boots et al., 2013), where fcond uses kernel Bayes rule (Fukumizu et al., 2013).\nIn this work, we use the RFFPSR model proposed in (Hefny et al., 2018). Observation and action features are based on random Fourier features (RFFs) of RBF kernel (Rahimi & Recht, 2008) projected into a lower dimensional subspace using randomized PCA (Halko et al., 2011). We use φ to denote this feature function. Conditioning function fcond is kernel Bayes rule, and observation function g is a linear function of state E[ot | qt,at] = Wpred(qt ⊗ φ(at)). See Section 9.1 in the appendix for more details."
+  }, {
+    "heading": "3.1. Learning predictive states representations",
+    "text": "Learning PSRs is carried out in two steps: an initialization procedure using method of moments and a local optimization procedure using gradient descent.\nInitialization: The initialization procedure exploits the fact that qt and pt are represented in terms of observable quantities: since Wext is linear and using (1), then E[pt | ht] = WextE[qt | ht]. Here ht ≡ h(a1:t−1,o1:t−1) denotes a set of features extracted from previous observations and actions (typically from a fixed length window ending at t− 1). Because qt and pt are not hidden states, estimating these expectations on both sides can be done by solving a supervised regression subproblem. Given the predictions from this regression, solving for Wext then becomes another linear regression problem. We follow this two-stage regression proposed by Hefny et al. (2018).4 Once Wext is computed, we can perform filtering to obtain the predictive states qt. We then use the estimated states to learn the mapping to predicted observations Wpred, which results in another regression subproblem, see Section 9.2 in the appendix for more details.\nIn RFFPSR, we use linear regression for all subproblems (which is a reasonable choice with kernel-based features). This ensures that the two-stage regression procedure is free of local optima.\nLocal Optimization: Although PSR initialization procedure is consistent, it is based on method of moments and hence is not necessarily statistically efficient. Therefore it\n4 We use the joint stage-1 regression variant for initialization.\ncan benefit from local optimization. Downey et al. (2017) and Hefny et al. (2018) note that a PSR defines a recursive computation graph similar to that of an RNN where we have\nqt+1 = fcond(Wext(qt),at,ot))\nE[ot | qt,at] = Wpred(qt ⊗ φ(at)), (3)\nWith a differentiable fcond, the PSR can be trained using backpropagation through time to minimize prediction error.\nIn a nutshell, a PSR effectively constitutes a special type of a recurrent network where the state representation and update are chosen in a way that permits a consistent initialization, which is then followed by conventional backpropagation."
+  }, {
+    "heading": "4. Recurrent Predictive State Policy (RPSP) Networks",
+    "text": "We now introduce our proposed class of policies, Recurrent Predictive State Policies (RPSPs). We describe its components and in §5 we describe the learning algorithm . RPSPs consist of two fundamental components: a state tracking component, which models the state of the system, and is able to predict future observations; and a reactive policy component, that maps states to actions, shown in Figure 2. The state tracking component is based on the PSR formulation described in §3. The reactive policy is a stochas-\ntic non-linear policy πre(at | qt) ≡ p(at | qt;θre) which maps a predictive state to a distribution over actions and is\nAlgorithm 1 Recurrent Predictive State Policy network Optimization (RPSPO) 1: Input: Learning rate η. 2: Sample initial trajectories: {(oit, ait)t}Mi=1 from πexp. 3: Initialize PSR:\nθ0PSR = {q0,Wext,Wpred} via 2-stage regression in §3. 4: Initialize reactive policy θ0re randomly. 5: for n = 1 . . . Nmax iterations do 6: for i = 1, . . . ,M batch of M trajectories from πn−1: do 7: Reset episode: ai0. 8: for t = 0 . . . T roll-in in each trajectory: do 9: Get observation oit and reward rit.\n10: Filter qit+1 = ft(qit,ait,oit) in (Eq. 3). 11: Execute ait+1 ∼ πn−1re (qit+1). 12: end for 13: end for 14: Update θ using D = {{oit,ait, rit,qit}Tt=1}Mi=1: θn ← UPDATE(θn−1,D, η), as in §5. 15: end for 16: Output: Return θ = (θPSR,θre).\nparametrized by θre. Similar to Schulman et al. (2015) we assume a Gaussian distribution N (µt,Σ), where\nµ = ϕ(qt;θµ); Σ = diag(exp(r)) 2 (4)\nfor a non-linear map ϕ parametrized by θµ (e.g. a feedforward network) , and a learnable vector r. An RPSP is thus a stochastic recurrent policy with the recurrent part corresponding to a PSR. The parameters θ consist of two parts: the PSR parameters θPSR = {q0,Wext,Wpred} and the reactive policy parameters θre = {θµ, r}. In the following section, we describe how these parameters are learned."
+  }, {
+    "heading": "5. Learning RPSPs",
+    "text": "As detailed in Algorithm 1, learning an RPSP is performed in two phases.5 In the first phase, we execute an exploration policy to collect a dataset that is used to initialize the PSR as described in §3.1. It is worth noting that this initialization procedure depends on observations rather than rewards. This can be particularly useful in environments where informative reward signals are infrequent.\nIn the second phase, starting from the initial PSR and a random reactive policy, we iteratively collect trajectories using the current policy and use them to update the parameters of both the reactive policy θre = {θµ, r} and the predictive model θPSR = {q0,Wext,Wpred}, as depicted in Algorithm 1. Let p(τ | θ) be the distribution over trajectories induced by the policy πθ . By updating parameters, we seek to minimize the objective function in (5).\nL(θ) = α1`1(θ) + α2`2(θ) (5)\n= −α1J(πθ) + α2 T∑ t=0 Ep(τ |θ) [ ‖Wpred(qt ⊗ at)− ot‖2 ] ,\n5https://github.com/ahefnycmu/rpsp\nwhich combines negative expected returns with PSR prediction error.6 Optimizing the PSR parameters to maintain low prediction error can be thought of as a regularization scheme. The hyper-parameters α1, α2 ∈ R determine the importance of the expected return and prediction error respectively. They are discussed in more detail in §5.3. Noting that RPSP is a special type of a recurrent network policy, it is possible to adapt policy gradient methods (Williams, 1992) to the joint loss in (5). In the following subsections, we propose different update variants."
+  }, {
+    "heading": "5.1. Joint Variance Reduced Policy Gradient (VRPG)",
+    "text": "In this variant, we use REINFORCE method (Williams, 1992) to obtain a stochastic gradient of J(π) from a batch of M trajectories.\nLet R(τ) = ∑T t=1 γ\nt−1rt be the cumulative discounted reward for trajectory τ given a discount factor γ ∈ [0, 1]. REINFORCE uses the likelihood ratio trick ∇θp(τ |θ) = p(τ |θ)∇θ log p(τ |θ) to compute∇θJ(π) as\n∇θJ(π) = Eτ∼p(τ |θ)[R(τ) T∑ t=1 ∇θ log πθ(at|qt)],\nIn practice, we use a variance reducing variant of policy gradient (Greensmith et al., 2001) given by\n∇θJ(π) = Eτ∼p(τ |θ) T∑ t=0 [∇θ log πθ(at|qt)(Rt(τ)− bt)],\n(6)\nwhere we replace the cumulative trajectory reward R(τ) by a reward-to-go function Rt(τ) = ∑T j=t γ\nj−trj computing the cumulative reward starting from t. To further reduce variance we use a baseline bt ≡ Eθ[Rt(τ) | a1:t−1,o1:t] which estimates the expected reward-to-go conditioned on the current policy. In our implementation, we assume bt = w>b qt for a parameter vector wb that is estimated using linear regression. Given a batch of M trajectories, a stochastic gradient of J(π) can be obtained by replacing the expectation in (6) with the empirical expectation over trajectories in the batch. A stochastic gradient of the prediction error can be obtained using backpropagation through time. With an estimate of both gradients, we can compute (5) and update the parameters trough gradient descent. For more details, see Algorithm 2 in the appendix.\n6We minimize 1-step prediction error, as opposed to general k-future prediction error recommended by (Hefny et al., 2018), to avoid biased estimates induced by non causal statistical correlations (observations correlated with future actions) when performing on-policy updates when a non-blind policy is in use."
+  }, {
+    "heading": "5.2. Alternating Optimization",
+    "text": "In this section, we describe a method that utilizes the recently proposed Trust Region Policy Optimization (TRPO (Schulman et al., 2015)), an alternative to the vanilla policy gradient methods that has shown superior performance in practice.It uses a natural gradient update and enforces a constraint that encourages small changes in the policy in each TRPO step. This constraint results in smoother changes of policy parameters.\nEach TRPO update is an approximate solution to the following constrained optimization problem in (7).\nθn+1 = arg min θ Eτ∼p(τ |πn) T∑ t=0 [ πθ(at|qt) πn(at|qt) (Rt(τ)− bt) ]\ns.t. Eτ∼p(τ |πn) T∑ t=0 [DKL (π n(.|qt) | πθ(.|qt))] ≤ , (7)\nwhere πn is the policy induced by θn, and Rt and bt are the reward-to-go and baseline functions defined in §5.1. While it is possible to extend TRPO to the joint loss in (5), we observed that TRPO tends to be computationally intensive with recurrent architectures. Instead, we resort to the following alternating optimization:7 In each iteration, we use TRPO to update the reactive policy parameters θre, which involve only a feedforward network. Then, we use a gradient step on (5), as described in §5.1, to update the PSR parameters θPSR, see Algorithm 3 in the appendix."
+  }, {
+    "heading": "5.3. Variance Normalization",
+    "text": "It is difficult to make sense of the values of α1, α2, specially if the gradient magnitudes of their respective losses are not comparable. For this reason, we propose a more principled approach for finding the relative weights. We use α1 = α̃1 and α2 = a2α̃2, where a2 is a user-given value, and α̃1 and α̃2 are dynamically adjusted to maintain the property that the gradient of each loss weighted by α̃ has unit (uncentered) variance, in (8). In doing so, we maintain the variance of the gradient of each loss through exponential averaging and use it to adjust the weights.\nv (n) i = (1− β)v (n−1) i + β ∑ θj∈θ ‖∇(n)θj `i‖ 2 (8)\nα̃ (n) i = ∑ θj∈θ v (n) i,j −1/2 ,"
+  }, {
+    "heading": "6. Experiments",
+    "text": "We evaluate the RPSP-network’s performance on a collection of reinforcement learning tasks using OpenAI Gym\n7 We emphasize that both VRPG and alternating optimization models optimize the joint RL/prediction loss. They differ only on how to update the reactive policy parameters (which are independent of prediction error).\nMujoco environments. 8 We consider partially observable environments: only the angles of the joints of the agent are visible to the network, without velocities.\nProposed Models: We consider an RPSP with a predictive component based on RFFPSR, as described in §3 and §4. For the RFFPSR, we use 1000 random Fourier features on observation and action sequences followed by a PCA dimensionality reduction step to d dimensions. We report the results for the best choice of d ∈ {10, 20, 30}. We initialize the RPSP with two stage regression on a batch of Mi initial trajectories (100 for Hopper, Walker and CartPole, and 50 for Swimmer) (equivalent to 10 extra iterations, or 5 for Swimmer). We then experiment with both joint VRPG optimization (RPSP-VRPG) described in §5.1 and alternating optimization (RPSP-Alt) in §5.2. For RPSPVRPG, we use the gradient normalization described in §5.3. Additionally, we consider an extended variation (+obs) that concatenates the predictive state with a window w of previous observations as an extended form of predictive state q̃t = [qt,ot−w:t]. If PSR learning succeeded perfectly, this extra information would be unnecessary; however we observe in practice that including observations help the model learn faster and more stably. Later in the results section we report the RPSP variant that performs best. We provide a detailed comparison of all models in the appendix.\nCompeting Models: We compare our models to a finite memory model (FM) and gated recurrent units (GRU). The finite memory models are analogous to RPSP, but replace the predictive state with a window of past observations. We tried three variants, FM1, FM2 and FM5, with window size of 1, 2 and 5 respectively (FM1 ignores that the environment is partially observable). We compare to GRUs with 16, 32, 64 and 128-dimensional hidden states. We optimize network parameters using the RLLab9 implementation of TRPO with two different learning rates (η = 10−2, 10−3).\nIn each model, we use a linear baseline for variance reduction where the state of the model (i.e. past observation window for FM, latent state for GRU and predictive state for RPSP) is used as the predictor variable.\nEvaluation Setup: We run each algorithm for a number of iterations based on the environment (see Figure 3). After each iteration, we compute the average return Riter = 1 M ∑M m=1 ∑Tm j=1 r j m on a batch of M trajectories, where Tm is the length of the mth trajectory. We repeat this process using 10 different random seeds and report the average and standard deviation of Riter for each iteration.\nFor each environment, we set the number of samples in the batch to 10000 and the maximum length of each episode to\n8 https://gym.openai.com/envs#mujoco 9https://github.com/openai/rllab\n200, 500, 1000, 1000 for Cart-Pole, Swimmer, Hopper and Walker2d respectively.10\nFor RPSP, we found that a step size of 10−2 performs well for both VRPG and alternating optimization in all environments. The reactive policy contains one hidden layer of 16 nodes with ReLU activation. For all models, we report the results for the choice of hyper-parameters that resulted in\n10For example, for a 1000 length environment we use a batch of 10 trajectories resulting in 10000 samples in the batch.\nthe highest mean cumulative reward (area under curve)."
+  }, {
+    "heading": "7. Results and Discussion",
+    "text": "Performance over iterations: Figure 3 shows the empirical average return vs. the amount of interaction with the environment (experience), measured in time steps. We observe that RPSP networks (especially RPSP-Alt) perform well in every environment, competing with or outperforming the top model in terms of the learning speed and the\nfinal reward, with the exception of Cart-Pole where the gap to GRU is larger. We report the cumulative reward for all environments in Table 3(h). For all except Cart-Pole, come variant of RPSP is the best performing model. For Swimmer our best performing model is only statistically better than FM model (t-test, p < 0.01), while for Hopper our best RPSP model performs statistically better than FM and GRU models (t-test, p < 0.01) and for Walker2d RPSP outperforms only GRU baselines (t-test, p < 0.01). For Cart-Pole the top RPSP model performs better than the FM model (t-test, p < 0.01) and it is not statistically significantly different than the GRU model. We also note that RPSPAlt provides similar performance to the joint optimization (RPSP-VRPG), but converges faster.\nEffect of proposed contributions: Our RPSP model is based on a number of components: (1) State tracking using PSR (2) Consistent initialization using two-stage regression (3) End-to-end training of state tracker and policy (4) Using observation prediction loss to regularize training.\nWe conducted a set of experiments to verify the benefit of each component.11 In the first experiment, we test three variants of RPSP: one where the PSR is randomly initialized (random PSR), another one where the PSR is fixed at the initial value and only the reactive policy is further updated (fix PSR), and a third one where we train the RPSP network with initialization and without prediction loss regularization (i.e. we set α2 in (5)) to 0 (reactive PSR). Figure 3(e) demonstrates that these variants are inferior to our model, showing the importance of two-stage initialization, end-toend training and observation prediction loss respectively.\nIn the second experiment, we replace the PSR with a GRU that is initialized using BPTT applied on exploration data. This is analogous to the predictive state decoders proposed in (Venkatraman et al., 2017), where observation prediction\n11 Due to space limitation, we report results on Hopper environment. We report results for other environments in the appendix.\nloss is included when optimizing a GRU policy network (reg GRU).12 Figure 3(f-g) shows that a GRU model is inferior to a PSR model, where the initialization procedure is consistent and does not suffer from local optima.\nEffect of observation noise: We also investigated the effect of observation noise on the RPSP model and the competitive FM baseline by applying Gaussian noise of increasing variance to observations. Figure 4 shows that while FM was very competitive with RPSP in the noiseless case, RPSP has a clear advantage over FM in the case of mild noise. The performance gap vanishes under excessive noise."
+  }, {
+    "heading": "8. Conclusion",
+    "text": "We propose RPSP-networks, combining ideas from predictive state representations and recurrent networks for reinforcement learning. We use PSR learning algorithms to provide a statistically consistent initialization of the state tracking component, and propose gradient-based methods to maximize expected return while reducing prediction error. We compare RPSP against different baselines and empirically show the efficacy of the proposed approach in terms of speed of convergence and overall expected return.\nOne direction to investigate is how to develop an online, consistent and statistically efficient method to update the RFFPSR as a predictor in continuous environments. There has been a body of work for online learning of predictive state representations (Venkatraman et al., 2016; Boots & Gordon, 2011; Azizzadenesheli et al., 2016; Hamilton et al., 2014). To our knowledge, none of them is able to deal with continuous actions and make use of local optimization. We are also interested in applying off-policy methods and more elaborate exploration strategies.\n12 We report results for partially observable setting which is different from RL experiments in (Venkatraman et al., 2017)."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Reinforcement learning of pomdp’s using spectral methods",
+    "authors": ["K. Azizzadenesheli", "A. Lazaric", "A. Anandkumar"],
+    "venue": "CoRR, abs/1602.07764,",
+    "year": 2016
+  }, {
+    "title": "End to end learning for self-driving",
+    "authors": ["M. Bojarski", "D.D. Testa", "D. Dworakowski", "B. Firner", "B. Flepp", "P. Goyal", "L.D. Jackel", "M. Monfort", "U. Muller", "J. Zhang", "X. Zhang", "J. Zhao", "K. Zieba"],
+    "venue": "cars. CoRR,",
+    "year": 2016
+  }, {
+    "title": "An online spectral learning algorithm for partially observable nonlinear dynamical systems",
+    "authors": ["B. Boots", "G. Gordon"],
+    "venue": "In Proceedings of the 25th National Conference on Artificial Intelligence (AAAI),",
+    "year": 2011
+  }, {
+    "title": "Predictive state temporal difference learning",
+    "authors": ["B. Boots", "G.J. Gordon"],
+    "venue": "In Advances in Neural Information Processing Systems 23: 24th Annual Conference on Neural Information Processing Systems",
+    "year": 2010
+  }, {
+    "title": "Closing the learning planning loop with predictive state representations",
+    "authors": ["B. Boots", "S. Siddiqi", "G. Gordon"],
+    "venue": "In I. J. Robotic Research,",
+    "year": 2011
+  }, {
+    "title": "Hilbert Space Embeddings of Predictive State Representations",
+    "authors": ["B. Boots", "A. Gretton", "G.J. Gordon"],
+    "venue": "In Proc. 29th Intl. Conf. on Uncertainty in Artificial Intelligence (UAI),",
+    "year": 2013
+  }, {
+    "title": "Kernel bayes’ rule: Bayesian inference with positive definite kernels",
+    "authors": ["K. Fukumizu", "L. Song", "A. Gretton"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2013
+  }, {
+    "title": "Finding structure with randomness: Probabilistic algorithms for constructing approximate matrix decompositions",
+    "authors": ["N. Halko", "P.G. Martinsson", "J.A. Tropp"],
+    "venue": "SIAM Rev.,",
+    "year": 2011
+  }, {
+    "title": "Efficient learning and planning with compressed predictive states",
+    "authors": ["W. Hamilton", "M.M. Fard", "J. Pineau"],
+    "venue": "J. Mach. Learn. Res.,",
+    "year": 2014
+  }, {
+    "title": "Deep recurrent q-learning for partially observable mdps",
+    "authors": ["M.J. Hausknecht", "P. Stone"],
+    "venue": "CoRR, abs/1507.06527,",
+    "year": 2015
+  }, {
+    "title": "Supervised learning for dynamical system learning",
+    "authors": ["A. Hefny", "C. Downey", "G.J. Gordon"],
+    "venue": "In NIPS",
+    "year": 2015
+  }, {
+    "title": "Supervised learning for dynamical system learning",
+    "authors": ["A. Hefny", "C. Downey", "G.J. Gordon"],
+    "venue": "Advances in Neural Information Processing Systems,",
+    "year": 2015
+  }, {
+    "title": "An efficient, expressive and local minima-free method for learning controlled dynamical systems",
+    "authors": ["A. Hefny", "C. Downey", "G.J. Gordon"],
+    "venue": "In Proceedings of the Thirty-Second AAAI Conference on Artificial Intelligence,",
+    "year": 2018
+  }, {
+    "title": "Long short-term memory",
+    "authors": ["S. Hochreiter", "J. Schmidhuber"],
+    "venue": "Neural Comput.,",
+    "year": 1997
+  }, {
+    "title": "Predictive representations of state",
+    "authors": ["M.L. Littman", "R.S. Sutton", "S. Singh"],
+    "venue": "Advances In Neural Information Processing Systems",
+    "year": 2001
+  }, {
+    "title": "Causality: Models, Reasoning and Inference",
+    "authors": ["J. Pearl"],
+    "venue": "USA, 2nd edition,",
+    "year": 2009
+  }, {
+    "title": "Random features for large-scale kernel machines",
+    "authors": ["A. Rahimi", "B. Recht"],
+    "venue": "In NIPS",
+    "year": 2008
+  }, {
+    "title": "Learning low dimensional predictive representations",
+    "authors": ["M. Rosencrantz", "G. Gordon"],
+    "venue": "In ICML, pp",
+    "year": 2004
+  }, {
+    "title": "A reduction of imitation learning and structured prediction to no-regret online learning",
+    "authors": ["S. Ross", "G.J. Gordon", "D. Bagnell"],
+    "venue": "In Proceedings of the Fourteenth International Conference on Artificial Intelligence and Statistics,",
+    "year": 2011
+  }, {
+    "title": "Trust region policy optimization",
+    "authors": ["J. Schulman", "S. Levine", "P. Abbeel", "M. Jordan", "P. Moritz"],
+    "venue": "Proceedings of the 32nd International Conference on Machine Learning",
+    "year": 2015
+  }, {
+    "title": "Predictive state representations: A new theory for modeling dynamical systems",
+    "authors": ["S. Singh", "M.R. James", "M.R. Rudary"],
+    "venue": "In UAI,",
+    "year": 2004
+  }, {
+    "title": "Learning to filter with predictive state inference machines",
+    "authors": ["W. Sun", "A. Venkatraman", "B. Boots", "J.A. Bagnell"],
+    "venue": "In Proceedings of the 33nd International Conference on Machine Learning,",
+    "year": 2016
+  }, {
+    "title": "Policy gradient methods for reinforcement learning with function approximation",
+    "authors": ["R. Sutton", "D. Mcallester", "S. Singh", "Y. Mansour"],
+    "venue": "In Advances in Neural Information Processing Systems 12 (Proceedings of the 1999 conference),",
+    "year": 2001
+  }, {
+    "title": "Introduction to Reinforcement Learning",
+    "authors": ["R.S. Sutton", "A.G. Barto"],
+    "year": 1998
+  }, {
+    "title": "Learning tetris using the noisy crossentropy method",
+    "authors": ["I. Szita", "A. Lrincz"],
+    "venue": "Neural Computation,",
+    "year": 2006
+  }, {
+    "title": "Online instrumental variable regression with applications to online linear system identification",
+    "authors": ["A. Venkatraman", "W. Sun", "M. Hebert", "J.A. Bagnell", "B. Boots"],
+    "venue": "In AAAI,",
+    "year": 2016
+  }, {
+    "title": "Predictive state decoders: Encoding the future into recurrent networks",
+    "authors": ["A. Venkatraman", "N. Rhinehart", "W. Sun", "L. Pinto", "B. Boots", "K. Kitani", "J.A. Bagnell"],
+    "venue": "In Proceedings of Advances in Neural Information Processing Systems (NIPS),",
+    "year": 2017
+  }, {
+    "title": "Recurrent policy gradients",
+    "authors": ["D. Wierstra", "A. Förster", "J. Peters", "J. Schmidhuber"],
+    "venue": "Logic Journal of the IGPL,",
+    "year": 2010
+  }, {
+    "title": "Simple statistical gradient-following algorithms for connectionist reinforcement learning",
+    "authors": ["R.J. Williams"],
+    "venue": "In Machine Learning,",
+    "year": 1992
+  }],
+  "id": "SP:e5de992d22b3924f57133e69655a001185a8a87e",
+  "authors": [{
+    "name": "Ahmed Hefny",
+    "affiliations": []
+  }, {
+    "name": "Zita Marinho",
+    "affiliations": []
+  }, {
+    "name": "Wen Sun",
+    "affiliations": []
+  }, {
+    "name": "Siddhartha S. Srinivasa",
+    "affiliations": []
+  }, {
+    "name": "Geoffrey Gordon",
+    "affiliations": []
+  }],
+  "abstractText": "We introduce Recurrent Predictive State Policy (RPSP) networks, a recurrent architecture that brings insights from predictive state representations to reinforcement learning in partially observable environments. Predictive state policy networks consist of a recursive filter, which keeps track of a belief about the state of the environment, and a reactive policy that directly maps beliefs to actions. The recursive filter leverages predictive state representations (PSRs) (Rosencrantz & Gordon, 2004; Sun et al., 2016) by modeling predictive state — a prediction of the distribution of future observations conditioned on history and future actions. This representation gives rise to a rich class of statistically consistent algorithms (Hefny et al., 2018) to initialize the recursive filter. Predictive state serves as an equivalent representation of a belief state. Therefore, the policy component of the RPSP-network can be purely reactive, simplifying training while still allowing optimal behaviour. We optimize our policy using a combination of policy gradient based on rewards (Williams, 1992) and gradient descent based on prediction error of the recursive filter. We show the efficacy of RPSP-networks under partial observability on a set of robotic control tasks from OpenAI Gym. We empirically show that RPSP-networks perform well compared with memory-preserving networks such as GRUs, as well as finite memory models, being the overall best performing method. Equal contribution Machine Learning Department, Carnegie Mellon University, Pittsburgh, USA Robotics Institute, Carnegie Mellon University, Pittsburgh, USA ISR/IT, Instituto Superior Técnico, Lisbon, Portugal Paul G. Allen School of Computer Science & Engineering, University of Washington, Seattle, USA. Correspondence to: Ahmed Hefny <ahefny@cs.cmu.edu>, Zita Marinho <zmarinho@cmu.edu>. Proceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).",
+  "title": "Recurrent Predictive State Policy Networks"
+}

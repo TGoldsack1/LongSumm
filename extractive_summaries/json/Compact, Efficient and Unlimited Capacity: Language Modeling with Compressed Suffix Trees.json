@@ -1,0 +1,202 @@
+{
+  "sections": [{
+    "text": "Proceedings of the 2015 Conference on Empirical Methods in Natural Language Processing, pages 2409–2418, Lisbon, Portugal, 17-21 September 2015. c©2015 Association for Computational Linguistics."
+  }, {
+    "heading": "1 Introduction",
+    "text": "Language models (LMs) are critical components in many modern NLP systems, including machine translation (Koehn, 2010) and automatic speech recognition (Rabiner and Juang, 1993). The most widely used LMs are mgram models (Chen and Goodman, 1996), based on explicit storage of mgrams and their counts, which have proved highly accurate when trained on large datasets. To be useful, LMs need to be not only accurate but also fast and compact.\nDepending on the order and the training corpus size, a typical mgram LM may contain as many as several hundred billions of mgrams (Brants et al., 2007), raising challenges of efficient storage and retrieval. As always, there is a trade-off between accuracy, space, and time, with recent papers considering small but approximate lossy LMs (Chazelle et al., 2004; Talbot and Osborne, 2007; Guthrie and Hepple, 2010), or loss-less LMs backed by tries (Stolcke et al., 2011), or related compressed structures (Germann et al., 2009;\nHeafield, 2011; Pauls and Klein, 2011; Sorensen and Allauzen, 2011; Watanabe et al., 2009). However, none of these approaches scale well to very high-order m or very large corpora, due to their high memory and time requirements. An important exception is Kennington et al. (2012), who also propose a language model based on a suffix tree which scales well with m but poorly with the corpus size (requiring memory of about 20× the training corpus).\nIn contrast, we1 make use of recent advances in compressed suffix trees (CSTs) (Sadakane, 2007) to build compact indices with much more modest memory requirements (≈ the size of the corpus). We present methods for extracting frequency and unique context count statistics for mgram queries from CSTs, and two algorithms for computing Kneser-Ney LM probabilities on the fly using these statistics. The first method uses two CSTs (over the corpus and the reversed corpus), which allow for efficient computation of the number of unique contexts to the left and right of an mgram, but is inefficient in several ways, most notably when computing the number of unique contexts to both sides. Our second method addresses this problem using a single CST backed by a wavelet tree based FM-index (Ferragina et al., 2007), which results in better time complexity and considerably faster runtime performance.\nOur experiments show that our method is practical for large-scale language modelling, although querying is substantially slower than a SRILM benchmark. However our technique scales much more gracefully with Markov order m, allowing unbounded ‘non-Markov’ application, and enables training on large corpora as we demonstrate on the complete Wikipedia dump. Overall this paper illustrates the vast potential succinct indexes have\n1For the implementation see: https://github.com/eehsan/ lm-sdsl.\n2409\nfor language modelling and other ‘big data’ problems in language processing."
+  }, {
+    "heading": "2 Background",
+    "text": "Suffix Arrays and Suffix Trees Let T be a string of size n drawn from an alphabet Σ of size σ. Let T [i..n − 1] be a suffix of T . The suffix tree (Weiner, 1973) of T is the compact labeled tree of n + 1 leaves where the root to leaf paths correspond to all suffixes of T $, where $ is a terminating symbol not in Σ. The path-label of each node v corresponds to the concatenation of edge labels from the root node to v. The node depth of v corresponds to the number of ancestors in the tree, whereas the string depth corresponds to the length of the path-label. Searching for a pattern α of size m in T translates to finding the locus node v closest to the root such that α is a prefix of the path-label of v in O(m) time. We refer to this approach as forward search. Figure 1a shows a suffix tree over a sample text. A suffix tree requiresO(n) space and can be constructed inO(n) time (Ukkonen, 1995). The children of each node in the suffix tree are lexicographically ordered by their edge labels. The i-th smallest suffix in T corresponds to the path-label of the i-th leaf. The starting position of the suffix can be associated its corresponding leaf in the tree as shown in Figure 1a. All occurrences of α in T can be retrieved by visiting all leaves in the subtree of the locus of α. For example, pattern “the night” occurs at positions 12 and 19 in the sample text. We further refer the number of children of a node v as its degree and the number of leaves in the subtree rooted at v as the size of v.\nThe suffix array (Manber and Myers, 1993) of T is an array SA[0 . . . n− 1] such that SA[i] corresponds to the starting position of the i-th smallest suffix in T or the i-th leaf in the suffix tree of T . The suffix array requires n log n bits of space and can also be constructed in O(n) time (Kärkkäinen et al., 2006). Using only the suffix array and the text, pattern search can be performed using binary search in O(m log n) time. For example, the pattern “the night” is found by performing binary search using SA and T to determine SA[18, 19], the interval in SA corresponding the the suffixes in T prefixed by the pattern. In practice, suffix arrays use 4 − 8n bytes of space whereas the most efficient suffix tree implementations require at least 20n bytes of space (Kurtz, 1999) which are both\nmuch larger than T and prohibit the use of these structures for all but small data sets.\nCompressed Suffix Structures Reducing the space usage of suffix based index structure has recently become an active area of research. The space usage of a suffix array can be reduced significantly by utilizing the compressibility of text combined with succinct data structures. A succinct data structure provides the same functionality as an equivalent uncompressed data structure, but requires only space equivalent to the information-theoretic lower bound of the underlying data. For simplicity, we focus on the FM-Index which emulates the functionality of a suffix array over T using nHk(T ) + o(n log σ) bits of space where Hk refers to the k-th order entropy of the text (Ferragina et al., 2007). In practice, the FMIndex of T uses roughly space equivalent to the compressed representation of T using a standard compressor such as bzip2. For a more comprehensive overview on succinct text indexes, see the excellent survey of Ferragina et al. (2008).\nThe FM-Index relies on the duality between the suffix array and the BWT (Burrows and Wheeler, 1994), a permutation of the text such that T bwt[i] = T [SA[i] − 1] (see Figure 1). Searching for a pattern using the FM-Index is performed in reverse order by performing RANK(T bwt, i, c) operations O(m) times. Here, RANK(T bwt, i, c) counts the number of times symbol c occurs in T bwt[0 . . . i − 1]. This process is usually referred to as backward search. Let SA[li, ri] be the interval corresponding to the suffixes in T matching α[i . . .m − 1]. By definition of the BWT, T bwt[li, ri] corresponds to the symbols in T preceding α[i . . .m − 1] in T . Due to the lexicographical ordering of all suffixes in SA, the interval SA[li−1, ri−1] corresponding to all occurrences of α[i − 1 . . .m − 1] can be determined by computing the rank of all occurrences of c = α[i − 1] in T bwt[li, ri]. Thus, we compute RANK(T bwt, li, c), the number of times symbol c occurs before li and RANK(T bwt, ri + 1, c), the number of occurrences of c in T bwt[0, ri]. To determine SA[li−1, ri−1], we additionally store the starting positions Cs of all suffixes for each symbol s in Σ at a negligible cost of σ log n bits. Thus, the new interval is computed as li−1 = Cc+RANK(T bwt, li, c) and ri−1 = Cc+RANK(T bwt, ri + 1, c).\nThe time and space complexity of the FMindex thus depends on the cost of storing and pre-\nprocessing T bwt to answer RANK efficiently. A wavelet tree can be used to answer RANK over T bwt in O(log σ) time. The wavelet tree reduces RANK over an alphabet Σ into multiple RANK operations over a binary alphabet which can be answered in O(1) time and o(n) bits extra space by periodically storing absolute and relative RANK counts (Munro, 1996). The alphabet is reduced by recursively splitting symbols based on their code words into subgroups to form a binary tree as shown in Figure 1b for T bwt. To answer RANK(T bwt, i, c), the tree is traversed based on the code word of c, performing binary RANK at each level. For example, RANK(T bwt, 17, ‘t’) translates to performing RANK(WTroot, 17, 1) = 12 on the top level of the wavelet tree, as t=the=110. We recurse to the right subtree of the root node and compute RANK(WT1, 12, 1) as there were 12 ones in the root node and the next bit in the codeword of ‘the’ is also one. This process continues until the correct leaf node is reached to answer RANK(T bwt, 17, ‘t’) = 5 in O(log σ) time. The space usage of a regular wavelet tree is n log σ + o(n log σ) bits which roughly matches the size of the text.2 If locations of matches are required, ad-\n2However, if code-words for each symbol are chosen based on their Huffman-codes the size of the wavelet tree\nditional space is needed to access SA[i] or the inverse suffix array SA−1[SA[i]] = i. In the simplest scheme, both values are periodically sampled using a given sample rate SAS (e.g. 32) such that SA[i] mod SAS = 0. Then, for any SA[i] or SA−1[i], at most O(SAS) RANK operations on T bwt are required to access the value. Different sample rates, bitvector implementations and wavelet tree types result in a wide variety of timespace tradeoffs which can be explored in practice (Gog et al., 2014).\nIn the same way the FM-index emulates the functionality of the suffix array in little space, compressed suffix trees (CST) provide the functionality of suffix trees while requiring significantly less space than their uncompressed counterparts (Sadakane, 2007). A CST uses a compressed suffix array (CSA) such as the FM-Index but stores additional information to represent the shape of the suffix tree as well as information about path-labels. Again a variety of different storage schemes exist, however for simplicity we focus on the CST of Ohlebusch et al. (2010) which we use in our experiments. Here, the shape of the tree is stored using a balanced-parenthesis (BP) sequence which for a tree of p nodes requires ≈ 2p reduces to nH0(T )(1 + o(1)) bits which can be further be reduced to to nHk(T ) + o(n log σ) bits by using entropy compressed bitvectors.\nbits. Using little extra space and advanced bitoperations, the BP-sequence can be used to perform operations such as string-depth(v), parent(v) or accessing the i-th leaf can be answered in constant time. To support more advanced operations such as accessing path-labels, the underlying CSA or a compressed version of the LCP array are required which can be more expensive.3 In practice, a CST requires roughly 4 − 6n bits in addition to the cost of storing the CSA. For a more extensive overview of CSTs see Russo et al. (2011).\nKneser Ney Language Modelling Recall our problem of efficient mgram language modeling backed by a corpus encoded in a succinct index. Although our method is generally applicable to many LM variants, we focus on the Kneser-Ney LM (Kneser and Ney, 1995), specifically the interpolated variant described in Chen and Goodman (1996), which has been shown to outperform other ngram LMs and has become the de-facto standard.\nInterpolated Kneser-Ney describes the conditional probability of a word wi conditioned on the context of m− 1 preceding words, wi−1i−m+1, as\nP (wi|wi−1i−m+1) = max\n[ c(wii−m+1)−Dm, 0 ] c(wi−1i−m+1)\n+ DmN 1+(wi−1i−m−1 ·) c(wi−1i−m+1) P̄ (wi|wi−1i−m+2), (1)\nwhere lower-order smoothed probabilities are defined recursively (for 1 < k < m) as\nP̄ (wi|wi−1i−k+1) = max [ N1+(·wii−k+1)−Dk, 0] N1+(·wi−1i−k+1 ·)\n+ DkN 1+(wi−1i−k+1 ·) N1+(·wi−1i−k+1 ·) P̄ (wi|wi−1i−k+2) . (2)\nIn the above formula, Dk is the kgram-specific discount parameter, and the occurrence count N1+(α·) = |{w : c(αw) > 0}| is the number of observed word types following the pattern α; the occurrence counts N1+(·α) and N1+(·α·) are defined accordingly. The recursion stops at unigram level where the unigram probabilities are defined as P̄ (wi) = N1+(·wi)/N1+(··).4\n3See Supplementary Materials Table 1 for an overview of the complexities of the functionality of the CST that is used in our experiments.\n4Modified Kneser-Ney, proposed by Chen and Goodman (1996), typically outperforms interpolated Kneser-Ney through its use of context-specific discount parameters. The"
+  }, {
+    "heading": "3 Using CSTs for KN Computation",
+    "text": "The key requirements for computing probability under a Kneser-Ney language model are two types of counts: raw frequencies of mgrams and occurrence counts, quantifying how many different contexts the mgram has occurred in. Figure 2 (right) illustrates the requisite counts for calculating the probability of an example 4-gram. In electing to store the corpus directly in a suffix tree, we need to provide mechanisms for computing these counts based on queries into the suffix tree.\nThe raw frequency counts are the simplest to compute. First we identify the locus node v in the suffix tree for the query mgram; the frequency corresponds to the node’s size, an O(1) operation which returns the number of leaves below v. To illustrate, consider searching for c(the night) in Figure 1a, which matches a node with two leaves (labelled 19 and 12), and thus c = 2.\nMore problematic are the occurrence counts, which come in several flavours: right contexts, N1+(α·), left contexts, N1+(·α), and contexts to both sides of the pattern, N1+(·α·). The first of these can be handled easily, as\nN1+(α·) = { degree(v), if α = label(v)1, otherwise where v is the node matching α, and label(v) denotes the path-label of v.5 For example, keep in has two child nodes in Figure 1a, and thus there are two unique contexts in which it can occur, N1+(keep in ·) = 2, while the keep partially matches an edge in the forward suffix tree in Figure 1a as it can only be followed by in, N1+(the keep ·) = 1. A similar line of reasoning applies to computing N1+(·α). Assuming we also have a second suffix tree representing the reversed corpus, we first identify the reversed pattern (e.g., in keepR) and then use above method to compute the occurrence count (denoted hereafter N1P(t, v, α)6, where t is the CST.).\nimplementation of this with our data structures is straightforward in principle, but brings a few added complexities in terms of dynamic computing other types of occurrence counts, which we leave for future work.\n5See the Supplementary Materials for the explicit algorithm, but note there are some corner cases involving sentinels # and $, which must be excluded when computing occurrence counts. Such tests have been omitted from the presentation for clarity.\n6In the presented algorithms, we overload the pattern argument in function calls for readability, and use · to denote the query context.\nThe final component of the Kneser-Ney LM computation isN1+(·α·), the number of unique contexts considering symbols on both sides of the pattern. Unfortunately this does not map to a simple suffix tree operation, but instead requires enumeration, N1+(·α·) = ∑s∈F (α)N1+(·αs), where F (α) is the set of symbols that can follow α. Algorithm 1 shows how this is computed, with lines 7 and 8 enumerating s ∈ F (α) using the edge labels of the children of v. For each symbol, line 9 searches for an extended pattern incorporating the new symbol s in the reverse CSA (part of the reverse CST), by refining the existing match vR using a single backward search operation after which we can compute N1+(·αs).7 Line 5 deals with the special case where the pattern does not match a complete edge, in which case there is only only unique right context and therefore N1+(·α·) = N1+(·α).\nN1P and N1PFRONTBACK can compute the requisite occurence counts for mgram language modelling, however at considerable cost in terms of space and time. The need for twin reverse and forward CSTs incurs a significant storage overhead, as well as the search time to match the pattern in both CSTs. We show in Section 5 how we can avoid the need for the reversed suffix tree, giving rise to lower memory requirements and faster runtime. Beyond the need for twin suffix trees, the highest time complexity calls are string-depth, edge and backward-search. Calling string-depth is constant time for internal nodes, but O(SAS log σ) for leaf nodes; fortunately we\n7Backward search in the reverse tree corresponds to searching for the reversed pattern appended with one symbol.\nAlgorithm 1 Two-sided occ., N1+(·α·) Precondition: vF in forward CST tF matches α Precondition: vR in reverse CST tR matches α\n1: function N1PFRONTBACK(tF, vF, tR, vR, α) 2: o← 0 3: d← string-depth(vF) 4: if d > |α| then 5: o← N1P(tR, vR,·α) 6: else 7: for uF ← children(vF) do 8: s← edge(uF, d+ 1) 9: uR← back-search(vR, s)\n10: o← o+ N1P(tR, uR,·αs) 11: return o\ncan avoid this call for leaves, which by definition extend to the end of the corpus and consequently extend further than our pattern.8 The costly calls to edge and backward-search however cannot be avoided. This leads to an overall time complexity of O(1) for N1P and O(F (α) × SAS × log σ) for N1PFRONTBACK, where F (α) is the number of following symbols and SAS is the suffix array value sample rate described in Section 2."
+  }, {
+    "heading": "4 Dual CST Algorithm",
+    "text": "The methods above for computing the frequency and occurrence counts provide the ingredients necessary for computing mgram language model probabilities. This leaves the algorithmic problem\n8We assume search patterns do not extend beyond a single sentence, and thus will always be shorter than the edge labels.\nAlgorithm 2 KN probability P ( wk|wk−1k−(m−1) ) 1: function PROBKNESERNEY(tF, tR,w,m) 2: vF ← root(tF) . match for suffix of wk−1k−(m−1) 3: vR ← root(tR) . match for suffix of wk−1k−(m−1) 4: vallR ← root(tR) . match for suffix of wkk−(m−1) 5: p← 1 6: for i← 1 to m do 7: vallR ← forw-search(vallR , wk−i+1) 8: if i > 1 then 9: vF ← back-search(vF, wk−i+1) 10: if i < m then 11: vR ← forw-search(vR, wk−i+1) 12: Di← lookup discount for igram 13: if i = m then 14: c← size(vallR ) 15: d← size(vF) 16: else 17: c← N1P(tR, vallR ,·wkk−i+1) 18: d←\nN1PFRONTBACK(tF, vF, tR, vR,·wk−1k−i+1 ·) 19: if i > 1 then 20: if vF is valid then 21: q← N1P(tF, vF, wk−1k−i+1 ·) 22: p← 1\nd (max(c−Di, 0) +Diqp)\n23: else if i = 1 then 24: p← c/N1+(··) 25: return p\nof efficiently ordering the search operations in forward and reverse CST structures.\nThis paper considers an interpolated LM formulation, in which probabilities from higher order contexts are interpolated with lower order estimates. This iterative process is apparent in Figure 2 (right) which shows the quantities required for probability scoring for an example mgram. Equivalently, the iteration can be considered in reverse, starting from unigram estimates and successively growing to large mgrams, in each stage adding a single new symbol to left of the pattern. This suits incremental search in a CST in which search bounds are iteratively refined, which has a substantially lower time complexity compared to searching over the full index in each step.\nAlgorithm 2 presents an outline of the approach. This uses a forward CST, tF, and a reverse CST, tR, with three CST nodes (lines 2–4) tracking the match progress for the full igram (vallR ) and the (i − 1)gram context (vF, vR), i = 1 . . .m. The need to maintain three concurrent searches arises from the calls to size, N1+(·α), N1+(α·) and N1+(·α·) (lines 14, 15; 17; 21; and 18, respectively). These calls impose conditions on the direction of the suffix tree, e.g., such that the edge labels and node degree can be used to compute\nAlgorithm 3 Precompute KN discounts 1: function PRECOMPUTEDISCOUNTS(tR,m) 2: ck,f ← 0 ∀k ∈ [1,m], f ∈ [1, 2] 3: N1k,g ← 0 ∀k ∈ [1,m], g ∈ [1, 2] 4: N1+(··)← 0 5: for vR ← descendents(root(tR)) do . depth-first 6: dP ← string-depth(parent(vR)) 7: d← string-depth(vR) 8: for k ← dP + 1 to min (d, dP +m) do 9: s← edge(vR, k) 10: if s is the end of sentence sentinel then 11: skip all children of vR 12: else 13: if k = 2 then 14: N1+(··)← N1+(··) + 1 15: f ← size(vR) 16: if 1 ≤ f ≤ 2 then 17: ck,f ← ck,f + 1 18: if k < d then 19: g← 1 20: else 21: g← degree(vR) 22: if 1 ≤ g ≤ 2 then 23: N1k,g ← N1k,g + 1 24: return c,N1, N1+(··) the number of left or right contexts in which a pattern appears. The matching process is illustrated in Figure 2 where the three search nodes are shown on the left, considered bottom to top, and their corresponding count operations are shown to the right. The N1+(·α) calls require a match in the reverse CST (left-most column, vallR ), while the N1+(α·) require a match in the forward CST (right-most column, vF, matching the (i− 1)gram context). The N1+(·α·) computation reuses the forward match while also requiring a match for the (i−1)gram context in the reversed CST, as tracked by the middle column (vR). Because of the mix of forward and reverse CSTs, coupled with search patterns that are revealed right-to-left, incremental search in each of the CSTs needs to be handled differently (lines 7–11). In the forward CST, we perform backward search to extend the search pattern to the left, which can be computed very efficiently from the BWT in the CSA.9 Conversely in the reverse CST, we must use forward search as we are effectively extending the reversed pattern to the right; this operation is considerably more costly.\nThe discounts D on line 12 of Algorithm 2 and N1+(··) (a special case of line 18) are precomputed directly from the CSTs thus avoiding several costly computations at runtime. The precomputa-\n9See Supplementary Materials Table 1 for the time complexities of this and other CSA and CST methods.\ntion algorithm is provided in Algorithm 3 which operates by traversing the nodes of the reverse CST and at each stage computing the number of mgrams that occur 1–2 times (used for computing Dm in eq. 1), or with N1+(·α) ∈ [1 − 2] (used for computing Dk in eq. 2), for various lengths of mgrams. These quantities are used to compute the discount parameters, which are then stored for later use in inference.10 Note that the PRECOMPUTEDISCOUNTS algorithm can be slow, although it is significantly faster if we remove the edge calls and simply include in our counts all mgrams finishing a sentence or spanning more than one sentence. This has a negligible (often beneficial) effect on perplexity."
+  }, {
+    "heading": "5 Improved Single CST Approach",
+    "text": "The above dual CST algorithm provides an elegant means of computing LM probabilities of arbitrary order and with a limited space complexity (O(n), or roughly n in practice). However the time complexity is problematic, stemming from the expensive method for computing N1PFRONTBACK and repeated searches over the CST, particularly forward-search. Now we outline a method for speeding up the algorithm by doing away with the reverse CST. Instead the critical counts, N1+(·α) and N1+(·α·) are computed directly from a single forward CST. This confers the benefit of using only backward search and avoiding redundant searches for the same pattern (cf. lines 9 and 11 in Algorithm 2).\nThe full algorithm for computing LM probabilities is given in Algorithm 4, however for space reasons we will not describe this in detail. Instead we will focus on the method’s most critical component, the algorithm for computing N1+(·α·) from the forward CST, presented in Algorithm 5. The key difference from Algorithm 1 is the loop from lines 6–9, which uses the intervalsymbols (Schnattinger et al., 2010) method. This method assumes a wavelet tree representation of the SA component of the CST, an efficient encoding of the BWT as describes in section 2. The interval-symbols method uses RANK operations to efficiently identify for a given pattern the set of preceding symbols P (α) and the ranges SA[ls, rs] corresponding to the patterns sα for all s ∈ P (α)\n10Discounts are computed up to a limit on mgram size, here set to 10. The highest order values are used for computing the discount of mgrams above the limit at runtime.\nAlgorithm 4 KN probability P ( wk|wk−1k−(m−1) ) using a single CST 1: function PROBKNESERNEY1(tF,w,m) 2: vF ← root(tF) . match for context wk−1k−i 3: vallF ← root(tF) . match for wkk−i 4: p← 1 5: for i← 1 to m do 6: vallF ← back-search([lb(vallF ), rb(vallF )], wk−i+1) 7: if i > 1 then 8: vF ← back-search([lb(vF), rb(vF)], wk−i+1) 9: Di← discount parameter for igram 10: if i = m then 11: c← size(vallF ) 12: d← size(vF) 13: else 14: c← N1PBACK1(tF, vallF ,·wk−1k−i+1) 15: d← N1PFRONTBACK1(tF, vF,·wk−1k−i+1 ·) 16: if i > 1 then 17: if vF is valid then 18: q← N1P(tF, vF, wk−1k−i+1 ·) 19: p← 1\nd (max(c−Di, 0) +Diqp)\n20: else 21: p← c/N1+(··) 22: return p\nAlgorithm 5 N1+(·α·), using forward CST Precondition: vF in forward CST tF matches α 1: function N1PFRONTBACK1(tF, vF, α) 2: o← 0 3: if string-depth(vF) > |α| then 4: o← N1PBACK1(tF, vF,·α) 5: else 6: for 〈l, r, s〉 ← int-syms(tF, [lb(vF), rb(vF)]) do 7: l′← Cs + l 8: r′← Cs + r 9: o← o+ N1P(tF, node(l′, r′), sα·) 10: return o\nby visiting all leaves of the wavelet tree of symbols occurring in T bwt[l, r] (corresponding to α) in O(|P (α)| log σ) time (lines 6-8). These ranges SA[l′, r′] can be used to find the corresponding suffix tree node for each sα in O(1) time. To illustrate, consider the pattern α = “night” in Figure 1a. From T bwt we can see that this is preceeded by s =“old” (1st occurrence in T bwt) and s =“the” (3rd and 4th); from which we can compute the suffix tree nodes, namely [15, 15] and [16 + (3 − 1), 16 + (4 − 1)] = [18, 19] for “old” and “the” respectively.11\nN1PBACK1 is computed in a similar way, using the interval-symbols method to compute the number of unique preceeding symbols (see Supplementary Materials, Algorithm 7). Overall the time complexity of inference for both N1PBACK1\n11Using the offsets into the SA for each symbol, Cold = 15 and Cthe = 16, while −1 adjusts for counting from 1.\nand N1PFRONTBACK1 is O(P (α) log σ) where P (α) is the number of preceeding symbols of α, a considerable improvement over N1PFRONTBACK using the forward and reverse CSTs. Overall this leads to considerably faster computation of mgram probabilities compared to the two CST approach, and although still slower than highly optimised LM toolkits like SRILM, it is fast enough to support large scale experiments, and has considerably better scaling performance with the Markov order m (even allowing unlimited order), as we will now demonstrate."
+  }, {
+    "heading": "6 Experiments",
+    "text": "We used Europarl dataset and the data was numberized after tokenizing, splitting, and excluding XML markup. The first 10k sentences were used as the test data, and the last 80% as the training data, giving rise to training corpora of between 8M and 50M tokens and uncompressed size of up to 200 MiB (see Table 1 for detailed corpus statistics). We also processed the full 52 GiB uncompressed “20150205” English Wikipedia articles dump to create a character level language model consisting of 72M sentences. We excluded 10k random sentences from the collection as test data. We use the SDSL library (Gog et al., 2014) to implement all our structures and compare our indexes to SRILM (Stolcke, 2002). We refer to our dual-CST approach as D-CST, and the single-CST as S-CST.\nWe evaluated the perplexity across different languages and using mgrams of varying order from m = 2 to∞ (unbounded), as shown on Figure 3. Our results matched the perplexity results from\nSRILM (for smaller values of m in which SRILM training was feasible, m ≤ 10). Note that perplexity drops dramatically from m = 2 . . . 5 however the gains thereafter are modest for most languages. Despite this, several large mgram matches were found ranging in size up to a 34-gram match. We speculate that the perplexity plateau is due to the simplistic Kneser-Ney discounting formula which is not designed for higher order mgram LMs and appear to discount large mgrams too aggressively. We leave further exploration of richer discounting techniques such as Modified Kneser-Ney (Chen and Goodman, 1996) or the Sequence Memoizer (Wood et al., 2011) to our future work.\nFigure 4 compares space and time of our indexes with SRILM on the German part of Europarl. The construction cost of our indexes in terms of both space and time is comparable to that of a 3/4-gram SRILM index. The space usage of D-CST index is comparable to a compact 3-gram SRILM index. Our S-CST index uses only 177 MiB RAM at query time, which is comparable to the size of the collection (172 MiB). However, query processing is significantly slower for both our structures. For 2-grams, D-CST is 3 times slower than a 2-gram SRILM index as the expensive N1+(·α·) is not computed. However, for large mgrams, our indexes are much slower than SRILM. For m > 2, the D-CST index is roughly six times slower than S-CST. Our fastest index, is 10 times slower than the slowest SRILM 10-gram index. However, our run-time is independent of m. Thus, as m increases, our index will become more competitive to SRILM while using a constant amount of space.\nNext we analyze the performance of our index on the large Wikipedia dataset. The S-CST, character level index for the data set requires 22 GiB RAM at query time whereas the D-CST requires 43 GiB. Figure 5 shows the run-time performance of both indexes for different mgrams, broken down by the different components of the computation. As discussed above, 2-gram performance is much faster. For both indexes, most time is spent computing N1PFRONTBACK (i.e., N1+(·α·)) for all m > 2. However, the wavelet tree traversal used in S-CST roughly reduces the running time by a factor of three. The complexity of N1PFRONTBACK depends on the number of contexts, which is likely small for larger mgrams, but can be large for small mgrams, which suggest partial precomputation could significantly increase the query performance of our indexes. Exploring the myraid of different CST and CSA configurations available could also lead to significant\nimprovements in runtime and space usage also remains future work."
+  }, {
+    "heading": "7 Conclusions",
+    "text": "This paper has demonstrated the massive potential that succinct indexes have for language modelling, by developing efficient algorithms for onthe-fly computing of mgram counts and language model probabilities. Although we only considered a Kneser-Ney LM, our approach is portable to the many other LM smoothing method formulated around similar count statistics. Our complexity analysis and experimental results show favourable scaling properties with corpus size and Markov order, albeit running between 1-2 orders of magnitude slower than a leading count-based LM. Our ongoing work seeks to close this gap: preliminary experiments suggest that with careful tuning of the succinct index parameters and caching expensive computations, query time can be competitive with state-of-the-art toolkits, while using less memory and allowing the use of unlimited context."
+  }, {
+    "heading": "Acknowledgments",
+    "text": "Ehsan Shareghi and Gholamreza Haffari are grateful to National ICT Australia (NICTA) for generous funding, as part of collaborative machine learning research projects. Matthias Petri is the recipient of an Australian Research Councils Discovery Project scheme (project DP140103256). Trevor Cohn is the recipient of an Australian Research Council Future Fellowship (project number FT130101105)."
+  }],
+  "year": 2015,
+  "references": [{
+    "title": "Large language models in machine translation",
+    "authors": ["Thorsten Brants", "Ashok C Popat", "Peng Xu", "Franz J Och", "Jeffrey Dean."],
+    "venue": "Proc. EMNLPCoNLL.",
+    "year": 2007
+  }, {
+    "title": "A block sorting lossless data compression algorithm",
+    "authors": ["M. Burrows", "D. Wheeler."],
+    "venue": "Technical Report 124, DEC.",
+    "year": 1994
+  }, {
+    "title": "The bloomier filter: An efficient data structure for static support lookup tables",
+    "authors": ["Bernard Chazelle", "Joe Kilian", "Ronitt Rubinfeld", "Ayellet Tal."],
+    "venue": "Proc. SODA, pages 30–39.",
+    "year": 2004
+  }, {
+    "title": "An empirical study of smoothing techniques for language modeling",
+    "authors": ["Stanley F Chen", "Joshua Goodman."],
+    "venue": "Proc. ACL, pages 310–318.",
+    "year": 1996
+  }, {
+    "title": "Compressed representations of sequences and full-text indexes",
+    "authors": ["P. Ferragina", "G. Manzini", "V. Mäkinen", "G. Navarro."],
+    "venue": "ACM Trans. on Algorithms, 3(2):article 20.",
+    "year": 2007
+  }, {
+    "title": "Compressed text indexes: From theory to practice",
+    "authors": ["Paolo Ferragina", "Rodrigo González", "Gonzalo Navarro", "Rossano Venturini."],
+    "venue": "ACM J. of Exp. Algorithmics, 13.",
+    "year": 2008
+  }, {
+    "title": "Tightly packed tries: How to fit large models into memory, and make them load fast, too",
+    "authors": ["Ulrich Germann", "Eric Joanis", "Samuel Larkin."],
+    "venue": "Proc. of the Workshop on Software Engineering, Testing, and Quality Assurance for Natural Language Pro-",
+    "year": 2009
+  }, {
+    "title": "From theory to practice: Plug and play with succinct data structures",
+    "authors": ["Simon Gog", "Timo Beller", "Alistair Moffat", "Matthias Petri."],
+    "venue": "Proc. SEA, pages 326–337.",
+    "year": 2014
+  }, {
+    "title": "Storing the web in memory: Space efficient language models with constant time retrieval",
+    "authors": ["David Guthrie", "Mark Hepple."],
+    "venue": "Proc. EMNLP, pages 262–272.",
+    "year": 2010
+  }, {
+    "title": "KenLM: Faster and smaller language model queries",
+    "authors": ["Kenneth Heafield."],
+    "venue": "Proc. WMT.",
+    "year": 2011
+  }, {
+    "title": "Linear work suffix array construction",
+    "authors": ["Juha Kärkkäinen", "Peter Sanders", "Stefan Burkhardt."],
+    "venue": "J. ACM, 53(6):918–936.",
+    "year": 2006
+  }, {
+    "title": "Suffix trees as language models",
+    "authors": ["Casey Redd Kennington", "Martin Kay", "Annemarie Friedrich."],
+    "venue": "Proc. LREC, pages 446–453.",
+    "year": 2012
+  }, {
+    "title": "Improved backing-off for m-gram language modeling",
+    "authors": ["Reinhard Kneser", "Hermann Ney."],
+    "venue": "Proc. ICASSP, volume 1, pages 181–184.",
+    "year": 1995
+  }, {
+    "title": "Statistical Machine Translation",
+    "authors": ["Philipp Koehn."],
+    "venue": "Cambridge University Press, New York, NY, USA.",
+    "year": 2010
+  }, {
+    "title": "Reducing the space requirement of suffix trees",
+    "authors": ["Stefan Kurtz."],
+    "venue": "Softw., Pract. Exper., 29(13):1149– 1171.",
+    "year": 1999
+  }, {
+    "title": "Suffix arrays: A new method for on-line string searches",
+    "authors": ["Udi Manber", "Eugene W. Myers."],
+    "venue": "SIAM J. Comput., 22(5):935–948.",
+    "year": 1993
+  }, {
+    "title": "Tables",
+    "authors": ["Ian Munro."],
+    "venue": "Proc. FSTTCS, pages 37–42.",
+    "year": 1996
+  }, {
+    "title": "CST++",
+    "authors": ["Enno Ohlebusch", "Johannes Fischer", "Simon Gog."],
+    "venue": "Proc. SPIRE, pages 322–333.",
+    "year": 2010
+  }, {
+    "title": "Faster and smaller n-gram language models",
+    "authors": ["Adam Pauls", "Dan Klein."],
+    "venue": "Proc. ACL-HLT.",
+    "year": 2011
+  }, {
+    "title": "Fundamentals of speech recognition",
+    "authors": ["Lawrence Rabiner", "Biing-Hwang Juang."],
+    "venue": "Prentice-Hall.",
+    "year": 1993
+  }, {
+    "title": "Fullycompressed suffix trees",
+    "authors": ["L. Russo", "G. Navarro", "A. Oliveira."],
+    "venue": "ACM Trans. Algorithms, 7(4):article 53.",
+    "year": 2011
+  }, {
+    "title": "Compressed suffix trees with full functionality",
+    "authors": ["Kunihiko Sadakane."],
+    "venue": "Theory Comput. Syst., 41(4):589–607.",
+    "year": 2007
+  }, {
+    "title": "Bidirectional search in a string with wavelet trees",
+    "authors": ["Thomas Schnattinger", "Enno Ohlebusch", "Simon Gog."],
+    "venue": "Proc. CPM, pages 40–50.",
+    "year": 2010
+  }, {
+    "title": "Unary data structures for language models",
+    "authors": ["Jeffrey Sorensen", "Cyril Allauzen."],
+    "venue": "Proc. INTERSPEECH, pages 1425–1428.",
+    "year": 2011
+  }, {
+    "title": "Srilm at sixteen: Update and outlook",
+    "authors": ["Andreas Stolcke", "Jing Zheng", "Wen Wang", "Victor Abrash."],
+    "venue": "Proc. ASRU, page 5.",
+    "year": 2011
+  }, {
+    "title": "SRILM–an extensible language modeling toolkit",
+    "authors": ["Andreas Stolcke."],
+    "venue": "Proc. INTERSPEECH.",
+    "year": 2002
+  }, {
+    "title": "Randomised language modelling for statistical machine translation",
+    "authors": ["David Talbot", "Miles Osborne."],
+    "venue": "Proc. ACL.",
+    "year": 2007
+  }, {
+    "title": "On-line construction of suffix trees",
+    "authors": ["Esko Ukkonen."],
+    "venue": "Algorithmica, 14(3):249–260.",
+    "year": 1995
+  }, {
+    "title": "A succinct n-gram language model",
+    "authors": ["Taro Watanabe", "Hajime Tsukada", "Hideki Isozaki."],
+    "venue": "Proc. ACL Short Papers, pages 341–344.",
+    "year": 2009
+  }, {
+    "title": "Linear pattern matching algorithms",
+    "authors": ["Peter Weiner."],
+    "venue": "Proc. SWAT, pages 1–11.",
+    "year": 1973
+  }, {
+    "title": "The sequence memoizer",
+    "authors": ["Frank Wood", "Jan Gasthaus", "Cédric Archambeau", "Lancelot James", "Yee Whye Teh."],
+    "venue": "CACM, 54(2):91–98.",
+    "year": 2011
+  }],
+  "id": "SP:6b261174fda567b67cbb1d7411669531eb0ab614",
+  "authors": [{
+    "name": "Ehsan Shareghi",
+    "affiliations": []
+  }, {
+    "name": "Matthias Petri",
+    "affiliations": []
+  }, {
+    "name": "Gholamreza Haffari",
+    "affiliations": []
+  }, {
+    "name": "Trevor Cohn",
+    "affiliations": []
+  }],
+  "abstractText": "Efficient methods for storing and querying language models are critical for scaling to large corpora and high Markov orders. In this paper we propose methods for modeling extremely large corpora without imposing a Markov condition. At its core, our approach uses a succinct index – a compressed suffix tree – which provides near optimal compression while supporting efficient search. We present algorithms for on-the-fly computation of probabilities under a Kneser-Ney language model. Our technique is exact and although slower than leading LM toolkits, it shows promising scaling properties, which we demonstrate through∞-order modeling over the full Wikipedia collection.",
+  "title": "Compact, Efficient and Unlimited Capacity: Language Modeling with Compressed Suffix Trees"
+}

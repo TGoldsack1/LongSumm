@@ -1,0 +1,236 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Many datasets of interest in machine learning are comprised of high-dimensional, complex objects. Often, one is interested in describing these observations using a lowdimensional latent subspace that captures the statistical variations. Such approaches fall under the umbrella of factor analysis (Bishop, 2016), where we wish to learn a mapping between the latent and observed spaces. The motivation is two-fold: (i) factor models provide a compact representation\n1Paul G. Allen School of Computer Science and Engineering, University of Washington 2Institute for Learning & Brain Sciences and Department of Speech and Hearing Sciences, University of Washington. Correspondence to: Samuel K. Ainsworth <skainsworth@gmail.com>, Nicholas J. Foti <nfoti@uw.edu>, Adrian K. C. Lee <akclee@uw.edu>, Emily B. Fox <ebfox@uw.edu>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\nof the data, and (ii) the mapping can be used to describe the correlation structure of the high-dimensional data. In many applications, we are particularly interested in mappings that elucidate interpretable interactions.\nThe challenge arises from the push and pull between interpretability and expressivity in factor modeling approaches. Methods emphasizing interpretability have focused primarily on linear models, resulting in lower expressivity. A popular choice in these settings is to consider sparse linear factor models (Zhao et al., 2016; Carvalho et al., 2008). However, it is well known that neural (Vejmelka et al., 2010), genomic (Prill et al., 2010), and financial data (Harvey et al., 1994), for example, exhibit complex nonlinearities.\nRecently, there has been a significant amount of work on expressive models for complex, high dimensional data. In particular, deep generative models (Kingma & Welling, 2013; Rezende et al., 2014; Goodfellow et al., 2014; Damianou & Lawrence, 2013) have proven wildly successful in efficiently modeling complex observations—such as images—as nonlinear mappings of simple latent representations. These nonlinear maps are based on deep neural networks that parameterize an observation distribution, often referred to as the generator. We focus on the class of variational autoencoders (VAEs) (Kingma & Welling, 2013). Unlike linear models which posit a latent variable per observation, VAEs introduce a mapping from observations to a distribution on the latent space; when parameterized by a deep neural network, this mapping is called the inference network. The generator and inference network are jointly trained to minimize a variational objective.\nThe VAE can be viewed as a nonlinear factor model that provides a scalable means of learning latent representations. The focus, however, has primarily been on their use as a generative mechanism. One shortcoming of the VAE is that, due to the tangled web of connections between neural network layers, it is not possible to interpret how changes in the latent code influence changes in the observations—as in linear latent factor models. For example, imagine you are trying to synthesize human body poses. One might hope to have a disentangled representation where a given latent dimension controls a subset of highly correlated body parts; unfortunately, the standard VAE cannot yield these types of interpretations. Another shortcoming of the VAE\nis that training—as in most neural network-based models— typically requires a massive amount of data. In many applications, we have limited access to training data.\nOne natural way to encourage disentangled latent representations is by introducing structure and sparsity into the generator. Specifically, we propose an output interpretable VAE (oi-VAE) that factorizes the generator across observation dimensions, with a separate generator per group of variables. The generators are coupled both through a shared latent space, and by jointly training with a single inference network. We also introduce a sparsity-inducing penalty that leads each latent dimension to influence a limited subset of groups, resulting in a disentangled latent representation. We develop an amortized variational inference algorithm for a collapsed objective, allowing us to use efficient proximal updates to learn latent-dimension-to-group interactions.\nThe factorization of generators across dimensions is readily apparent when the data are inherently group structured. There are many applications where this is the case. In the analysis of neuroimaging data, studies are typically done at the level of regions of interest that aggregate over corticallylocalized signals. In genomics, there are different treatment regimes. In finance, the data might be described in terms of asset classes (stocks, bonds, . . . ). And for motion capture data, multiple angle measurements are grouped by their associated joints. In these group-structured scenarios we may additionally garner interpretability from the oi-VAE mappings. For example, we may learn that a given latent dimension controls a collection of highly correlated joints— e.g., joints in a limb—that comprise a system of interest. A side benefit of this structured oi-VAE framework is its ability to handle scenarios with limited amounts of data.\nWe evaluate the oi-VAE on motion capture and magnetoencephalography datasets. In these scenarios where there is a natural notion of groupings of observations, we demonstrate the interpretability of the learned features and how these structures of interaction correspond to physically meaningful systems. Furthermore, in such cases we show that the regularization employed by oi-VAE leads to better generalization and synthesis capabilities, especially in limited training data scenarios or when the training data might not fully capture the observed space of interest. In addition, we found that oi-VAE produces unconditional samples that are qualitatively superior to standard VAEs due to oi-VAE’s bias towards disentangled representations in the latent space."
+  }, {
+    "heading": "2. Background",
+    "text": "Nonlinear factor analysis aims to relax the strict linearity assumption of classical factor analysis and has a long history in the statistics community. The work of (Gibson, 1959) initially circumvented the issues of linear factor analysis by\ndiscretizing continuous nonlinearities. However, (McDonald, 1962) was the first to develop a parametric nonlinear factor analysis model. Significant progress has been made since then as described in Yalcin & Amemiya (2001), including developments in the Bayesian context (Arminger & Muthén, 1998). Recent work in machine learning has also considered similar approaches leveraging Gaussian processes (Lawrence, 2003; Damianou et al., 2012). Despite the resemblance to autoencoding models (Ballard, 1987)— especially in the age of “disentanglement”—little work exists exploring connections between the two.\nThe study of deep generative models is an active area of research in the machine learning community. The variational autoencoder (VAE) (Kingma & Welling, 2013) is one such example that efficiently trains a generative model via amortized inference (see also Rezende et al., 2014). Though deep generative models like the VAE have demonstrated an ability to produce convincing samples of complex data (cf., Archer et al., 2015; Johnson et al., 2017), the learned latent representations are not readily interpretable due to the entangled interactions between latent dimensions and the observations, as depicted in Fig. 2. We further review the VAE specification in Sec. 3 and its implementation in Sec. 5.\nA common approach to encourage simple and interpretable models is through use of sparsity inducing penalties such as the lasso (Tibshirani, 1994) and group lasso (Yuan & Lin, 2006). These methods work by shrinking many model parameters toward zero and have seen great success in regression models, covariance selection (Danaher et al.), and linear factor analysis (Hirose & Konishi, 2012). The group lasso penalty is of particular interest to us as it simultaneously shrinks entire groups of model parameters toward zero. The usage of group lasso penalties for learning structured inputs to neural networks was explored in Tank et al. (2018) previously, and was inspirational to this work.\nTo specify a valid generative model, we focus on sparsityinducing priors for the parameters of the generator network. Historically, the spike-and-slab prior (Mitchell & Beauchamp, 1988) was used to encourage sparsity in Bayesian models. The prior consists of a two-component mixture with mass on a model parameter being exactly zero. Unfortunately, inference in spike-and-slab models is difficult because of the combinatorial nature of the resulting posterior. A more computationally tractable family arises from the class of global-local shrinkage priors (Polson & Scott, 2010). One popular example is the horseshoe prior (Bhadra et al., 2016). However, these priors do not result in exact zeros, making interpretability difficult.\nA sophisticated hierarchical Bayesian prior for sparse group linear factor analysis has recently been developed by Zhao et al. (2016). This prior encourages both a sparse set of factors to be used as well as having the factors themselves\nbe sparse. The resulting model admits an efficient EM algorithm. This builds on previous work on group factor analysis (Virtanen et al., 2012; Klami et al., 2015). Sparsity inducing hierarchical Bayesian priors have also been applied to learn the complexity of the Bayesian deep neural networks (Louizos et al., 2017; Ghosh & Doshi-Velez, 2017). Our focus, however, is on using (structured) sparsityinducing hierarchical Bayesian priors in the context of deep learning for the sake of interpretability, as in linear factor analysis, rather than model selection."
+  }, {
+    "heading": "3. The oi-VAE model",
+    "text": "We frame our proposed output interpretable VAE (oi-VAE) method using the same terminology as the VAE. Let x ∈ RD denote a D-dimensional observation and z ∈ RK denote the associated latent representation of fixed dimension K. We then write the generative process of the model as:\nz ∼ N (0, I) (1) x ∼ N (fθ(z),D), (2)\nwhere D is a diagonal matrix containing the marginal variances of each component of x. The generator is encoded with the function fθ(·) specified as a deep neural network with parameters θ. Note that the formulation in Eq. (2) is simpler than that described in Kingma & Welling (2013) where the noise variances were observation specific. This simplifying assumption is common with traditional factor models, but could easily be relaxed.\nWhen our observations x admit a natural grouping over the components, we write x = [x(1), . . . ,x(G)] for each of the G groups. We model the components within each group g ∈ [G] with separate generative networks f (g)θg parameterized by θg. It is possible to share generator parameters θg\nacross groups, however we chose to model each separately. Critically, the latent representation z is shared across all of the group-specific generators. In particular:\nz ∼ N (0, I) (3)\nx(g) ∼ N (f (g)θg (z),Dg). (4)\nTo this point, our specified group-structured VAE can describe within-group and cross-group correlation structure. However, one of the primary goals of this framework is to capture interpretable relationships between groups through the latent representation.\nInspired by the sparse factor analysis literature, we extract notions of interpretable interactions by encouraging sparse latent-to-group mappings. Specifically, we insert a groupspecific linear transformation W(g) ∈ Rp×K between the latent representation z and the group generator f (g):\nx(g) ∼ N (f (g)θ (W (g)z),Dg). (5)\nWe refer to W(g) as the latent-to-group matrix. For simplicity, we assume that each generator has input dimension p. When the jth column of the latent-to-group matrix for group g, W(g)·,j , is all zeros then the jth latent dimension, zj , will have no influence on group g in the generative process. To induce this column-wise sparsity, we place a hierarchical Bayesian prior on the columns W(g)·,j as follows (Kyung et al., 2010):\nγ2gj ∼ Gamma ( p+ 1\n2 , λ2 2\n) (6)\nW (g) ·,j ∼ N (0, γ 2 gjI) (7)\nwhere Gamma(·, ·) is defined by shape and rate. The rate parameter λ defines the amount of sparsity, with larger λ implying more column-wise sparsity in W(g). Marginalizing over γ2gj induces group sparsity over the columns of W(g); the MAP of the resulting posterior is equivalent to a group lasso penalized objective (Kyung et al., 2010).\nUnlike linear factor models, the deep structure of our model allows rescaling of the parameters across layer boundaries without affecting the end behavior of the network (Neyshabur et al., 2015). In particular, it is possible— and in fact encouraged behavior—to learn a set of W(g) matrices with very small weights and a subsequent layer with very large weights that nullify the shrinkage imposed by the sparsity-inducing prior. In order to mitigate this we additionally place a standard normal prior with fixed scale on the parameters of each generative network, θg ∼ N (0, I).\nSpecial cases of the oi-VAE There are a few notable special cases of our oi-VAE framework. When we treat the observations as forming a single group, the model resembles\na traditional VAE since there is a single generator. However, the sparsity inducing prior still has an effect that differs from the standard VAE. In particular, by shrinking columns of W (dropping the g superscript) the prior will essentially encourage a sparse subset of the components of z to be used to explain the data, similar to a traditional sparse factor model. Note that the z’s themselves will still be standard normal, but the columns of W will dictate which components are used. This regularization may be advantageous even in the classical, single-group setting as it can provide improved generalization performance in the case of limited training data. Another special case arises when the generator networks are given by the identity mapping. In this case, the only transformation of the latent representation is given by W(g) and the oi-VAE reduces to a classical group sparse linear factor model."
+  }, {
+    "heading": "4. Interpretability of the oi-VAE",
+    "text": "In oi-VAE, each latent factor influences a sparse set of the observational groups. The interpretability garnered from this sparse structure is two-fold:\nDisentanglement of latent embeddings By associating each component of z with only a sparse subset of the observational groups, we are able to quickly identify disentangled representations in the latent space. That is, by penalizing interactions between the components of z and each of the groups, we effectively force the model to arrive at a representation that minimizes correlation across the components of z, encouraging each dimension to capture distinct modes of variation. For example, in Table 1 we see that each of the dimensions of the latent space learned on motion capture recordings of human motion corresponds to a direction of variation relevant to only a subset of the joints (groups) that are used in specific submotions related to walking. Additionally, it is observed that although the VAE and oi-VAE have similar reconstruction performance the meaningfully disentangled latent representation allows oi-VAE to produce superior unconditional random samples.\nDiscovery of group interactions Disregarding any interest in the learned representation z, each latent dimension influences only a sparse subset of the observational groups. As such, we can view the observational groups associated with a specific latent dimension as a related system of sorts. For example, in neuroscience often our goal is to uncover functionally-connected brain networks. In this setting we may split the signal into groups based on a standard parcellation. Then networks can be identified by inspecting the subset of groups influenced by a component in the latent code, zi. Such an approach is attractive in the context of analyzing functional connectivity from MEG data where we seek modules of highly correlated regions. See the ex-\nperiments of Sec. 6.3. Likewise, in our motion capture experiments of Sec. 6.2, we see (again from Table 1) how we can treat collections of joints as a system that covary in meaningful ways within a given human motion category.\nBroadly speaking, the relationship between dimensions of z and observational groups can be thought of as a bipartite graph in which we can quickly identify correlation and independence relationships among the groups themselves. The ability to expose or refute correlations among observational groups is attractive as an exploratory scientific tool independent of building a generative model. This is especially useful since standard measures of correlation are linear, leaving much to be desired in the face of high-dimensional data with many potential nonlinear relationships. Our hope is that oi-VAE serves as one initial tool to spark a new wave of interest in nonlinear factor models and their application to complicated and rich data across a variety of fields.\nIt is worth emphasizing that the goal is not to learn sparse representations in the z’s. Sparsity in z may be desirable in certain contexts, but it does not actually provide any interpretability in the data generating process. Still, we find that oi-VAE does prune dimensions that are not necessary in synthetic examples."
+  }, {
+    "heading": "5. Collapsed variational inference",
+    "text": "Traditionally, VAEs are learned by applying stochastic gradient methods directly to the evidence lower bound (ELBO):\nlog p(x) ≥ Eqφ(z|x)[log pθ(x, z)− log qφ(z|x)],\nwhere qφ(z|x) denotes the amortized posterior distribution of z given observation x, parameterized by a neural network with weights φ. Using a neural network to parameterize the observation distribution p(x|z) as in Eq. (1) makes the expectation in the ELBO intractable. To address this, the VAE employs Monte Carlo variational inference (MCVI) (Kingma & Welling, 2013): The troublesome expectation is approximated with samples of the latent variables from the variational distribution, z ∼ qφ(z|x), where qφ(z|x) is reparameterized to allow differentiating through the expectation operator in order to reduce gradient variance.\nWe extend the basic VAE amortized inference procedure to incorporate our sparsity inducing prior over the columns of the latent-to-group matrices. The naive approach of optimizing variational distributions for γ2gj and W (g) ·,j will not result in true sparsity of the columns W(g)·,j . Instead, we consider a collapsed variational objective function. Since our sparsity inducing prior over W(g)·,j is marginally equivalent to the convex group lasso penalty we can use proximal gradient descent on the collapsed objective and obtain true group sparsity (Parikh & Boyd, 2013). Following the standard VAE approach of Kingma & Welling (2013), we use sim-\nple point estimates for the variational distributions on the neural network parametersW = ( W(1), · · · ,W(G) ) and θ = (θ1, . . . , θG). We take qφ(z|x) = N (µ(x), σ2(x))) where the mean and variances are parameterized by an inference network with parameters φ."
+  }, {
+    "heading": "5.1. The collapsed objective",
+    "text": "We construct a collapsed variational objective by marginalizing the γ2gj to compute log p(x) as:\nlog ∫ p(x|z,W, θ)p(z)p(W|γ2)p(γ2)p(θ) dγ2 dz\n= log ∫ (∫ p(W, γ2) dγ2 ) p(x|z,W, θ)p(z)p(θ) qφ(z|x)/qφ(z|x) dz\n≥ Eqφ(z|x) [log p(x|z,W, θ)]−KL(qφ(z|x)||p(z)) + log p(θ)− λ ∑ g,j ||W(g)·,j ||2\n, L(φ, θ,W).\nImportantly, the columns of the latent-to-group matrices W\n(g) ·,j appear in a 2-norm penalty in the collapsed ELBO. This is exactly a group lasso penalty on the columns of W\n(g) ·,j and encourages the entire column to be set to zero.\nNow our goal becomes maximizing this collapsed ELBO over φ, θ, andW . Since this objective contains a standard group lasso penalty, we can leverage efficient proximal gradient descent updates on the latent-to-group matrices W as detailed in Sec. 5.2. Proximal algorithms achieve better rates of convergence than sub-gradient methods and have shown great success in solving convex objectives with group lasso penalties. We can use any off-the-shelf optimization method for the remaining neural net parameters, θg and φ."
+  }, {
+    "heading": "5.2. Proximal gradient descent",
+    "text": "Proximal gradient descent algorithms are a broad class of optimization techniques for separable objectives with both differentiable and potentially non-differentiable components,\nmin x g(x) + h(x), (8)\nwhere g(x) is differentiable and h(x) is potentially nonsmooth or non-differentiable (Parikh & Boyd, 2013). Stochastic proximal algorithms are well-studied for convex optimization problems. Recent work has shown that some variants are guaranteed to converge to a first-order stationary point even if the objective is comprised of a non-convex g(x) as long as the non-smooth h(x) is convex (Reddi et al., 2016). The usual tactic is to take gradient steps on g(x) followed by “corrective” proximal steps to respect h(x):\nxt+1 = proxηh(xt − η∇g(xt)) (9)\nAlgorithm 1 Collapsed VI for oi-VAE\nInput: data x(i), sparsity parameter λ Let L̃ = L(φ, θ,W) + λ ∑ g,j ||W (g) ·,j ||2. repeat Calculate∇φL̃,∇θL̃, and ∇W L̃. Update φ and θ with an optimizer of your choice. LetWt+1 =Wt − η∇W L̃. for all groups g and j = 1 to K do\nSet W(g)·,j ← W\n(g) ·,j\n||W(g)·,j ||2\n( ||W(g)·,j ||2 − ηλ ) +\nend for until convergence in both L̂ and −λ ∑ g,j ||W (g) ·,j ||2\nwhere proxf (x) is the proximal operator for the function f . For example, if h(x) is the indicator function for a convex set then the proximal operator is simply the projection operator onto the set and the update in Eq. (9) is projected gradient. Expanding the definition of proxηh in Eq. (9), one can see that the proximal step corresponds to minimizing h(x) plus a quadratic approximation to g(x) centered on xt. For h(x) = λ||x||2, the proximal operator is given by\nproxηh(x) = x\n||x||2 (||x||2 − ηλ)+ (10)\nwhere (v)+ , max(0, v) (Parikh & Boyd, 2013). Geometrically, this operator reduces the norm of x by ηλ, and shrinks x’s with ||x||2 ≤ ηλ to zero. This operator is especially convenient since it is both cheap to compute and results in machine-precision zeros, unlike many Bayesian approaches to sparsity that result in small but non-zero values and thus require an extra thresholding step to attain exact zeros.\nWe experimented with standard (non-collapsed) variational inference as well other schemes, but found that collapsed variational inference with proximal updates provided faster convergence and succeeded in identifying sparser models than other techniques. In practice we apply proximal stochastic gradient updates per Eq. (9) on theW matrices and Adam (Kingma & Ba, 2014) on the remaining parameters. See Alg. 1 for complete pseudocode."
+  }, {
+    "heading": "6. Experiments",
+    "text": ""
+  }, {
+    "heading": "6.1. Synthetic data",
+    "text": "To evaluate oi-VAE’s ability to identify sparse models on well-understood data, we generated 8× 8 images with one randomly selected row of pixels shaded and additive noise corrupting the entire image. We then built and trained an oi-VAE model on the images with each group defined as an entire row of pixels in the image. We used an 8-dimensional latent space in order to encourage the model to associate each dimension of z with a unique row in the image. Results\nare shown in Fig. 2. Our oi-VAE successfully disentangles each of the dimensions of z to correspond to exactly one row (group) of the image. We also trained an oi-VAE model with a 16-dimensional latent space (see the Supplement) and see that when additional latent components are not needed to describe any group they are pruned from the model."
+  }, {
+    "heading": "6.2. Motion Capture",
+    "text": "Using data collected from CMU’s motion capture database we evaluated oi-VAE’s ability to handle complex physical constraints and interactions across groups of joint angles while simultaneously identifying a sparse decomposition of human motion. The dataset consists of 11 examples of walking and one example of brisk walking from the same subject. The recordings measure 59 joint angles split across 29 distinct joints. The joint angles were normalized from their full ranges to lie between zero and one. We treat the set of measurements from each distinct joint as a group; since each joint has anywhere from 1 to 3 observed degrees of freedom, this setting demonstrates how oi-VAE can handle variable-sized groups. For training, we randomly sample 1 to 10 walking trials, resulting in up to 3791 frames. Our experiments evaluate the following performance metrics: interpretability of the learned interaction structure amongst groups and of the latent representation; test log-likelihood, assessing the model’s generalization ability; and both conditional and unconditional samples to evaluate the quality of the learned generative process. In all experiments, we use λ = 1. For further details on the specification of all considered models (VAE and oi-VAE), see the Supplement.\nTo begin, we train our oi-VAE on the full set of 10 training trials with the goal of examining the learned latent-togroup mappings. To explore how the learned disentangled latent representation varies with latent dimension K, we use K = 4, 8, and 16. The results are summarized in Fig. 3. We see that as K increases, individual “features” (i.e., components of z) are refined to capture more localized anatomical structures. For example, feature 2 in the K = 4 case turns into feature 7 in the K = 16 case, but in that case we also add feature 3 to capture just variations of lfingers, lthumb separate from head, upperneck, lowerneck. Likewise, feature 2 when K = 16 repre-\nsents head, upperneck, lowerneck separately from lfingers, lthumb. To help interpret the learned disentangled latent representation, for the K = 16 embedding we provide lists of the 3 joints per dimension that are most strongly influenced by that component. From these lists, we see how the learned decomposition of the latent representation has an intuitive anatomical interpretation. For example, one of the very prominent features is feature 14, which jointly influences the thorax, upperback, and lowerback. Collectively, these results clearly demonstrate how the oi-VAE provides meaningful interpretability. We emphasize that it is not even possible to make these types of images or lists for the VAE.\nOne might be concerned that by gaining interpretability, we lose out on expressivity. However, as we demonstrate in Table 2 and Figs. 4-5, the regularization provided by our sparsity-inducing penalty actually leads to as good or better performance. We first examine oi-VAE and VAE’s ability to generalize to held out data. To examine robustness to different amounts of training data, we consider training on increasing numbers of walk trials and testing on a single heldout example of either walk or brisk walk. The latter represents an example of data that is a variation of what was trained on, whereas the former is a heldout example, very similar to the training data. In Table 2, we see the benefit of the regularization in oi-VAE in both test scenarios in the limited data regime. Unsurprisingly, for the full 10 trials, there are little to no differences between the generalization abilities of oi-VAE and VAE (though of course the oi-VAE still provides interpretability). We highlight that\nwhen we have both a limited amount of training data that might not be fully representative of the full possible dataset of interest (e.g., all types of walking), the regularization provided by oi-VAE provides dramatic improvements for generalization. Finally, in almost all scenarios, the more decomposed oi-VAE K = 16 setting has better or comparable performance to smaller K settings. We leave choosing K and investigating the effects of pruning to future work.\nNext, we turn to assessing the learned oi-VAE’s generative process relative to that of the VAE. In Fig. 4 we take our test trial of walk, run each frame through the learned inference network to get a set of approximate posteriors. For every such qφ(z|x), we sample 32 times from the distribution and run each sample through the generator networks to synthesize a batch of reconstructions. To fully explore the space of human motion the learned generators can capture, we take 100 unconditional samples from both the oi-VAE and VAE models and show a representative subset in Fig. 5. The full set of 100 random samples from both oi-VAE and VAE are provided in the Supplement. Note that even when trained on the full set of 10 walk trials where we see little to no difference in test log-likelihood between the oi-VAE and VAE, we do see that the learned generator for the oi-VAE is more representative of physically plausible human motion poses. We attribute this to the fact that the test log-likelihood does not encourage quality unconditional samples, but a disentangled latent representation should yield qualitatively better results on samples from the prior."
+  }, {
+    "heading": "6.3. Magnetoencephalography",
+    "text": "Magnetoencephalography (MEG) records the weak magnetic field produced by the brain during cognitive activity\nwith great temporal resolution and good spatial resolution. Analyzing this data holds great promise for understanding the neural underpinnings of cognitive behaviors and for characterizing neurological disorders such as autism. A common step when analyzing MEG data is to project the MEG sensor data into source-space where we obtain observations over time on a mesh (≈ 5-10K vertices) of the cortical surface (Gramfort et al., 2013). The resulting source-space signals likely live on a low-dimensional manifold making methods such as the VAE attractive. Still, neuroscientists have meticulously studied particular brain regions of interest and what behaviors they are involved in by hand.\nWe apply our oi-VAE method to infer low-rank representations of source-space MEG data where the groups are specified as the ≈ 40 regions defined in the HCP-MMP1 brain parcellation (Glasser et al., 2016). See Fig. 6(left). The recordings were collected from a single subject performing an auditory attention task where they were asked to maintain their attention to one of two auditory streams. We use 106 trials each of length 385. We treat each time point\nTable 2. Test log-likelihood for VAE and oi-VAE trained on 1,2,5, or 10 trials of walk data. Table includes results for a test walk (same as training) or brisk walk trial (unseen in training). Bold numbers indicate the best performance. The standard VAE uses the same structure as oi-VAE for a consistent comparison (equivalent to λ = 0).\nSTANDARD WALK BRISK WALK\n# TRIALS 1 2 5 10 1 2 5 10\nVAE (K = 16) −3, 518 −251 18 114 −723, 795 −15, 413, 445 −19, 302, 644 −19, 303, 072 OI-VAE (K = 4) −2,722 −214 27 70 −664, 608 −13, 438, 602 −19,289,548 −19, 302, 680 OI-VAE (K = 8) −3, 196 −195 29 75 −283, 352 −10, 305, 693 −19, 356, 218 −19, 302, 764 OI-VAE (K = 16) −3, 550 −188 31 108 −198,663 −6,781,047 −19, 299, 964 −19, 302, 924\nof each trial as an i.i.d. observation resulting in ≈ 41K observations. For details on the specification of all considered models, see the Supplement.\nFor each region we compute the average source-space activity over all vertices in each region resulting in 44- dimensional observations. We applied oi-VAE withK = 20, λ = 10, and Alg. 1 for 10, 000 iterations. In Fig. 6 we depict the learned group-weights ||W(g)·,j ||2 for all groups g and components j. We observe that each component manifests itself in a sparse subset of the regions. Next, we dig into specific latent components and evaluate whether each influences a subset of regions in a neuroscientifically interpretable manner.\nFor a given latent component zj , the value ||W(g)·,j ||2 allows us to interpret how much component j influences region g. We visualize some of these weights for two prominent learned components in Fig. 7. Specifically, we find that component 6 captures the regions that make up the dorsal attention network pertaining to an auditory spatial task, viz., early visual, auditory sensory areas as well as inferior parietal sulcus and the region covering the right temporoparietal junction (Lee et al., 2014). We also find that component 15 corresponds to regions associated with the default mode network, viz., medial prefrontal as well as posterior cingulate cortex (Buckner et al., 2008). Again the oi-VAE leads to interpretable results that align with meaningful and previously studied physiological systems. These systems can be\nFigure 7. Influence of z6 (top) and z15 (bottom) on the HCPMMP1 regions. Active regions (shaded) correspond to the dorsal attention network and default mode network, respectively.\nfurther probed through functional connectivity analysis. See the Supplement for the analysis of more components."
+  }, {
+    "heading": "7. Conclusion",
+    "text": "We proposed an output interpretable VAE (oi-VAE) that can be viewed as either a nonlinear group latent factor model or as a structured VAE with disentangled latent embeddings. The approach combines deep generative models with a sparsity-inducing prior that leads to our ability to extract meaningful notions of latent-to-observed interactions when the observations are structured into groups. From this interaction structure, we can infer correlated systems of interaction amongst the observational groups. In our motion capture and MEG experiments we demonstrated that the resulting systems are physically meaningful. Importantly, this interpretability does not appear to come at the cost of expressiveness, and in our group-structured case can actually lead to improved generalization and generative processes.\nIn contrast to alternative approaches for nonlinear group sparse factor analysis, leveraging the amortized inference associated with VAEs leads to computational efficiencies. We see even more significant gains through our proposed collapsed objective. The proximal updates we can apply lead quickly to true sparsity.\nNote that nothing fundamentally prevents applying this architecture to other generative models du jour. Extending this work to generative adversarial models, for example, should be straightforward (Goodfellow et al., 2014). Oy-vey!"
+  }, {
+    "heading": "Acknowledgements",
+    "text": "Special thanks to Ian Covert and Alex Tank for helpful discussions and insight. This work was supported by ONR Grant N00014-15-1-2380, NSF CAREER Award IIS-1350133, NSF CRCNS Grant NSF-IIS-1607468, and AFOSR Grant FA9550-16-1-0038. The authors also gratefully acknowledge the support of NVIDIA Corporation for the donated GPU used for this research."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Black box variational inference for state space models",
+    "authors": ["E. Archer", "I.M. Park", "Buesing", "J.L. Cunningham", "L. Paninski"],
+    "venue": "CoRR, abs/1511.07367,",
+    "year": 2015
+  }, {
+    "title": "A Bayesian approach to nonlinear latent variable models using the Gibbs sampler and the Metropolis-Hastings",
+    "authors": ["G. Arminger", "B.O. Muthén"],
+    "venue": "algorithm. Psychometrika,",
+    "year": 1998
+  }, {
+    "title": "Default Bayesian analysis with global-local shrinkage",
+    "authors": ["A. Bhadra", "J. Datta", "N.G. Polson", "B. Willard"],
+    "venue": "priors. Biometrika,",
+    "year": 2016
+  }, {
+    "title": "Pattern Recognition and Machine Learning",
+    "authors": ["C.M. Bishop"],
+    "year": 2016
+  }, {
+    "title": "The brain’s default network: Anatomy, function, and relevance to disease",
+    "authors": ["R.L. Buckner", "J.R. Andrews-Hanna", "D.L. Schacter"],
+    "venue": "Annals of the New York Academy of Sciences,",
+    "year": 2008
+  }, {
+    "title": "High-dimensional sparse factor modeling: Applications in gene expression genomics",
+    "authors": ["C.M. Carvalho", "J. Chang", "J.E. Lucas", "J.R. Nevins", "Q. Wang", "M. West"],
+    "venue": "J. Amer. Statist. Assoc.,",
+    "year": 2008
+  }, {
+    "title": "Deep Gaussian Processes",
+    "authors": ["A. Damianou", "N. Lawrence"],
+    "venue": "In Artificial Intelligence and Statistics,",
+    "year": 2013
+  }, {
+    "title": "Manifold relevance determination",
+    "authors": ["A.C. Damianou", "C.H. Ek", "M.K. Titsias", "N.D. Lawrence"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2012
+  }, {
+    "title": "Model selection in Bayesian neural networks via horseshoe",
+    "authors": ["S. Ghosh", "F. Doshi-Velez"],
+    "venue": "priors. CoRR,",
+    "year": 2017
+  }, {
+    "title": "Three multivariate models: Factor analysis, latent structure analysis, and latent profile analysis",
+    "authors": ["W.A. Gibson"],
+    "year": 1959
+  }, {
+    "title": "A multi-modal parcellation of human cerebral cortex",
+    "authors": ["M.F. Glasser", "T.S. Coalson", "E.C. Robinson", "C.D. Hacker", "J. Harwell", "E. Yacoub", "K. Ugurbil", "J. Andersson", "C.F. Beckmann", "M. Jenkinson", "S.M. Smith", "D.C. Van Essen"],
+    "year": 2016
+  }, {
+    "title": "Generative Adversarial Nets",
+    "authors": ["I. Goodfellow", "J. Pouget-Abadie", "M. Mirza", "B. Xu", "D. Warde-Farley", "S. Ozair", "A. Courville", "Y. Bengio"],
+    "venue": "In Advances in neural information processing systems,",
+    "year": 2014
+  }, {
+    "title": "MEG and EEG data analysis with MNE-Python",
+    "authors": ["A. Gramfort", "M. Luessi", "E. Larson", "D. Engemann", "D. Strohmeier", "C. Brodbeck", "R. Goj", "M. Jas", "T. Brooks", "L. Parkkonen", "M. Hmlinen"],
+    "venue": "Frontiers in Neuroscience,",
+    "year": 2013
+  }, {
+    "title": "Multivariate Stochastic Variance Models",
+    "authors": ["A. Harvey", "E. Ruiz", "N. Shephard"],
+    "venue": "Review of Economic Studies,",
+    "year": 1994
+  }, {
+    "title": "Variable selection via the weighted group lasso for factor analysis models",
+    "authors": ["K. Hirose", "S. Konishi"],
+    "venue": "The Canadian Journal of Statistics / La Revue Canadienne de Statistique,",
+    "year": 2012
+  }, {
+    "title": "Building a 3D Integrated Cell",
+    "authors": ["G.R. Johnson", "R.M. Donovan-Maiye", "M.M. Maleckar"],
+    "venue": "bioRxiv,",
+    "year": 2017
+  }, {
+    "title": "Adam: A Method for Stochastic Optimization",
+    "authors": ["D.P. Kingma", "J. Ba"],
+    "venue": "CoRR, abs/1412.6980,",
+    "year": 2014
+  }, {
+    "title": "Group factor analysis",
+    "authors": ["A. Klami", "S. Virtanen", "E. Leppäaho", "S. Kaski"],
+    "venue": "IEEE transactions on neural networks and learning systems,",
+    "year": 2015
+  }, {
+    "title": "Penalized regression, standard errors, and Bayesian lassos",
+    "authors": ["M. Kyung", "J. Gill", "M. Ghosh", "G. Casella"],
+    "venue": "Bayesian Analysis, 5(2):369–411,",
+    "year": 2010
+  }, {
+    "title": "Gaussian process latent variable models for visualisation of high dimensional data",
+    "authors": ["N. Lawrence"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2003
+  }, {
+    "title": "Using neuroimaging to understand the cortical mechanisms of auditory selective attention",
+    "authors": ["A.K.C. Lee", "E. Larson", "R.K. Maddox", "B.G. ShinnCunningham"],
+    "venue": "Hearing Research,",
+    "year": 2014
+  }, {
+    "title": "A general approach to nonlinear factor analysis",
+    "authors": ["R.P. McDonald"],
+    "venue": "Psychometrika, 27(4):397–415,",
+    "year": 1962
+  }, {
+    "title": "Bayesian Variable Selection in Linear Regression",
+    "authors": ["T.J. Mitchell", "J.J. Beauchamp"],
+    "venue": "J. Amer. Statist. Assoc.,",
+    "year": 1988
+  }, {
+    "title": "PathSGD: Path-Normalized Optimization in Deep Neural Networks",
+    "authors": ["B. Neyshabur", "R.R. Salakhutdinov", "N. Srebro"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2015
+  }, {
+    "title": "Proximal Algorithms, volume 1 of Foundations and Trends in Optimization",
+    "authors": ["N. Parikh", "S. Boyd"],
+    "year": 2013
+  }, {
+    "title": "Shrink Globally, Act Locally: Sparse Bayesian Regularization and Prediction",
+    "authors": ["N.G. Polson", "J.G. Scott"],
+    "venue": "Bayesian statistics,",
+    "year": 2010
+  }, {
+    "title": "Towards a Rigorous Assessment of Systems Biology Models: The DREAM3 Challenges",
+    "authors": ["R.J. Prill", "D. Marbach", "J. Saez-Rodriguez", "P.K. Sorger", "L.G. Alexopoulos", "X. Xue", "N.D. Clarke", "G. Altan-Bonnet", "G. Stolovitzky"],
+    "venue": "PloS one,",
+    "year": 2010
+  }, {
+    "title": "Proximal Stochastic Methods for Nonsmooth Nonconvex FiniteSum Optimization",
+    "authors": ["S.J. Reddi", "S. Sra", "B. Poczos", "A.J. Smola"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2016
+  }, {
+    "title": "Stochastic Backpropagation and Approximate Inference in Deep Generative Models",
+    "authors": ["D.J. Rezende", "S. Mohamed", "D. Wierstra"],
+    "venue": "In Proceedings of the 31st International Conference on Machine Learning,",
+    "year": 2014
+  }, {
+    "title": "Neural Granger Causality for Nonlinear Time Series",
+    "authors": ["A. Tank", "I. Covert", "N. Foti", "A. Shojaie", "E. Fox"],
+    "venue": "arXiv preprint arXiv:1802.05842,",
+    "year": 2018
+  }, {
+    "title": "Regression Shrinkage and Selection Via the Lasso",
+    "authors": ["R. Tibshirani"],
+    "venue": "Journal of the Royal Statistical Society, Series B,",
+    "year": 1994
+  }, {
+    "title": "Identification of nonlinear oscillatory activity embedded in broadband neural signals",
+    "authors": ["M. Vejmelka", "M. Paluš", "K. Šušmáková"],
+    "venue": "International journal of neural systems,",
+    "year": 2010
+  }, {
+    "title": "Bayesian Group Factor Analysis",
+    "authors": ["S. Virtanen", "A. Klami", "S. Khan", "S. Kaski"],
+    "venue": "In Artificial Intelligence and Statistics,",
+    "year": 2012
+  }, {
+    "title": "Nonlinear Factor Analysis as a Statistical Method",
+    "authors": ["I. Yalcin", "Y. Amemiya"],
+    "venue": "Statistical science,",
+    "year": 2001
+  }, {
+    "title": "Model selection and estimation in regression with grouped variables",
+    "authors": ["M. Yuan", "Y. Lin"],
+    "venue": "Journal of the Royal Statistical Society, Series B,",
+    "year": 2006
+  }, {
+    "title": "Bayesian group factor analysis with structured sparsity",
+    "authors": ["S. Zhao", "C. Gao", "S. Mukherjee", "B.E. Engelhardt"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2016
+  }],
+  "id": "SP:82e1d2d469ba0490e7cac853c9c846ab3e12eedd",
+  "authors": [{
+    "name": "Samuel K. Ainsworth",
+    "affiliations": []
+  }, {
+    "name": "Nicholas J. Foti",
+    "affiliations": []
+  }, {
+    "name": "Adrian K. C. Lee",
+    "affiliations": []
+  }, {
+    "name": "Emily B. Fox",
+    "affiliations": []
+  }],
+  "abstractText": "Deep generative models have recently yielded encouraging results in producing subjectively realistic samples of complex data. Far less attention has been paid to making these generative models interpretable. In many scenarios, ranging from scientific applications to finance, the observed variables have a natural grouping. It is often of interest to understand systems of interaction amongst these groups, and latent factor models (LFMs) are an attractive approach. However, traditional LFMs are limited by assuming a linear correlation structure. We present an output interpretable VAE (oi-VAE) for grouped data that models complex, nonlinear latent-to-observed relationships. We combine a structured VAE comprised of group-specific generators with a sparsity-inducing prior. We demonstrate that oi-VAE yields meaningful notions of interpretability in the analysis of motion capture and MEG data. We further show that in these situations, the regularization inherent to oi-VAE can actually lead to improved generalization and learned generative processes.",
+  "title": "oi-VAE: Output Interpretable VAEs for Nonlinear Group Factor Analysis"
+}

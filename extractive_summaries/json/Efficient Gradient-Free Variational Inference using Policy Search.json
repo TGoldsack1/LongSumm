@@ -1,0 +1,216 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "We consider the problem of sampling or inference using a complex probability distribution p∗(x) = p̃∗(x)/Z for which we can evaluate p̃∗(x) but not the normalization constant Z = ∫ x p̃∗(x)dx. This problem is ubiquitous in machine leaning. For example, in Bayesian Inference, p̃∗(x) corresponds to the product of prior and likelihood.\nAs we can not sample directly from distribution p∗(x) or\n1Computational Learning for Autonomous Systems, TU Darmstadt, Darmstadt, Germany 2Machine Learning Lab, University of Lincoln, Lincoln, UK 3Lincoln Center for Autonomous Systems, University of Lincoln, Lincoln, UK. Correspondence to: Oleg Arenz <oleg@robot-learning.de>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\nuse it for inference, a common approach is to use Variational Inference (VI) to approximate the target distribution p∗(x) with a tractable distribution p such as multi-variate Gaussians (Blei et al., 2017; Regier et al., 2017) or Gaussian Mixture Models (GMM) (Miller et al., 2017; Guo et al., 2016; Zobay, 2014). The optimization problem to obtain this approximation is commonly framed as minimizing the reverse Kullback-Leibler divergence (KL)\nKL(p||p∗) = ∫ x p(x;θ) log ( p(x;θ) p∗(x) ) dx (1)\nwith respect to the parameters θ of the approximation. This objective is typically evaluated on samples drawn from p(x;θ) and optimized by stochastic optimization algorithms (Fan et al., 2015; Gershman et al., 2012). However, in order to perform the KL minimization efficiently, p(x) is often restricted to belong to a simple family of models or is assumed to have non-correlating degrees of freedom (Blei et al., 2017; Peterson & Hartman, 1989), which is known as the mean field approximation. Unfortunately, such restrictions can introduce significant approximation errors.\nOur approach focuses on learning multivariate Gaussian Mixture Models (GMMs) with full covariance matrices for approximating the target distribution. GMMs are desirable for VI, because they are capable of representing any continuous probability density function arbitrarily well, while inference with GMMs is relatively cheap. Naturally, variational inference with GMM approximations has been considered in the past. However, in order to make the minimization of objective (1) feasible, previous work either assumed factorized (Jaakkola & Jordan, 1998; Bishop et al., 1998) or isotropic (Gershman et al., 2012) mixture components or applied boosting by successively adding and optimizing new components while keeping previously added components fixed (Miller et al., 2017; Guo et al., 2016).\nAs areas of high density p̃∗(x) are initially unknown, Variational Inference can essentially be seen as a search problem that is inflicted by the exploration-exploitation dilemma which is typical for reinforcement learning or policy search problems. The algorithms need to explore the sample space in order to ensure that all relevant areas are covered while they also need to exploit the current approximation p(x;θ) in order to fine tune p(x;θ) in areas of high density. This exploration-exploitation based view is so far under-\ndeveloped in the Variational Inference community but essential to achieve good approximations with a small number of function evaluations.\nOur method transfers information-geometric insights used in Policy Search (Deisenroth et al., 2013) and Reinforcement Learning (Sutton & Barto, 1998) on solving such exploration-exploitation dilemma efficiently. We therefore call our algorithm Variational Inference by Policy Search (VIPS). We extend the stochastic search method MORE (Abdolmaleki et al., 2016) to the variational inference setup and show that this version of MORE can efficiently learn single multivariate Gaussian variational distributions. We further extend the algorithm for training GMM distributions using a variational lower bound that enables us to train the mixture components and the coefficients individually. Our optimization starts from an initial mixture model (e.g. a Gaussian prior) and the number of components is adapted online by adding components in promising regions and by deleting components with negligible weight.\nWe compare our method to other state-of-the-art VI methods (Miller et al., 2017; Gershman et al., 2012) and show that our algorithm can find approximations of much higher quality with significantly less evaluations of p̃∗(x). We further compare to existing sampling methods (Murray et al., 2010; Neal, 2003; Calderhead, 2014; Liu & Wang, 2016) and show that we can achieve similar sample quality with order of magnitudes less function evaluations."
+  }, {
+    "heading": "2. Preliminaries",
+    "text": "We will now formalize the problem statement and introduce relevant concepts from information-geometric policy search."
+  }, {
+    "heading": "2.1. Problem formulation",
+    "text": "As stated above, we want to minimize the KL divergence between the approximation p and the target distribution p∗. This direct minimization is infeasible as the normalization constant of p∗ is unknown, however, it can be easily shown that the objective can be rewritten as\nKL(p||p∗) = ∫ x p(x;θ) log p(x;θ)\np̃∗(x) dx︸ ︷︷ ︸\n−ELBO\n+ logZ, (2)\nwhere the term logZ can be ignored as it does not depend on θ. This objective is known as the negative value of the evidence lower bound (ELBO) used in many variational inference methods (Blei et al., 2017). As we want to use insights from policy search, we rewrite the ELBO as reward maximization problem with an additional entropy objective,\nL(θ) = ∫ x p(x;θ)R(x)dx+H(p), (3)\nwhere the reward is given by R(x) = log p̃∗(x) and H(p) = − ∫ x p(x;θ) log p(x;θ)dx is the entropy of p. Please note the swap in the sign due to the change from a minimization to a maximization problem. Hence, policy search algorithms can directly be applied to VI if they can incorporate an additional entropy objective. The ELBO objective can typically not be evaluated in closed form but is estimated by samples drawn from p(x;θ). Stochastic optimization can be used to optimize this sample-based objective (Blei et al., 2017)."
+  }, {
+    "heading": "2.2. Information Geometric Distribution Updates",
+    "text": "Policy search algorithms must solve the explorationexploitation dilemma when updating the policy, i.e., they must control how much information from the current sample set is integrated in the policy versus how much we rely on keeping the current exploration strategy to generate more information. Information-geometric trust regions can be used to effectively control this exploration-exploitation trade-off (Peters et al., 2010; Schulman et al., 2015; Abdolmaleki et al., 2017; 2016). We will heavily rely on a recent stochastic search algorithm called MORE (Abdolmaleki et al., 2016), that for the first time allows for a closed form solution of information geometric trust regions for Gaussian distributions. Stochastic search is a special case of policy search where the policy can be interpreted as search distribution p(x) in the parameter space x of a low-level policy.\nThe MORE algorithm solves a constraint optimization problem where the objective is given by maximizing the average reward. The information-geometric trust region is implemented by limiting the KL-divergence between the old and new search distribution which is equivalent to limiting the information gain of the policy update. Moreover, a second constraint limits the entropy loss of the distribution update to avoid a collapse of the search distribution. The resulting optimization program has the following form:\nmaximize p(x) ∫ x p(x)R(x)dx,\ns. t. KL ( p||q ) ≤ , H ( q ) −H ( p ) ≤ γ. (4)\nHere, q(x) is the old search distribution, R(x) is the reward and H the entropy of the distribution. The optimization problem can be solved using Lagrangian multipliers. The solution for p(x) is given by\np(x) ∝ q(x) η η+ω exp (R(x)) 1 η+ω , (5)\nwhere η and ω are Lagrangian multipliers, which can be found by solving the convex dual optimization problem (Abdolmaleki et al., 2016)."
+  }, {
+    "heading": "2.3. Fitting a Reward Surrogate",
+    "text": "In order to use Equation 5, Gaussianity needs to be enforced. This can be either performed by fitting a Gaussian (Daniel et al., 2012; Kupcsik et al., 2017) on samples that are weighted by Equation 5, which is prone to overfitting (as we need to fit a full covariance matrix) or by fitting a surrogate R̃(x) ≈ R(x) that is compatible to the Gaussian distribution (Abdolmaleki et al., 2016). As the Gaussian distribution is log linear in quadratic features of x, the surrogate needs to be a quadratic approximation of R(x), i.e.,\nR̃(x) = −0.5xTAx+ aTx+ a0.\nThe parameters A, a and a0 are learned from the current sample set using linear regression. The surrogate therefore only needs to be a local approximation of the reward function. Using R̃(x) for R(x) in Equation 5 yields a Gaussian distribution for p(x) where the mean µ and the full covariance matrix Σ can be evaluated in closed form. For the exact equations we refer to Abdolmaleki et al. (2016)."
+  }, {
+    "heading": "3. Variational Inference by Policy Search",
+    "text": "As VI uses samples to evaluate the ELBO, VI is essentially a search problem where we need to find samples in areas of high density of p∗ but also make sure that these samples are distributed with the correct entropy. Interpreting VI as search problem, the current approximation p(x;θ) is used to search in the space of x. We can obtain samples from our current search distribution p(x;θ) and use them to update p(x;θ) such that it becomes a better approximation of p∗(x). Hence, VI is inflicted by the explorationexploitation dilemma in a similar way as reinforcement learning and policy search algorithms. In this paper, we want to use information-geometric trust regions for controlling the exploration-exploitation trade-off in the VI objective.\nInformation-geometric trust regions have been shown to yield efficient closed form updates for Gaussian distributions (Abdolmaleki et al., 2016). However, in order to cope with more complex, multimodal distributions, we will extend the information-geometric updates to Gaussian Mixture Models. Hence, our variational distribution is given by a GMM\np(x) = ∑ o p(o)p(x|o),\nwhere o is the index of the mixture component, p(o) are the mixture weights and p(x|o) = N (µo,Σo) is a multivariate normal distribution with meanµo and full covariance matrix Σo. To improve readability, we will omit the parameter vector θ when writing the distribution p(x) in most cases. However, as we are dealing with mixture models, it should be noted that θ consists of the mean vectors, covariance matrices and mixture weights of all components.\nWe will first introduce our objective including the trust regions and subsequently introduce a variational lower bound to decompose the objective into tractable optimization problems for the individual mixture components and the mixture coefficients. The number of components is automatically adapted by deleting components that have low weight and by creating new components in promising regions."
+  }, {
+    "heading": "3.1. Objective",
+    "text": "We approximate the target distribution p∗(x) by minimizing L(θ) given in Equation 3 on the current set of samples. As we will use local approximations of the reward function around each component, we introduce individual trust regions for each component and for the coefficients. The resulting optimization problem has the form\nmaximize p(x|o),p(o)\n∫ x p(x) ( R(x)− log p(x) ) dx,\nsubject to ∀o : ∫ x p(x|o) log p(x|o) q(x|o)\n≤ (o),∑ o p(o) log p(o) q(o) ≤ w,\nwhere q(o) and q(x|o) are the old mixture weights and components, respectively, and w and (o) upper-bound the corresponding KL-divergences. However, the occurrence of the log-density of the GMM, log p(x), prevents us from updating each component independently."
+  }, {
+    "heading": "3.2. Variational Lower Bound",
+    "text": "By introducing an auxiliary distribution p̃(o|x), the objective of the optimization problem can be decomposed into a lower bound U(θ, p̃) and an expected KL-term, namely\nJ(θ) = U(θ, p̃) + Ep(x) [ KL ( p(o|x)||p̃(o|x) )] , (6)\nwith\nU(θ, p̃) = ∫ x ∑ o p(x, o) ( R(x)− log p(x, o)\n+ log p̃(o|x) ) dx\nand\nKL ( p(o|x)||p̃(o|x) ) = ∑ o p(o|x) log p(o|x) p̃(o|x) .\nWe also used the identity p(x, o) = p(x|o)p(o) to keep the notation uncluttered. Eq. 6 can be easily verified by using Bayes theorem, i.e., by setting log p(o|x) = log p(x, o)− log p(x), all introduced terms will vanish and only the original objective remains, see supplement. The second term in Eq. 6 is always greater or equal zero. Hence,\nU(θ, p̃) is a lower bound on the objective. This decomposition is closely related to the decomposition used in the expectation maximization (EM) algorithm (Bishop, 2006). However, as we want to minimize the reverse KL instead of the maximum likelihood (which corresponds to the forward KL) that is the objective in standard EM, the KL used for p̃(o|x) also needs to be reversed to obtain the lower bound.\nFollowing the standard EM procedure, we can maximize the objective function by iteratively maximizing the lower bound (M-step) and tightening the lower bound (Estep). The E-step can be computed by setting p̃(o|x) = p(x|o)p(o)/p(x) using the current GMM. Hence, after the E-step, the lower bound is tight as the KL is set to 0. Consequently, improving the lower bound also improves the original objective J(θ) at each EM iteration. It can be easily seen that the lower bound does not contain the term log p(x) anymore and decomposes into individual terms for the weight distribution and the single components such that the updates can be performed independently. Moreover, an interesting observation is the term log p̃(o|x) acts as additional reward. After each sampling process from p(x), we perform 10 EM-iterations to fine tune the mixture components with the newly obtained samples."
+  }, {
+    "heading": "3.3. M-step for Component Updates",
+    "text": "When updating a single component p(x|o), maximizing U is equivalent to maximizing\nUo(µo,Σo) = ∫ x p(x|o) ( R(x) + log p̃(o|x) ) dx\n+H ( p(x|o) ) + η(o) ( (o)− ∫ x p(x|o) log p(x|o) q(x|o) dx ) ,\nwhere we already added the Lagrangian multiplier η(o) of the KL constraint for component o. This optimization problem is very similar to the optimization problem that is solved in MORE (Eq.4), which becomes evident when defining\nro(x) = R(x) + log p̃(o|x) (7)\nas reward function. In fact, the only difference compared to MORE is that the entropy of the component enters the optimization via a constant factor 1 rather than a Lagrangian multiplier. Hence, we only need to optimize the Lagrangian multiplier of the KL constraint, η(o) as ω is set to 1 in the MORE equations, see Eq. 5.\nWe refer to the supplement and to the original MORE paper (Abdolmaleki et al., 2016) for the closed form updates of this optimization problem based on quadratic reward surrogates r̃o(x) ≈ ro(x). Note that in difference to the original MORE paper, we use a standard linear regression to obtain the quadratic models. The used dimensionality reduction\ntechnique reported by Abdolmaleki et al. (2016) was not needed to achieve satisfactory results."
+  }, {
+    "heading": "3.4. M-step for Weight Updates",
+    "text": "Maximizing U with respect to p(o) is equivalent to maximizing\nUw (p(o)) = ∑ o p(o)rw(o) +H ( p(o) ) + ηw ( w −\n∑ o p(o) log p(o) q(o)\n) ,\nwhere we already added the Lagrangian multiplier for the KL constraint on the weights and\nrw(o) = ∫ x p(x|o)ro(x)dx+H(p(x|o)).\nThis optimization problem corresponds to optimizing a discrete distribution with an additional entropy objective. The solution for p(o) is obtained by\np(o) ∝ q(o) ηw ηw+1 exp (rw(o)) 1 ηw+1 . (8)\nPlease refer to the supplement for the dual function and gradient of this optimization problem."
+  }, {
+    "heading": "3.5. Sample Reuse",
+    "text": "Samples are used for approximating ro(x) for the component updates as well as rw(o) for the weight updates.\nWe fit a quadratic surrogate to approximate ro(x) using linear regression, where the samples relate to the independent variables. The surrogate should be most accurate in the vicinity of p(x|o) which can be achieved by using independent variables that are distributed according to p(x|o). However, we also want to make use of samples from previous iterations or different components. We therefore perform weighted least squares, where the weight of sample i is given by the self-normalizing importance weight\nwi(o) = 1\nZ p(xi|o) z(xi) , Z = ∑ i p(xi|o) z(xi) .\nThe sampling distribution z(x) for the current set of Ns samples is a Gaussian Mixture Model given by\nz(x) = Ns∑ i=1 1 Ns Ni(x),\nwhereNi(x) corresponds to the normal distribution that was used to obtain sample i. For better efficiency, we include several samples from each sampling componentNi(x) such that z(x) comprises less than Ns different component.\nWe approximate rw(o) for the weight updates by using an importance-weighted Monte Carlo estimate based on the same importance weights that are used for the component updates. Hence, we replace rw(o) in Eq. 8 by\nr̃w(o) = Ns∑ i=1 wi(o)ro(xi) +H(p(x|o)).\nThe set of active samples is replaced directly after new samples have been drawn and is held constant during the EM iterations. For all our experiments we selected the 3 · Nnew most recent samples, where Nnew corresponds to the number of samples that have been drawn during the last round of sampling. Each round of sampling consists of drawing 10 ·D samples from each mixture component, where D corresponds to the number of dimensions of x."
+  }, {
+    "heading": "3.6. Adding and Deleting Mixture Components",
+    "text": "In order to adapt the complexity of the GMM to the complexity of the target distribution, we initialize our algorithm with only one mixture component with high variance and gradually increase the number of mixture components. We consider the locations of all previous samples as candidates for new components. Every nadd iterations, we heuristically choose the most promising candidate and use its location as mean for a newly added component. The covariance matrix is initialized by interpolating the covariance matrices of neighboring components using the responsibilities.\nAs we want the new component to eventually achieve high weight, we want to add it at an area where its componentspecific reward ro(x) will become large. We therefore try to find an area that has high likelihood under the target distribution but also yields high log-responsibilities for the newly added component, see Equation 7. However, the responsibilities of a newly initialized component hardly relate to the responsibilities it will eventually achieve. Instead, we choose the candidate that maximizes the score ei = log p̃\n∗(xi) − max(log p(xi),maxj log p(xj) − γ). The second term prefers locations that are little covered by the current approximation and behaves similar to the log-responsibilities which also saturate for far away areas. Without such saturation, the second term might dominate the score when the target distribution has heavy tails.\nIn order to add components without impairing the stability of the optimization, we initialize them with very low weight such that their effect on the approximation is negligible. As we draw the same number of samples from each component irrespective of their weight, such low weight components can still improve and eventually contribute to the approximation. However, keeping unnecessary components is costly in terms of computational cost and sample efficiency. We therefore delete components that did not have mentionable\neffect on the approximation during the last ndel iterations.\nThe full algorithm is outlined in Algorithm 1. An opensource implementation is available online1.\nAlgorithm 1 Variational Inference by Policy Search 1: Input: initial parameters θ0 2: for j = 1 to maxIter do 3: Add and delete components according to heuristics.\nStore new parameters in θj 4: Draw samples si from each component and store\nthem along with ri = log p̃∗(si) and the parameters of the responsible component.\n5: (s⊂, r⊂, z⊂(x))← select active samples() 6: compute zj = z⊂(s⊂) 7: for k = 1 to maxIterEM do 8: recompute p = p(s⊂;θj), p̃ = p(o|s⊂;θj) 9: θj ← update weights(p, zj , p̃, s⊂, r⊂,θj)\n10: recompute p = p(s⊂;θj), p̃ = p(o|s⊂;θj) 11: for each component do 12: θj ← update component(p, zj , p̃, s⊂, r⊂,θj) 13: end for 14: end for 15: end for"
+  }, {
+    "heading": "4. Related Work",
+    "text": "Although MCMC samplers can not directly be used for approximating distributions, they are for many applications the main alternative to VI. Prominent examples of gradientfree MCMC methods include (random walk) Metropolis Hasting (Hastings, 1970), Gibbs sampling (Geman & Geman, 1984), slice sampling (Neal, 2003) and elliptical slice sampling (Murray et al., 2010; Nishihara et al., 2014). If the gradient of the target distribution is available, Hamiltonian MCMC (Duane et al., 1987) and the Metropolis-adjusted Langevin algorithm (Roberts & Stramer, 2002) are also popular choices. The No-U-Turn sampler (NUTS) (Hoffman & Gelman, 2014) is a notable variant of Hamiltonian MCMC that is appealing for not requiring hyper-parameter tuning. While many of these MCMC methods have problems with multimodal distributions in terms of mixing time, other methods use multiple chains and can therefore better explore multimodal sample spaces (Neal, 1996; Nishihara et al., 2014; Calderhead, 2014).\nMany VI methods are only applicable to Gaussian variational distributions (Fan et al., 2015; Regier et al., 2017). The approach by Fan et al. (2015) can learn Gaussians with full covariance matrices using fast second order optimization. This idea has been extended by Regier et al. (2017) to trust region optimization. However, in difference to our approach, an euclidean trust region is used in parameter space\n1https://github.com/OlegArenz/VIPS\nof the variational distribution. Such approach requires the computation of the Hessian of the objective which is only tractable for mean-field approximations of single Gaussian distributions. In contrast, we use the trust regions directly on the change of the distributions instead of the change of the parameters of the distribution. The information geometric trust regions in this paper allow for efficient estimation of GMMs with full covariance matrices without requiring gradient information from p∗.\nBlack-box Variational Inference methods do not make strong assumptions on the model family (Salimans & Knowles, 2013; Ranganath et al., 2014) and can therefore also be used for learning GMM approximations. Salimans & Knowles (2013) derive a fixed point update of the natural parameters of a distribution from the exponential family that corresponds to a Monte-Carlo estimate of the gradient of Eq. (1) preconditioned by the inverse of their empirical covariance. By making structural assumptions on the target distribution, they extend their method to mixture models and show its applicability to bivariate GMMs. Ranganath et al. (2014) also use Monte-Carlo gradient estimates of Eq. (1) and apply Rao-Blackwellization and control variates to reduce its variance. The work of Weber et al. (2015) already explored the use of Reinforcement Learning for VI but formalizing VI as sequential decision problem. However, only simple policy gradient methods have been proposed in this context which are unsuitable for learning GMMs.\nClosely related to our work are two recent approaches for Variational Inference that concurrently explored the idea of applying boosting to make the training of GMM approximations tractable (Miller et al., 2017; Guo et al., 2016). These methods start by minimizing the ELBO objective for a single component and then successively add and optimize new components and learn an optimal weighting between the previous mixture and the newly added component. However, they do not use information-geometric trust region to efficiently explore the sample space and therefore have problems finding all the modes as well as accurate estimates of the covariance matrices. Non-parametric variational inference (NPVI) (Gershman et al., 2012) learns GMMs with uniform weights using a second-order approximation of the\nELBO for efficient gradient updates. However, this method only allows for mean field approximations for the mixture components which is a severe limitation as shown in our comparisons. GMMs are also used by Zobay (2014) where an approximation of the GMM entropy is used to make the optimization tractable. The optimization is gradient-based and does not consider exploration of the sample space. It is therefore limited to rather low dimensional problems."
+  }, {
+    "heading": "5. Experiments",
+    "text": "We evaluate VIPS with respect to efficiency of the optimization as well as quality of the learned approximations. For assessing efficiency, we focus on the number of function evaluations, but also include a comparison with respect to the wall-clock time. As the ELBO objective is hard to use for comparisons as it depends on the current sample set, we assess the quality of the approximation by comparing samples drawn from the learned model with groundtruth samples based on their Maximum Mean Discrepancy (MMD) (Gretton et al., 2012). Please refer to the supplement how the MMD and the ground-truth samples are computed. Please note that the computation of the ground-truth samples is based on generalized elliptical slice sampling (GESS) (Nishihara et al., 2014) which is in most cases computationally very expensive. Due to the huge computational demands, we do not consider GESS as competitor.\nWe compare our method to a variety of state-of-the-art MCMC and VI approaches on unimodal and multimodal problems, namely we compare to Variational Boosting (Miller et al., 2017), Non-Parametric Variational Inference (Gershman et al., 2012), Stein Variational Gradient Descent (Liu & Wang, 2016), Hamiltonian Monte Carlo (Duane et al., 1987), Slice Sampling (Neal, 2003), Elliptical Slice Sampling (Murray et al., 2010), Parallel Tempering MCMC (Calderhead, 2014) and—indirectly, since it is used for initializing variational boosting—black box variational inference (Salimans & Knowles, 2013). However, due to the high computational demands, we do not compare to every method on each experiment but rather select promising candidates based on the sampling problem or on the preliminary experiments that we had to conduct for hyper-parameter tun-\ning. For VIPS, we use the same hyper-parameters for all experiments. However, we do not add new components if it would increase the number of components above a certain threshold and evaluate different values for this threshold.\nWe perform three experiments on (essentially) unimodal sampling problems taken from related work. We perform Bayesian logistic regression on the German Credit and Breast Cancer datasets (Lichman, 2013) as described in (Nishihara et al., 2014) and approximate the posterior of the hierarchical Poisson GLM described in (Miller et al., 2017). We designed two challenging toy tasks for evaluating our approach on multimodal problems: sampling from an unknown twenty-dimensional GMM with full covariance matrices and distant modes, and sampling the joint configurations of a ten-dimensional planar robot.\nWe start the experimental evaluation of VIPS by visualizing the iterative improvements of the GMM approximation for the task of approximating an unknown two-dimensional GMM. Figure 1 shows the log-probability densities of the learned approximation during the optimization and the target distribution (right). We can see that VIPS gradually adds more components and improves the GMM. The final fit with 20 components closely approximates the target distribution."
+  }, {
+    "heading": "5.1. Bayesian Logistic Regression",
+    "text": "We perform two experiments for binary classification on the German credit and breast cancer datasets (Lichman, 2013). For the German credit dataset twenty-five parameters are learned whereas the breast cancer dataset is thirty-one dimensional. We standardize both datasets and perform linear logistic regression where we put zero-mean Gaussian priors with variance 100 on all parameters.\nOn the German credit dataset we compare against NPVI, ESS, SVGD, HMC and variational boosting. For variational boosting we examine rank-0, rank-5 and rank-10 approximations of the covariance matrices. We also performed\nexperiments with full rank approximation but the optimization always failed after few iterations. For our approach we examine two variants, VIPS1 which learns only a single component and VIPS40 which stops adding new components after forty components. Figure 2a shows that the sample quality achieved by VIPS is unmatched by any variational inference method and ESS needs more than two orders of magnitude more function evaluation to achieve a similar MMD to VIPS1. However, we could not measure an advantage of using a GMM instead of single Gaussian distribution on this dataset. As VIPS1 is only learning a single Gaussian, it is also more data-efficient than VIPS40. This result also illustrates the importance of using Gaussian distributions with an accurate estimation of the full covariance as VIPS1 could already outperform competing methods.\nFigure 2b depicts the achieved MMDs on the breast cancer dataset. We only compared to the most promising methods from the German credit dataset. Although the posterior distribution is unimodal, the GMM variant of our method learns a slightly better approximation than VIPS1, presumably by matching higher order moments of the posterior."
+  }, {
+    "heading": "5.2. Multi-level Poisson GLM",
+    "text": "We evaluate our method on the problem of learning the posterior of a hierarchical Poisson GLM on the 37-dimensional stop-and-frisk dataset, where we refer to (Miller et al., 2017) for the description of the hierarchical model. We compared VIPS1 and VIPS5 to HMC, SVGD, variational boosting and non-parametric variational inference. The MMD with respect to the baseline samples is shown in Figure 3a."
+  }, {
+    "heading": "5.3. Planar Robot",
+    "text": "We evaluate our approach on a planar robot with ten degrees of freedom. We want to sample joint configurations such that the end-effector of the robot is close to a desired position at x = 7 and y = 0. The likelihood of a configu-\nration is a Gaussian distribution in Cartesian end-effector space with a variance of 1e−4 in both dimensions. We assume a zero mean Gaussian prior in configuration space, where the first joint has variance 1 and the remaining joints have variance 0.04. We compare VIPS40 with ESS, parallel tempering MCMC, SVGD, slice sampling, NPVI and VBOOST. The MMD is shown in Figure 3b. Figure 4 visualizes the learned models of NPVI, VBOOST and VIPS and compares the ground-truth samples with the samples obtained by VIPS. All other VI methods can not represent the complex structure of the modes and get attracted by single modes resulting in bad approximations. We believe the reason for this behavior is a missing principled treatment of the exploration-exploitation trade-off. VIPS achieves a high sample quality that is comparable to MCMC methods in order of magnitude less function evaluations than MCMC."
+  }, {
+    "heading": "5.4. Gaussian Mixture Model",
+    "text": "We evaluate our method on the task of approximating unknown, randomly generated 20-dimensional GMMs comprising ten components. Each dimensions of the component means is drawn uniformly in the interval [−50, 50]. The covariance matrices are given by Σ = A>A + I20 where each entry of the 20 × 20-dimensional matrix A is sampled from a normal distribution with mean 0 and variance 20. Note that each component of the target distribution can\nhave a highly correlated covariance matrix, which is even a problem for the tested MCMC methods. Figure 5 shows the MMD of VIPS40, SVGD, ESS and parallel tempering MCMC plotted over the number of iterations as well as wallclock time. VIPS was the only method that could reliable be applied to this task. We also briefly evaluated the scaling of the performance with the number of cores. Although parallel computing is not the focus of this paper, the possibility of performing independent updates of the mixture components suggests that the method can make good use of multi-threading. Figure 5b shows that VIPS scales almost linearly with the number of cores at least if their number is small, showing the potential of parallelizing our algorithm."
+  }, {
+    "heading": "6. Conclusion",
+    "text": "VIPS is motivated by the insight from stochastic search that information-geometric trust regions allow for controlled exploration and stable optimization. We transfered the stochastic search method MORE to the field of variational inference and demonstrated that it is significantly more efficient than state-of-the-art approaches of VI for learning mean and full covariance of a multi-variate normal distribution. Based on our variant of MORE, we derived a novel method for learning GMM approximations and demonstrated that it is capable of learning high quality approximations of complex, multimodal distributions with a limited amount of function evaluations. Our method makes little assumptions on the unnormalized density function of the desired distribution and is thereby applicable to non-differentiable problems.\nHowever, for higher-dimensional problems (e.g. more than 100 dimensions) fitting quadratic surrogates may require too many samples which could be alleviated by using gradient information for constraining the surrogate. Furthermore, learning diagonal surrogates can be preferable for such problems due to better sample- and computational efficiency. For exploration, we start with an approximation with high entropy and decrease it slowly during optimization which can miss modes that are not discovered in the beginning. Actively sampling unexplored regions would result in an anytime algorithm, capable of further improving the approximation in the later stages of optimization."
+  }, {
+    "heading": "Acknowledgements",
+    "text": "This project has received funding from the European Unions Horizon 2020 research and innovation programme under grant agreement No 645582 (RoMaNS). Calculations for this research were conducted on the Lichtenberg high performance computer of the TU Darmstadt."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Model-Based Relative Entropy Stochastic Search",
+    "authors": ["A. Abdolmaleki", "R. Lioutikov", "N. Lua", "L.P. Reis", "J. Peters", "G. Neumann"],
+    "venue": "In Advances in Neural Information Processing Systems (NIPS),",
+    "year": 2016
+  }, {
+    "title": "Deriving and Improving CMA-ES with Information Geometric Trust Regions",
+    "authors": ["A. Abdolmaleki", "B. Price", "N. Lau", "L.P. Reis", "G. Neumann"],
+    "venue": "In The Genetic and Evolutionary Computation Conference",
+    "year": 2017
+  }, {
+    "title": "Pattern Recognition and Machine Learning (Information Science and Statistics)",
+    "authors": ["C.M. Bishop"],
+    "year": 2006
+  }, {
+    "title": "Approximating Posterior Distributions in Belief Networks Using Mixtures",
+    "authors": ["C.M. Bishop", "N.D. Lawrence", "T. Jaakkola", "M.I. Jordan"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 1998
+  }, {
+    "title": "Variational Inference: A Review for Statisticians",
+    "authors": ["D.M. Blei", "A. Kucukelbir", "J.D. McAuliffe"],
+    "venue": "Journal of the American Statistical Association,",
+    "year": 2017
+  }, {
+    "title": "A General Construction for Parallelizing Metropolis-Hastings Algorithms",
+    "authors": ["B. Calderhead"],
+    "venue": "Proceedings of the National Academy of Sciences of the United States of America (PNAS),",
+    "year": 2014
+  }, {
+    "title": "Hierarchical Relative Entropy Policy Search",
+    "authors": ["C. Daniel", "G. Neumann", "J. Peters"],
+    "venue": "In International Conference on Artificial Intelligence and Statistics (AISTATS),",
+    "year": 2012
+  }, {
+    "title": "A Survey on Policy Search for Robotics",
+    "authors": ["M.P. Deisenroth", "G. Neumann", "J. Peters"],
+    "venue": "Foundations and Trends in Robotics,",
+    "year": 2013
+  }, {
+    "title": "Fast Second-order Stochastic Backpropagation for Variational Inference",
+    "authors": ["K. Fan", "Z. Wang", "J. Beck", "J.T. Kwok", "K. Heller"],
+    "venue": "In Proceedings of the 28th International Conference on Neural Information Processing Systems,",
+    "year": 2015
+  }, {
+    "title": "Stochastic Relaxation, Gibbs Distributions, and the Bayesian Restoration of Images",
+    "authors": ["S. Geman", "D. Geman"],
+    "venue": "IEEE Transactions on Pattern Analysis and Machine Intelligence,",
+    "year": 1984
+  }, {
+    "title": "Nonparametric Variational Inference",
+    "authors": ["S.J. Gershman", "M.D. Hoffman", "D.M. Blei"],
+    "venue": "In Proceedings of the 29th International Conference on Machine Learning,",
+    "year": 2012
+  }, {
+    "title": "A Kernel Two-sample Test",
+    "authors": ["A. Gretton", "K.M. Borgwardt", "M.J. Rasch", "B. Schölkopf", "A. Smola"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2012
+  }, {
+    "title": "The No-U-Turn Sampler: Adaptively Setting Path Lengths in Hamiltonian Monte Carlo",
+    "authors": ["M.D. Hoffman", "A. Gelman"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2014
+  }, {
+    "title": "Improving the Mean Field Approximation via the Use of Mixture Distributions",
+    "authors": ["T.S. Jaakkola", "M.I. Jordan"],
+    "venue": "Learning in Graphical Models,",
+    "year": 1998
+  }, {
+    "title": "Model-Based Contextual Policy Search for Data-Efficient Generalization of Robot Skills",
+    "authors": ["A. Kupcsik", "M.P. Deisenroth", "J. Peters", "A.P. Loh", "P. Vadakkepat", "G. Neumann"],
+    "venue": "Artificial Intelligence,",
+    "year": 2017
+  }, {
+    "title": "Variational Boosting: Iteratively Refining Posterior Approximations",
+    "authors": ["A.C. Miller", "N.J. Foti", "A. D’Amour", "R.P. Adams"],
+    "venue": "In Proceedings of the International Conference on Machine Learning,",
+    "year": 2017
+  }, {
+    "title": "Elliptical Slice Sampling",
+    "authors": ["I. Murray", "R. Adams", "D. MacKay"],
+    "venue": "In Proceedings of the Thirteenth International Conference on Artificial Intelligence and Statistics,",
+    "year": 2010
+  }, {
+    "title": "Sampling from Multimodal Distributions using Tempered Transitions",
+    "authors": ["R.M. Neal"],
+    "venue": "Statistics and Computing,",
+    "year": 1996
+  }, {
+    "title": "Parallel MCMC with Generalized Elliptical Slice Sampling",
+    "authors": ["R. Nishihara", "I. Murray", "R.P. Adams"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2014
+  }, {
+    "title": "Relative Entropy Policy Search",
+    "authors": ["J. Peters", "K. Muelling", "Y. Altun"],
+    "venue": "In Proceedings of the 24th National Conference on Artificial Intelligence (AAAI),",
+    "year": 2010
+  }, {
+    "title": "Explorations of the Mean Field Theory Learning Algorithm",
+    "authors": ["C. Peterson", "E. Hartman"],
+    "venue": "Neural Networks,",
+    "year": 1989
+  }, {
+    "title": "Fast Black-box Variational Inference through Stochastic Trust-Region Optimization",
+    "authors": ["J. Regier", "M.I. Jordan", "J. McAuliffe"],
+    "venue": "In Advances in Neural Information Processing Systems",
+    "year": 2017
+  }, {
+    "title": "Langevin Diffusions and Metropolis-Hastings Algorithms",
+    "authors": ["G.O. Roberts", "O. Stramer"],
+    "venue": "Methodology and Computing in Applied Probability,",
+    "year": 2002
+  }, {
+    "title": "Fixed-Form Variational Posterior Approximation through Stochastic Linear Regression",
+    "authors": ["T. Salimans", "D.A. Knowles"],
+    "venue": "Bayesian Analysis,",
+    "year": 2013
+  }, {
+    "title": "Trust Region Policy Optimization",
+    "authors": ["J. Schulman", "S. Levine", "P. Abbeel", "M.I. Jordan", "P. Moritz"],
+    "venue": "In Proceedings of the International Conference on Machine Learning,",
+    "year": 2015
+  }, {
+    "title": "Reinforcement Learning: An Introduction",
+    "authors": ["R. Sutton", "A. Barto"],
+    "year": 1998
+  }, {
+    "title": "Reinforced Variational Inference",
+    "authors": ["T. Weber", "N. Heess", "A. Eslami", "J. Schulman", "D. Wingate", "D. Silver"],
+    "venue": "In Advances in Neural Information Processing Systems (NIPS) Workshops,",
+    "year": 2015
+  }, {
+    "title": "Variational Bayesian Inference with GaussianMixture Approximations",
+    "authors": ["O. Zobay"],
+    "venue": "Electronic Journal of Statistics,",
+    "year": 2014
+  }],
+  "id": "SP:7cb804a87a73b457806d6877539932e8da8cc31e",
+  "authors": [{
+    "name": "Oleg Arenz",
+    "affiliations": []
+  }, {
+    "name": "Mingjun Zhong",
+    "affiliations": []
+  }, {
+    "name": "Gerhard Neumann",
+    "affiliations": []
+  }],
+  "abstractText": "Inference from complex distributions is a common problem in machine learning needed for many Bayesian methods. We propose an efficient, gradient-free method for learning general GMM approximations of multimodal distributions based on recent insights from stochastic search methods. Our method establishes information-geometric trust regions to ensure efficient exploration of the sampling space and stability of the GMM updates, allowing for efficient estimation of multi-variate Gaussian variational distributions. For GMMs, we apply a variational lower bound to decompose the learning objective into sub-problems given by learning the individual mixture components and the coefficients. The number of mixture components is adapted online in order to allow for arbitrary exact approximations. We demonstrate on several domains that we can learn significantly better approximations than competing variational inference methods and that the quality of samples drawn from our approximations is on par with samples created by state-of-the-art MCMC samplers that require significantly more computational resources.",
+  "title": "Efficient Gradient-Free Variational Inference using Policy Search"
+}

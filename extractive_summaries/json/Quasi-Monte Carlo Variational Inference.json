@@ -1,0 +1,341 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "In many situations in machine learning and statistics, we encounter objective functions which are expectations over continuous distributions. Among other examples, this situation occurs in reinforcement learning (Sutton and Barto, 1998) and variational inference (Jordan et al., 1999). If the expectation cannot be computed in closed form, an approximation can often be obtained via Monte Carlo (mc) sampling from the underlying distribution. As most optimization pro-\n*Equal contribution 1ENSAE-CREST, Paris 2TU Kaiserslautern, Germany 3Disney Research, Los Angeles, USA. Correspondence to: Alexander Buchholz <alexander.buchholz@ensae.fr>, Florian Wenzel <wenzelfl@huberlin.de>, Stephan Mandt <stephan.mandt@gmail.com>.\nProceedings of the 35th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\ncedures rely on the gradient of the objective, a mc gradient estimator has to be built by sampling from this distribution. The finite number of mc samples per gradient step introduces noise. When averaging over multiple samples, the error in approximating the gradient can be decreased, and thus its variance reduced. This guarantees stability and fast convergence of stochastic gradient descent (sgd).\nCertain objective functions require a large number of mc samples per stochastic gradient step. As a consequence, the algorithm gets slow. It is therefore desirable to obtain the same degree of variance reduction with fewer samples. This paper proposes the idea of using Quasi-Monte Carlo (qmc) samples instead of i.i.d. samples to achieve this goal.\nA qmc sequence is a deterministic sequence which covers a hypercube [0, 1]d more regularly than random samples. When using a qmc sequence for Monte Carlo integration, the mean squared error (MSE) decreases asymptotically with the number of samples N as O(N−2(log N)2d−2) (Leobacher and Pillichshammer, 2014). In contrast, the naive mc integration error decreases as O(N−1). Since the cost of generating N qmc samples is O(N log N), this implies that a much smaller number of operations per gradient step is required in order to achieve the same precision (provided that N is large enough). Alternatively, we can achieve a larger variance reduction with the same number of samples, allowing for larger gradient steps and therefore also faster convergence. This paper investigates the benefits of this approach both experimentally and theoretically.\nOur ideas apply in the context of Monte Carlo variational inference (mcvi), a set of methods which make approximate Bayesian inference scalable and easy to use. Variance reduction is an active area of research in this field. Our algorithm has the advantage of being very general; it can be easily implemented in existing software packages such as STAN and Edward (Carpenter et al., 2017; Tran et al., 2016). In Appendix D we show how our approach can be easily implemented in your existing code.\nThe main contributions are as follows:\n• We investigate the idea of using qmc sequences for Monte Carlo variational inference. While the usage of qmc for vi has been suggested in the outlook section of Ranganath et al. (2014), to our knowledge, we are the first to actually investigate this approach both\ntheoretically and experimentally.\n• We show that when using a randomized version of qmc (rqmc), the resulting stochastic gradient is unbiased and its variance is asymptotically reduced. We also show that when operating sgd with a constant learning rate, the stationary variance of the iterates is reduced by a factor of N, allowing us to get closer to the optimum.\n• We propose an algorithm which operates at a constant learning rate, but increases the number of rqmc samples over iterations. We prove that this algorithm has a better asymptotic convergence rate than sgd.\n• Based on three different experiments and for two popular types of gradient estimators we illustrate that our method allows us to train complex models several orders of magnitude faster than with standard mcvi.\nOur paper is structured as follows. Section 2 reviews related work. Section 3 explains our method and exhibits our theoretical results. In Section 4 we describe our experiments and show comparisons to other existing approaches. Finally, Section 5 concludes and lays out future research directions."
+  }, {
+    "heading": "2. Related Work",
+    "text": "Monte Carlo Variational Inference (MCVI) Since the introduction of the score function (or REINFORCE) gradient estimator for variational inference (Paisley et al., 2012; Ranganath et al., 2014), Monte Carlo variational inference has received an ever-growing attention, see Zhang et al. (2017a) for a recent review. The introduction of the gradient estimator made vi applicable to non-conjugate models but highly depends on the variance of the gradient estimator. Therefore various variance reduction techniques have been introduced; for example Rao-Blackwellization and control variates, see Ranganath et al. (2014) and importance sampling, see Ruiz et al. (2016a); Burda et al. (2016).\nAt the same time the work of Kingma and Welling (2014); Rezende et al. (2014) introduced reparameterization gradients for mcvi, which typically exhibits lower variance but are restricted to models where the variational family can be reparametrized via a differentiable mapping. In this sense mcvi based on score function gradient estimators is more general but training the algorithm is more difficult. A unifying view is provided by Ruiz et al. (2016b). Miller et al. (2017) introduce a modification of the reparametrized version, but relies itself on assumptions on the underlying variational family. Roeder et al. (2017) propose a lower variance gradient estimator by omitting a term of the elbo. The idea of using qmc in order to reduce the variance has been suggested by Ranganath et al. (2014) and Ruiz et al. (2016a) and used for a specific model by Tran et al. (2017), but without\na focus on analyzing or benchmarking the method.\nQuasi-Monte Carlo and Stochastic Optimization Besides the generation of random samples for approximating posterior distributions (Robert and Casella, 2013), Monte Carlo methods are used for calculating expectations of intractable integrals via the law of large numbers. The error of the integration with random samples goes to zero at a rate of O(N−1) in terms of the MSE. For practical application this rate can be too slow. Faster rates of convergence in reasonable dimensions can be obtained by replacing the randomness by a deterministic sequence, also called QuasiMonte Carlo.\nCompared to Monte Carlo and for sufficiently regular functions, qmc reaches a faster rate of convergence of the approximation error of an integral. Niederreiter (1992); L’Ecuyer and Lemieux (2005); Leobacher and Pillichshammer (2014); Dick et al. (2013) provide excellent reviews on this topic. From a theoretical point of view, the benefits of qmc vanish in very high dimensions. Nevertheless, the error bounds are often too pessimistic and in practice, gains are observed up to dimension 150, see Glasserman (2013).\nqmc has frequently been used in financial applications (Glasserman, 2013; Joy et al., 1996; Lemieux and L’Ecuyer, 2001). In statistics, some applications include particle filtering (Gerber and Chopin, 2015), approximate Bayesian computation (Buchholz and Chopin, 2017), control functionals (Oates and Girolami, 2016) and Bayesian optimal design (Drovandi and Tran, 2018). Yang et al. (2014) used qmc in the context of large scale kernel methods.\nStochastic optimization has been pioneered by the work of Robbins and Monro (1951). As stochastic gradient descent suffers from noisy gradients, various approaches for reducing the variance and adapting the step size have been introduced (Johnson and Zhang, 2013; Kingma and Ba, 2015; Defazio et al., 2014; Duchi et al., 2011; Zhang et al., 2017b). Extensive theoretical results on the convergence of stochastic gradients algorithms are provided by Moulines and Bach (2011). Mandt et al. (2017) interpreted stochastic gradient descent with constant learning rates as approximate Bayesian inference. Some recent reviews are for example Bottou et al. (2016); Nesterov (2013). Naturally, concepts from qmc can be beneficial to stochastic optimization. Contributions on exploiting this idea are e.g. Gerber and Bornn (2017) and Drew and Homem-de Mello (2006)."
+  }, {
+    "heading": "3. Quasi-Monte Carlo Variational Inference",
+    "text": "In this Section, we introduce Quasi-Monte Carlo Variational Inference (qmcvi), using randomized qmc (rqmc) for variational inference. We review mcvi in Section 3.1. rqmc\nand the details of our algorithm are exposed in Section 3.2. Theoretical results are given in Section 3.3."
+  }, {
+    "heading": "3.1. Background: Monte Carlo Variational Inference",
+    "text": "Variational inference (vi) is key to modern probabilistic modeling and Bayesian deep learning (Jordan et al., 1999; Blei et al., 2017; Zhang et al., 2017a). In Bayesian inference, the object of interest is a posterior distribution of latent variables z given observations x. vi approximates Bayesian inference by an optimization problem which we can solve by (stochastic) gradient ascent (Jordan et al., 1999; Hoffman et al., 2013).\nIn more detail, vi builds a tractable approximation of the posterior p(z|x) by minimizing the KL-divergence between a variational family q(z|λ), parametrized by free parameters λ ∈ Rd, and p(z|x). This is equivalent to maximizing the so-called evidence lower bound (elbo):\nL(λ) = Eq(z|λ)[log p(x, z) − log q(z|λ)]. (1)\nIn classical variational inference, the expectations involved in (1) are carried out analytically (Jordan et al., 1999). However, this is only possible for the fairly restricted class of so-called conditionally conjugate exponential family models (Hoffman et al., 2013). More recently, black-box variational methods have gained momentum, which make the analytical evaluation of these expectation redundant, and which shall be considered in this paper.\nMaximizing the objective (1) is often based on a gradient ascent scheme. However, a direct differentiation of the objective (1) with respect to λ is not possible, as the measure of the expectation depends on this parameter. The two major approaches for overcoming this issue are the score function estimator and the reparameterization estimator.\nScore Function Gradient The score function gradient (also called REINFORCE gradient) (Ranganath et al., 2014) expresses the gradient as expectation with respect to q(z|λ) and is given by\n∇λL(λ) = Eq(z|λ)[∇λ log q(z|λ) ( log p(x, z) − log q(z|λ))]. (2)\nThe gradient estimator is obtained by approximating the expectation with independent samples from the variational distribution q(z|λ). This estimator applies to continuous and discrete variational distributions.\nReparameterization Gradient The second approach is based on the reparametrization trick (Kingma and Welling, 2014), where the distribution over z is expressed as a deterministic transformation of another distribution over a noise\nvariable ε, hence z = gλ(ε) where ε ∼ p(ε). Using the reparameterization trick, the elbo is expressed as expectation with respect to p(ε) and the derivative is moved inside the expectation:\n∇λL(λ) = Ep(ε)[∇λ log p(x, gλ(ε)) − ∇λ log q(gλ(ε)|λ)]. (3)\nThe expectation is approximated using a mc sum of independent samples from p(ε). In its basic form, the estimator is restricted to distributions over continuous variables.\nMCVI In the general setup of mcvi considered here, the gradient of the elbo is represented as an expectation ∇λL(λ) = E[gz̃(λ)] over a random variable z̃. For the score function estimator we choose g according to Equation (2) with z̃ = z and for the reparameterization gradient according to Equation (3) with z̃ = ε, respectively. This allows us to obtain a stochastic estimator of the gradient by an average over a finite sample {z̃1, · · · , z̃N} as ĝN(λt) = (1/N) ∑N i=1 gz̃i (λt).This way, the elbo can be optimized by stochastic optimization. This is achieved by iterating the sgd updates with decreasing step sizes αt:\nλt+1 = λt + αtĝN(λt). (4)\nThe convergence of the gradient ascent scheme in (4) tends to be slow when gradient estimators have a high variance. Therefore, various approaches for reducing the variance of both gradient estimators exist; e.g. control variates (cv), Rao-Blackwellization and importance sampling. However these variance reduction techniques do not improve the O(N−1) rate of the MSE of the estimator, except under some restrictive conditions (Oates et al., 2017). Moreover, the variance reduction schemes must often be tailored to the problem at hand."
+  }, {
+    "heading": "3.2. Quasi-Monte Carlo Variational Inference",
+    "text": "Quasi Monte Carlo Low discrepancy sequences, also called qmc sequences, are used for integrating a function ψ over the [0, 1]d hypercube. When using standard i.i.d. samples on [0, 1]d, the error of the approximation is O(N−1). qmc achieves a rate of convergence in terms of the MSE of O ( N−2(log N)2d−2 ) if ψ is sufficiently regular (Leobacher and Pillichshammer, 2014). This is achieved by a deterministic sequence that covers [0, 1]d more evenly.\nOn a high level, qmc sequences are constructed such that the number of points that fall in a rectangular volume is proportional to the volume. This idea is closely linked to stratification. Halton sequences e.g. are constructed using coprime numbers (Halton, 1964). Sobol sequences are based on the reflected binary code (Antonov and Saleev, 1979). The exact construction of qmc sequences is quite involved and we refer to Niederreiter (1992); Leobacher\nand Pillichshammer (2014); Dick et al. (2013) for more details.\nThe approximation error of qmc increases with the dimension, and it is difficult to quantify. Carefully reintroducing randomness while preserving the structure of the sequence leads to randomized qmc. rqmc sequences are unbiased and the error can be assessed by repeated simulation. Moreover, under slightly stronger regularity conditions on F we can achieve rates of convergence of O(N−2) (Gerber, 2015). For illustration purposes, we show different sequences in Figure 1. In Appendix A we provide more technical details.\nqmc or rqmc can be used for integration with respect to arbitrary distributions by transforming the initial sequence on [0, 1]d via a transformation Γ to the distribution of interest. Constructing the sequence typically costs O(N log N) (Gerber and Chopin, 2015).\nQMC and VI We suggest to replace N independent mc samples for computing ĝN(λt) by an rqmc sequence of the same length. With our approach, the variance of the gradient estimators becomes O(N−2), and the costs for creating the sequence is O(N log N). The incorporation of rqmc in vi is straightforward: instead of sampling z̃ as independent mc samples, we generate a uniform rqmc sequence u1, · · · , uN and transform this sequence via a mapping Γ to the original random variable z̃ = Γ(u). Using this transformation we obtain the rqmc gradient estimator\nĝN(λt) = (1/N) N∑\ni=1\ngΓ(ui)(λ). (5)\nFrom a theoretical perspective, the function u 7→ gΓ(u)(λ) has to be sufficiently smooth for all λ. For commonly used variational families this transformation is readily available. Although evaluating these transforms adds computational overhead, we found this cost negligible in practice. For example, in order to sample from a multivariate Gaussian zn ∼ N(µ,Σ), we generate an rqmc squence un and apply the transformation zn = Φ−1(un)Σ1/2 + µ, where Σ1/2 is the Cholesky decomposition of Σ and Φ−1 is the componentwise inverse cdf of a standard normal distribution. Similar\nprocedures are easily obtained for exponential, Gamma, and other distributions that belong to the exponential family. Algorithm 1 summarizes the procedure.\nAlgorithm 1: Quasi-Monte Carlo Variational Inference Input: Data x, model p(x, z), variational family q(z|λ) Result: Variational parameters λ∗\n1 while not converged do 2 Generate uniform rqmc sequence u1:N 3 Transform the sequence via Γ 4 Estimate the gradient ĝN(λt) = 1N ∑N i=1 gΓ(ui)(λt) 5 Update λt+1 = λt + αt ĝN(λt)\nrqmc samples can be generated via standard packages such as randtoolbox (Christophe and Petr, 2015), available in R. Existing mcvi algorithms are adapted by replacing the random variable sampler by an rqmc version. Our approach reduces the variance in mcvi and applies in particular to the reparametrization gradient estimator and the score function estimator. rqmc can in principle be combined with additional variance reduction techniques such as cv, but care must be taken as the optimal cv for rqmc are not the same as for mc (Hickernell et al., 2005)."
+  }, {
+    "heading": "3.3. Theoretical Properties of QMCVI",
+    "text": "In what follows we give a theoretical analysis of using rqmc in stochastic optimization. Our results apply in particular to vi but are more general.\nqmcvi leads to faster convergence in combination with Adam (Kingma and Ba, 2015) or Adagrad (Duchi et al., 2011), as we will show empirically in Section 4. Our analysis, presented in this section, underlines this statement for the simple case of sgd with fixed step size in the Lipschitz continuous (Theorem 1) and strongly convex case (Theorem 2). We show that for N sufficiently large, sgd with rqmc samples reaches regions closer to the true optimizer of the elbo. Moreover, we obtain a faster convergence rate than sgd when using a fixed step size and increasing the sample size over iterations (Theorem 3).\nRQMC for Optimizing Monte Carlo Objectives We step back from black box variational inference and consider the more general setup of optimizing Monte Carlo objectives. Our goal is to minimize a function F(λ), where the optimizer has only access to a noisy, unbiased version F̂N(λ), with E[F̂N(λ)] = F(λ) and access to an unbiased noisy estimator of the gradients ĝN(λ), with E[ĝN(λ)] = ∇F(λ). The optimum of F(λ) is λ?.\nWe furthermore assume that the gradient estimator ĝN(λ) has the form as in Eq. 5, where Γ is a reparameterization function that converts uniform samples from the hypercube\ninto samples from the target distribution. In this paper, u1, · · · ,uN is an rqmc sequence. In the following theoretical analysis, we focus on sgd with a constant learning rate α. The optimal value λ? is approximated by sgd using the update rule\nλt+1 = λt − αĝN(λt). (6)\nStarting from λ1 the procedure is iterated until |F̂N(λt) − F̂N(λt+1)| ≤ , for a small threshold . The quality of the approximation λT ≈ λ? crucially depends on the variance of the estimator ĝN (Johnson and Zhang, 2013).\nIntuitively, the variance of ĝN(λ) based on an rqmc sequence will be O(N−2) and thus for N large enough, the variance will be smaller than for the mc counterpart, that is O(N−1). This will be beneficial to the optimization procedure defined in (6). Our following theoretical results are based on standard proof techniques for stochastic approximation, see e.g. Bottou et al. (2016).\nStochastic Gradient Descent with Fixed Step Size In the case of functions with Lipschitz continuous derivatives, we obtain the following upper bound on the norm of the gradients.\nTheorem 1 Let F be a function with Lipschitz continuous derivatives, i.e. there exists L > 0 s.t. ∀λ, λ ‖∇F(λ) − ∇F(λ)‖22 ≤ L‖λ − λ‖22, let UN = {u1, · · · ,uN} be an rqmc sequence and let ∀λ, G : u 7→ gΓ(u)(λ) has cross partial derivatives of up to order d. Let the constant learning rate α < 2/L and let µ = 1 − αL/2. Then ∀λ, tr VarUN [ĝN(λ)] ≤ MV × r(N), where MV < ∞ and r(N) = O ( N−2 ) and\n∑T t=1 E‖∇F(λt)‖22\nT\n≤ 1 2µ αLMVr(N) + F(λ1) − F(λ?) αµT ,\nwhere λt is iteratively defined in (6). Consequently,\nlim T→∞\n∑T t=1 E‖∇F(λt)‖22\nT ≤ 1 2µ αLMVr(N). (7)\nEquation (7) underlines the dependence of the sum of the norm of the gradients on the variance of the gradients. The better the gradients are estimated, the closer one gets to the optimum where the gradient vanishes. As the dependence on the sample size becomes O ( N−2 ) for an rqmc sequence instead of 1/N for a mc sequence, the gradient is more precisely estimated for N large enough.\nWe now study the impact of a reduced variance on sgd with a fixed step size and strongly convex functions. We obtain an improved upper bound on the optimality gap.\nTheorem 2 Let F have Lipschitz continuous derivatives and be a strongly convex function, i.e. there exists a constant c > 0 s.t. ∀λ, λ F(λ) ≥ F(λ) + ∇F(λ)T (λ − λ) + 12 c‖λ − λ‖22, let UN = {u1, · · · , uN} be an rqmc sequence and let ∀λ,G : u 7→ gΓ(u)(λ) be as in Theorem 1. Let the constant learning rate α < 12c and α < 2 L . Then the expected optimality gap satisfies, ∀t ≥ 0,\nE[F(λt+1) − F(λ?)] ≤ [( α2L\n2 − α\n) 2c + 1 ] × E[FN(λt) − F(λ?)]\n+ 1 2 Lα2 [MVr(N)] .\nConsequently,\nlim T→∞\nE[F(λT ) − F(λ?)] ≤ αL\n4c − αLc [MVr(N)] .\nThe previous result has the following interpretation. The expected optimality gap between the last iteration λT and the true minimizer λ? is upper bounded by the magnitude of the variance. The smaller this variance, the closer we get to λ?. Using rqmc we gain a factor 1/N in the bound.\nIncreasing Sample Size Over Iterations While sgd with a fixed step size and a fixed number of samples per gradient step does not converge, convergence can be achieved when increasing the number of samples used for estimating the gradient over iterations. As an extension of Theorem 2, we show that a linear convergence is obtained while increasing the sample size at a slower rate than for mc sampling.\nTheorem 3 Assume the conditions of Theorem 2 with the modification α ≤ min{1/c, 1/L}. Let 1−αc/2 < ξ2 = 1\nτ2 < 1.\nUse an increasing sample size Nt = N + dτte, where N < ∞ is defined in Appendix B.3. Then ∀t ∈ N,∃M̂V < ∞,\ntr VarUN [ĝNt (λ)] ≤ M̂V × 1 τ2t\nand E[F(λt+1) − F(λ?)] ≤ ωξ2t,\nwhere ω = max{αLM̂V/c, F(λ1) − F(λ?)}.\nThis result compares favorably with a standard result on the linear convergence of sgd with fixed step size and strongly convex functions (Bottou et al., 2016). For mc sampling one obtains a different constant ω̃ and an upper bound with ξt and not ξ2t. Thus, besides the constant factor, rqmc samples allow us to close the optimality gap faster for the same geometric increase in the sample size τt or to use τt/2 to obtain the same linear rate of convergence as mc based estimators.\nOther Remarks The reduced variance in the estimation of the gradients should allow us to make larger moves in the parameter space. This is for example achieved by using adaptive step size algorithms as Adam (Kingma and Ba, 2015), or Adagrad (Duchi et al., 2011). However, the theoretical analysis of these algorithms is beyond the scope of this paper.\nAlso, note that it is possible to relax the smoothness assumptions on G while supposing only square integrability. Then one obtains rates in o(N−1). Thus, rqmc yields always a faster rate than mc, regardless of the smoothness. See Appendix A for more details.\nIn the previous analysis, we have assumed that the entire randomness in the gradient estimator comes from the sampling of the variational distribution. In practice, additional randomness is introduced in the gradient via mini batch sampling. This leads to a dominating term in the variance of O(K−1) for mini batches of size K. Still, the part of the variance related to the variational family itself is reduced and so is the variance of the gradient estimator as a whole."
+  }, {
+    "heading": "4. Experiments",
+    "text": "We study the effectiveness of our method in three different settings: a hierarchical linear regression, a multi-level Poisson generalized linear model (GLM) and a Bayesian neural network (BNN). Finally, we confirm the result of Theorem 3, which proposes to increase the sample size over iterations in qmcvi for faster asymptotic convergence.\nSetup In the first three experiments we optimize the elbo using the Adam optimizer (Kingma and Ba, 2015) with the initial step size set to 0.1, unless otherwise stated. The rqmc sequences are generated through a python interface to the R package randtoolbox (Christophe and Petr, 2015). In particular we use scrambled Sobol sequences. The gradients are calculated using an automatic differentiation toolbox. The elbo values are computed by using 10, 000 mc samples, the variance of the gradient estimators is estimated by resampling the gradient 1000 times in each optimization step and computing the empirical variance.\nBenchmarks The first benchmark is the vanilla mcvi algorithm based on ordinary mc sampling. Our method qmcvi replaces the mc samples by rqmc sequences and comes at almost no computational overhead (Section 3).\nOur second benchmark in the second and third experiment is the control variate (cv) approach of Miller et al. (2017), where we use the code provided with the publication. In the first experiment, this comparison is omitted since the method of Miller et al. (2017) does not apply in this setting due to the non-Gaussian variational distribution.\nMain Results We find that our approach generally leads to a faster convergence compared to our baselines due to a decreased gradient variance. For the multi-level Poisson GLM experiment, we also find that our rqmc algorithm converges to a better local optimum of the elbo. As proposed in Theorem 3, we find that increasing the sample size over iteration in qmcvi leads to a better asymptotic convergence rate than in mcvi."
+  }, {
+    "heading": "4.1. Hierarchical Linear Regression",
+    "text": "We begin the experiments with a toy model of hierarchical linear regression with simulated data. The sampling process for the outputs yi is yi ∼ N(x>i bi, ), bi ∼ N(µβ, σβ). We place lognormal hyper priors on the variance of the intercepts σβ and on the noise ; and a Gaussian hyper prior on µβ. Details on the model are provided in Appendix C.1. We set the dimension of the data points to be 10 and simulated 100 data points from the model. This results in a 1012-\n1Using only 10 samples for the mc based score function estimator leads to divergence and the elbo values are out of the scope of the plot.\ndimensional posterior, which we approximate by a variational distribution that mirrors the prior distributions.\nWe optimize the elbo using Adam (Kingma and Ba, 2015) based on the score function as well as the reparameterization gradient estimator. We compare the standard mc based approach using 10 and 100 samples with our rqmc based approach using 10 samples, respectively. The cv based estimator cannot be used in this setting since it only supports Gaussian variational distributions and the variational family includes a lognormal distribution. For the score function estimator, we set the initial step size of Adam to 0.01.\nThe results are shown in Figure 2. We find that using rqmc samples decreases the variance of the gradient estimator substantially. This applies both to the score function and the reparameterization gradient estimator. Our approach substantially improves the standard score function estimator in terms of convergence speed and leads to a decreased gradient variance of up to three orders of magnitude. Our approach is also beneficial in the case of the reparameterization gradient estimator, as it allows for reducing the sample size from 100 mc samples to 10 rqmc samples, yielding a similar gradient variance and optimization speed."
+  }, {
+    "heading": "4.2. Multi-level Poisson GLM",
+    "text": "We use a multi-level Poisson generalized linear model (GLM), as introduced in (Gelman and Hill, 2006) as an example of multi-level modeling. This model has a 37-dim posterior, resulting from its hierarchical structure.\nAs in (Miller et al., 2017), we apply this model to the frisk data set (Gelman et al., 2006) that contains information on the number of stop-and-frisk events within different ethnicity groups. The generative process of the model is described in Appendix C.2. We approximate the posterior by a diagonal Gaussian variational distribution.\nThe results are shown in Figure 3. When using a small number of samples (N = 10), all three methods have comparable convergence speed and attain a similar optimum. In this setting, the cv based method has lowest gradient variance. When increasing the sample size to 50, our proposed rqmc approach leads to substantially decreased gradient variance and allows Adam to convergence closer to the optimum than the baselines. This agrees with the fact that rqmc improves over mc for sufficiently large sample sizes."
+  }, {
+    "heading": "4.3. Bayesian Neural Network",
+    "text": "As a third example, we study qmcvi and its baselines in the context of a Bayesian neural network. The network consists of a 50-unit hidden layer with ReLU activations. We place a normal prior over each weight, and each weight prior has an inverse Gamma hyper prior. We also place an inverse Gamma prior over the observation variance. The model exhibits a posterior of dimension d = 653 and is applied to a 100-row subsample of the wine dataset from the UCI repository2. The generative process is described in Appendix C.3. We approximate the posterior by a variational diagonal Gaussian.\nThe results are shown in Figure 4. For N = 10, both the rqmc and the cv version converge to a comparable value of the elbo, whereas the ordinary mc approach converges to a lower value. For N = 50, all three algorithms reach approximately the same value of the elbo, but our rqmc method converges much faster. In both settings, the variance of the rqmc gradient estimator is one to three orders of magnitude lower than the variance of the baselines."
+  }, {
+    "heading": "4.4. Increasing the Sample Size Over Iterations",
+    "text": "Along with our new Monte Carlo variational inference approach qmcvi, Theorem 3 gives rise to a new stochastic optimization algorithm for Monte Carlo objectives. Here, we investigate this algorithm empirically, using a constant learning rate and an (exponentially) increasing sample size schedule. We show that, for strongly convex objective functions and some mild regularity assumptions, our rqmc based gradient estimator leads to a faster asymptotic convergence rate than using the ordinary mc based gradient estimator.\nIn our experiment, we consider a two-dimensional factorizing normal target distribution with zero mean and standard deviation one. Our variational distribution is also a normal distribution with fixed standard deviation of 1, and with a variational mean parameter, i.e., we only optimize the mean parameter. In this simple setting, the elbo is strongly convex and the variational family includes the target distribution. We optimize the elbo with an increasing sample size, using the sgd algorithm described in Theorem 3. We initialize the variational parameter to (0.1, 0.1). Results are shown in Figure 5.\nWe considered both rqmc (red) and mc (blue) based gradient estimators. We plot the difference between the optimal elbo value and the optimization trace in logarithmic scale. The experiment confirms the theoretical result of Theorem 3 as our rqmc based method attains a faster asymptotic convergence rate than the ordinary mc based approach. This means that, in the absence of additional noise due to data\n2https://archive.ics.uci.edu/ml/datasets/Wine+ Quality\nsubsampling, optimizing Monte Carlo objectives with rqmc can drastically outperform sgd."
+  }, {
+    "heading": "5. Conclusion",
+    "text": "We investigated randomized Quasi-Monte Carlo (rqmc) for stochastic optimization of Monte Carlo objectives. We termed our method Quasi-Monte Carlo Variational Inference (qmcvi), currently focusing on variational inference applications. Using our method, we showed that we can achieve faster convergence due to variance reduction.\nqmcvi has strong theoretical guarantees and provably gets us closer to the optimum of the stochastic objective. Furthermore, in absence of additional sources of noise such as data subsampling noise, qmcvi converges at a faster rate than sgd when increasing the sample size over iterations.\nqmcvi can be easily integrated into automated inference packages. All one needs to do is replace a sequence of uniform random numbers over the hypercube by an rqmc sequence, and perform the necessary reparameterizations to sample from the target distributions.\nAn open question remains as to which degree qmcvi can be combined with control variates, as rqmc may introduce additional unwanted correlations between the gradient and the cv. We will leave this aspect for future studies. We see particular potential for qmcvi in the context of reinforcement learning, which we consider to investigate."
+  }, {
+    "heading": "Acknowledgements",
+    "text": "We would like to thank Pierre E. Jacob, Nicolas Chopin, Rajesh Ranganath, Jaan Altosaar and Marius Kloft for their valuable feedback on our manuscript. This work was partly funded by the German Research Foundation (DFG) award KL 2698/2-1 and a GENES doctoral research scholarship."
+  }],
+  "references": [{
+    "title": "An economic method of computing LPτ-sequences",
+    "authors": ["I.A. Antonov", "V. Saleev"],
+    "venue": "USSR Computational Mathematics and Mathematical Physics, 19(1):252–256.",
+    "year": 1979
+  }, {
+    "title": "Variational inference: A review for statisticians",
+    "authors": ["D.M. Blei", "A. Kucukelbir", "J.D. McAuliffe"],
+    "venue": "Journal of the American Statistical Association, 112(518):859–877.",
+    "year": 2017
+  }, {
+    "title": "Optimization methods for large-scale machine learning",
+    "authors": ["L. Bottou", "F.E. Curtis", "J. Nocedal"],
+    "venue": "arXiv preprint arXiv:1606.04838.",
+    "year": 2016
+  }, {
+    "title": "Improving approximate Bayesian computation via quasi Monte Carlo",
+    "authors": ["A. Buchholz", "N. Chopin"],
+    "venue": "arXiv preprint arXiv:1710.01057.",
+    "year": 2017
+  }, {
+    "title": "Importance weighted autoencoders",
+    "authors": ["Y. Burda", "R. Grosse", "R. Salakhutdinov"],
+    "venue": "Proceedings of the International Conference on Learning Representations.",
+    "year": 2016
+  }, {
+    "title": "Stan: A probabilistic programming language",
+    "authors": ["B. Carpenter", "A. Gelman", "M. Hoffman", "D. Lee", "B. Goodrich", "M. Betancourt", "M. Brubaker", "J. Guo", "P. Li", "A. Riddell"],
+    "venue": "Journal of Statistical Software, Articles, 76(1):1–32.",
+    "year": 2017
+  }, {
+    "title": "randtoolbox: Generating and Testing Random Numbers",
+    "authors": ["D. Christophe", "S. Petr"],
+    "venue": "R package version 1.17.",
+    "year": 2015
+  }, {
+    "title": "Saga: A fast incremental gradient method with support for non-strongly convex composite objectives",
+    "authors": ["A. Defazio", "F. Bach", "S. Lacoste-Julien"],
+    "venue": "Advances in Neural Information Processing Systems, pages 1646–1654.",
+    "year": 2014
+  }, {
+    "title": "High-dimensional integration: The quasi-monte carlo way",
+    "authors": ["J. Dick", "F.Y. Kuo", "I.H. Sloan"],
+    "venue": "Acta Numerica, 22:133– 288.",
+    "year": 2013
+  }, {
+    "title": "Quasi-monte carlo strategies for stochastic optimization",
+    "authors": ["S.S. Drew", "T. Homem-de Mello"],
+    "venue": "Proceedings of the 38th conference on Winter simulation, pages 774–782. Winter Simulation Conference.",
+    "year": 2006
+  }, {
+    "title": "Improving the Efficiency of Fully Bayesian Optimal Design of Experiments Using Randomised Quasi-Monte Carlo",
+    "authors": ["C.C. Drovandi", "Tran", "M.-N."],
+    "venue": "Bayesian Anal., 13(1):139–162.",
+    "year": 2018
+  }, {
+    "title": "Adaptive subgradient methods for online learning and stochastic optimization",
+    "authors": ["J. Duchi", "E. Hazan", "Y. Singer"],
+    "venue": "Journal of Machine Learning Research, 12(Jul):2121–2159.",
+    "year": 2011
+  }, {
+    "title": "Data analysis using regression and multilevel/hierarchical models",
+    "authors": ["A. Gelman", "J. Hill"],
+    "venue": "Cambridge university press.",
+    "year": 2006
+  }, {
+    "title": "An analysis of the nypd’s stop-and-frisk policy in the context of claims of racial bias",
+    "authors": ["A. Gelman", "A. Kiss", "J. Fagan"],
+    "venue": "Columbia Public Law & Legal Theory Working Papers, page 0595.",
+    "year": 2006
+  }, {
+    "title": "On integration methods based on scrambled nets of arbitrary size",
+    "authors": ["M. Gerber"],
+    "venue": "Journal of Complexity, 31(6):798–816.",
+    "year": 2015
+  }, {
+    "title": "Improving simulated annealing through derandomization",
+    "authors": ["M. Gerber", "L. Bornn"],
+    "venue": "Journal of Global Optimization, 68(1):189–217.",
+    "year": 2017
+  }, {
+    "title": "Sequential quasi monte carlo",
+    "authors": ["M. Gerber", "N. Chopin"],
+    "venue": "Journal of the Royal Statistical Society: Series B (Statistical Methodology), 77(3):509–579.",
+    "year": 2015
+  }, {
+    "title": "Monte Carlo methods in financial engineering, volume 53",
+    "authors": ["P. Glasserman"],
+    "venue": "Springer Science & Business Media.",
+    "year": 2013
+  }, {
+    "title": "Generative adversarial nets",
+    "authors": ["I. Goodfellow", "J. Pouget-Abadie", "M. Mirza", "B. Xu", "D. WardeFarley", "S. Ozair", "A. Courville", "Y. Bengio"],
+    "venue": "Advances in neural information processing systems, pages 2672–2680.",
+    "year": 2014
+  }, {
+    "title": "Algorithm 247: Radical-inverse quasirandom point sequence",
+    "authors": ["J.H. Halton"],
+    "venue": "Communications of the ACM, 7(12):701–702.",
+    "year": 1964
+  }, {
+    "title": "On double Fourier series, and especially those which represent the double zeta-function with real and incommensurable parameters",
+    "authors": ["G.H. Hardy"],
+    "venue": "Quart. J., 37:53–79.",
+    "year": 1905
+  }, {
+    "title": "Koksma-Hlawka Inequality",
+    "authors": ["F.J. Hickernell"],
+    "venue": "American Cancer Society.",
+    "year": 2006
+  }, {
+    "title": "Control variates for quasi-monte carlo",
+    "authors": ["F.J. Hickernell", "C. Lemieux", "Owen", "A. B"],
+    "venue": "Statistical Science,",
+    "year": 2005
+  }, {
+    "title": "Stochastic variational inference",
+    "authors": ["M.D. Hoffman", "D.M. Blei", "C. Wang", "J. Paisley"],
+    "venue": "The Journal of Machine Learning Research, 14(1):1303–1347.",
+    "year": 2013
+  }, {
+    "title": "Accelerating stochastic gradient descent using predictive variance reduction",
+    "authors": ["R. Johnson", "T. Zhang"],
+    "venue": "Advances in neural information processing systems, pages 315–323.",
+    "year": 2013
+  }, {
+    "title": "An introduction to variational methods for graphical models",
+    "authors": ["M.I. Jordan", "Z. Ghahramani", "T.S. Jaakkola", "L.K. Saul"],
+    "venue": "Machine learning, 37(2):183–233.",
+    "year": 1999
+  }, {
+    "title": "Quasi-monte carlo methods in numerical finance",
+    "authors": ["C. Joy", "P.P. Boyle", "K.S. Tan"],
+    "venue": "Management Science, 42(6):926– 938.",
+    "year": 1996
+  }, {
+    "title": "Adam: A method for stochastic optimization",
+    "authors": ["D. Kingma", "J. Ba"],
+    "venue": "Proceedings of the International Conference on Learning Representations.",
+    "year": 2015
+  }, {
+    "title": "Auto-encoding variational bayes",
+    "authors": ["D.P. Kingma", "M. Welling"],
+    "venue": "Proceedings of the International Conference on Learning Representations.",
+    "year": 2014
+  }, {
+    "title": "Uniform distribution of sequences",
+    "authors": ["L. Kuipers", "H. Niederreiter"],
+    "venue": "Courier Corporation.",
+    "year": 2012
+  }, {
+    "title": "Recent advances in randomized quasi-Monte Carlo methods",
+    "authors": ["P. L’Ecuyer", "C. Lemieux"],
+    "venue": "In Modeling uncertainty,",
+    "year": 2005
+  }, {
+    "title": "On the use of quasi-monte carlo methods in computational finance",
+    "authors": ["C. Lemieux", "P. L’Ecuyer"],
+    "venue": "In International Conference on Computational Science,",
+    "year": 2001
+  }, {
+    "title": "Introduction to quasi-Monte Carlo integration and applications",
+    "authors": ["G. Leobacher", "F. Pillichshammer"],
+    "venue": "Springer.",
+    "year": 2014
+  }, {
+    "title": "Stochastic Gradient Descent as Approximate Bayesian Inference",
+    "authors": ["S. Mandt", "M.D. Hoffman", "D.M. Blei"],
+    "venue": "Journal of Machine Learning Research, 18(134):1–35.",
+    "year": 2017
+  }, {
+    "title": "Reducing reparameterization gradient variance",
+    "authors": ["A.C. Miller", "N. Foti", "A. D’Amour", "R.P. Adams"],
+    "venue": "In Advances in Neural Information Processing Systems",
+    "year": 2017
+  }, {
+    "title": "Non-asymptotic analysis of stochastic approximation algorithms for machine learning",
+    "authors": ["E. Moulines", "F.R. Bach"],
+    "venue": "Advances in Neural Information Processing Systems.",
+    "year": 2011
+  }, {
+    "title": "Introductory lectures on convex optimization: A basic course, volume 87",
+    "authors": ["Y. Nesterov"],
+    "venue": "Springer Science & Business Media.",
+    "year": 2013
+  }, {
+    "title": "Random number generation and quasiMonte Carlo methods",
+    "authors": ["H. Niederreiter"],
+    "venue": "SIAM.",
+    "year": 1992
+  }, {
+    "title": "Control functionals for quasimonte carlo integration",
+    "authors": ["C. Oates", "M. Girolami"],
+    "venue": "Artificial Intelligence and Statistics, pages 56–65.",
+    "year": 2016
+  }, {
+    "title": "Control functionals for Monte Carlo integration",
+    "authors": ["C.J. Oates", "M. Girolami", "N. Chopin"],
+    "venue": "Journal of the Royal Statistical Society: Series B (Statistical Methodology), 79(3):695–718.",
+    "year": 2017
+  }, {
+    "title": "Scrambled Net Variance for Integrals of Smooth Functions",
+    "authors": ["A.B. Owen"],
+    "venue": "The Annals of Statistics, 25(4):1541–1562.",
+    "year": 1997
+  }, {
+    "title": "Local antithetic sampling with scrambled nets",
+    "authors": ["Owen", "A. B"],
+    "venue": "The Annals of Statistics, 36(5):2319–2343.",
+    "year": 2008
+  }, {
+    "title": "Variational Bayesian inference with stochastic search",
+    "authors": ["J. Paisley", "D. Blei", "M. Jordan"],
+    "venue": "International Conference on Machine Learning.",
+    "year": 2012
+  }, {
+    "title": "Black box variational inference",
+    "authors": ["R. Ranganath", "S. Gerrish", "D.M. Blei"],
+    "venue": "Proceedings of the International Conference on Artificial Intelligence and Statistics.",
+    "year": 2014
+  }, {
+    "title": "Stochastic backpropagation and approximate inference in deep generative models",
+    "authors": ["D.J. Rezende", "S. Mohamed", "D. Wierstra"],
+    "venue": "Proceedings of the International Conference on Machine Learning.",
+    "year": 2014
+  }, {
+    "title": "A stochastic approximation method",
+    "authors": ["H. Robbins", "S. Monro"],
+    "venue": "The annals of mathematical statistics, pages 400–407.",
+    "year": 1951
+  }, {
+    "title": "Monte Carlo Statistical Methods",
+    "authors": ["C. Robert", "G. Casella"],
+    "venue": "Springer Science & Business Media.",
+    "year": 2013
+  }, {
+    "title": "Sticking the landing: Simple, lower-variance gradient estimators for variational inference",
+    "authors": ["G. Roeder", "Y. Wu", "D.K. Duvenaud"],
+    "venue": "Advances in Neural Information Processing Systems.",
+    "year": 2017
+  }, {
+    "title": "Remarks on a multivariate transformation",
+    "authors": ["M. Rosenblatt"],
+    "venue": "Ann. Math. Statist., 23(3):470–472.",
+    "year": 1952
+  }, {
+    "title": "Overdispersed black-box variational inference",
+    "authors": ["F.J.R. Ruiz", "M.K. Titsias", "D.M. Blei"],
+    "venue": "Proceedings of the Conference on Uncertainty in Artificial Intelligence.",
+    "year": 2016
+  }, {
+    "title": "The generalized reparameterization gradient",
+    "authors": ["F.R. Ruiz", "M. Titsias", "D. Blei"],
+    "venue": "Advances in Neural Information Processing Systems.",
+    "year": 2016
+  }, {
+    "title": "Reinforcement learning: An introduction",
+    "authors": ["R.S. Sutton", "A.G. Barto"],
+    "venue": "MIT press Cambridge.",
+    "year": 1998
+  }, {
+    "title": "Edward: A library for probabilistic modeling, inference, and criticism",
+    "authors": ["D. Tran", "A. Kucukelbir", "A.B. Dieng", "M. Rudolph", "D. Liang", "D.M. Blei"],
+    "venue": "arXiv preprint arXiv:1610.09787.",
+    "year": 2016
+  }, {
+    "title": "Variational bayes with intractable likelihood",
+    "authors": ["Tran", "M.-N.", "D.J. Nott", "R. Kohn"],
+    "venue": "Journal of Computational and Graphical Statistics, 26(4):873–882.",
+    "year": 2017
+  }, {
+    "title": "Quasi-monte carlo feature maps for shift-invariant kernels",
+    "authors": ["J. Yang", "V. Sindhwani", "H. Avron", "M. Mahoney"],
+    "venue": "International Conference on Machine Learning, pages 485–493.",
+    "year": 2014
+  }, {
+    "title": "Advances in variational inference",
+    "authors": ["C. Zhang", "J. Butepage", "H. Kjellstrom", "S. Mandt"],
+    "venue": "arXiv preprint arXiv:1711.05597.",
+    "year": 2017
+  }, {
+    "title": "Determinantal point processes for mini-batch diversification",
+    "authors": ["C. Zhang", "H. Kjellström", "S. Mandt"],
+    "venue": "Uncertainty in Artificial Intelligence, UAI 2017.",
+    "year": 2017
+  }],
+  "id": "SP:de99809d050d180492f7e04995fcca2da3b9c9f0",
+  "authors": [{
+    "name": "Alexander Buchholz",
+    "affiliations": []
+  }, {
+    "name": "Florian Wenzel",
+    "affiliations": []
+  }, {
+    "name": "Stephan Mandt",
+    "affiliations": []
+  }],
+  "abstractText": "Many machine learning problems involve Monte Carlo gradient estimators. As a prominent example, we focus on Monte Carlo variational inference (mcvi) in this paper. The performance of mcvi crucially depends on the variance of its stochastic gradients. We propose variance reduction by means of Quasi-Monte Carlo (qmc) sampling. qmc replaces N i.i.d. samples from a uniform probability distribution by a deterministic sequence of samples of length N. This sequence covers the underlying random variable space more evenly than i.i.d. draws, reducing the variance of the gradient estimator. With our novel approach, both the score function and the reparameterization gradient estimators lead to much faster convergence. We also propose a new algorithm for Monte Carlo objectives, where we operate with a constant learning rate and increase the number of qmc samples per iteration. We prove that this way, our algorithm can converge asymptotically at a faster rate than sgd. We furthermore provide theoretical guarantees on qmc for Monte Carlo objectives that go beyond mcvi, and support our findings by several experiments on large-scale data sets from various domains.",
+  "title": "Quasi-Monte Carlo Variational Inference"
+}

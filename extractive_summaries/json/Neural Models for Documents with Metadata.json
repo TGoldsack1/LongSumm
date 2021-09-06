@@ -1,0 +1,274 @@
+{
+  "sections": [{
+    "text": "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Long Papers), pages 2031–2040 Melbourne, Australia, July 15 - 20, 2018. c©2018 Association for Computational Linguistics\n2031"
+  }, {
+    "heading": "1 Introduction",
+    "text": "Topic models comprise a family of methods for uncovering latent structure in text corpora, and are widely used tools in the digital humanities, political science, and other related fields (Boyd-Graber et al., 2017). Latent Dirichlet allocation (LDA; Blei et al., 2003) is often used when there is no prior knowledge about a corpus. In the real world, however, most documents have non-textual attributes such as author (Rosen-Zvi et al., 2004), timestamp (Blei and Lafferty, 2006), rating (McAuliffe and Blei, 2008), or ideology (Eisenstein et al., 2011; Nguyen et al., 2015b), which we refer to as metadata.\nMany customizations of LDA have been developed to incorporate document metadata. Two models of note are supervised LDA (SLDA; McAuliffe\nand Blei, 2008), which jointly models words and labels (e.g., ratings) as being generated from a latent representation, and sparse additive generative models (SAGE; Eisenstein et al., 2011), which assumes that observed covariates (e.g., author ideology) have a sparse effect on the relative probabilities of words given topics. The structural topic model (STM; Roberts et al., 2014), which adds correlations between topics to SAGE, is also widely used, but like SAGE it is limited in the types of metadata it can efficiently make use of, and how that metadata is used. Note that in this work we will distinguish labels (metadata that are generated jointly with words from latent topic representations) from covariates (observed metadata that influence the distribution of labels and words).\nThe ability to create variations of LDA such as those listed above has been limited by the expertise needed to develop custom inference algorithms for each model. As a result, it is rare to see such variations being widely used in practice. In this work, we take advantage of recent advances in variational methods (Kingma and Welling, 2014; Rezende et al., 2014; Miao et al., 2016; Srivastava and Sutton, 2017) to facilitate approximate Bayesian inference without requiring model-specific derivations, and propose a general neural framework for topic models with metadata, SCHOLAR.1\nSCHOLAR combines the abilities of SAGE and SLDA, and allows for easy exploration of the following options for customization:\n1. Covariates: as in SAGE and STM, we incorporate explicit deviations for observed covariates, as well as effects for interactions with topics.\n2. Supervision: as in SLDA, we can use metadata as labels to help infer topics that are relevant in predicting those labels. 1Sparse Contextual Hidden and Observed Language AutoencodeR.\n3. Rich encoder network: we use the encoding network of a variational autoencoder (VAE) to incorporate additional prior knowledge in the form of word embeddings, and/or to provide interpretable embeddings of covariates.\n4. Sparsity: as in SAGE, a sparsity-inducing prior can be used to encourage more interpretable topics, represented as sparse deviations from a background log-frequency.\nWe begin with the necessary background and motivation (§2), and then describe our basic framework and its extensions (§3), followed by a series of experiments (§4). In an unsupervised setting, we can customize the model to trade off between perplexity, coherence, and sparsity, with improved coherence through the introduction of word vectors. Alternatively, by incorporating metadata we can either learn topics that are more predictive of labels than SLDA, or learn explicit deviations for particular parts of the metadata. Finally, by combining all parts of our model we can meaningfully incorporate metadata in multiple ways, which we demonstrate through an exploration of a corpus of news articles about US immigration.\nIn presenting this particular model, we emphasize not only its ability to adapt to the characteristics of the data, but the extent to which the VAE approach to inference provides a powerful framework for latent variable modeling that suggests the possibility of many further extensions. Our implementation is available at https://github. com/dallascard/scholar."
+  }, {
+    "heading": "2 Background and Motivation",
+    "text": "LDA can be understood as a non-negative Bayesian matrix factorization model: the observed document-word frequency matrix, X ∈ ZD×V (D is the number of documents, V is the vocabulary size) is factored into two low-rank matrices, ΘD×K and BK×V , where each row of Θ, θi ∈ ∆K is a latent variable representing a distribution over topics in document i, and each row of B, βk ∈ ∆V , represents a single topic, i.e., a distribution over words in the vocabulary.2 While it is possible to factor the count data into unconstrained\n2Z denotes nonnegative integers, and ∆K denotes the set of K-length nonnegative vectors that sum to one. For a proper probabilistic interpretation, the matrix to be factored is actually the matrix of latent mean parameters of the assumed data generating process, Xij ∼ Poisson(Λij). See Cemgil (2009) or Paisley et al. (2014) for details.\nmatrices, the particular priors assumed by LDA are important for interpretability (Wallach et al., 2009). For example, the neural variational document model (NVDM; Miao et al., 2016) allows θi ∈ RK and achieves normalization by taking the softmax of θ>i B. However, the experiments in Srivastava and Sutton (2017) found the performance of the NVDM to be slightly worse than LDA in terms of perplexity, and dramatically worse in terms of topic coherence.\nThe topics discovered by LDA tend to be parsimonious and coherent groupings of words which are readily identifiable to humans as being related to each other (Chang et al., 2009), and the resulting mode of the matrix Θ provides a representation of each document which can be treated as a measurement for downstream tasks, such as classification or answering social scientific questions (Wallach, 2016). LDA does not require — and cannot make use of — additional prior knowledge. As such, the topics that are discovered may bear little connection to metadata of a corpus that is of interest to a researcher, such as sentiment, ideology, or time.\nIn this paper, we take inspiration from two models which have sought to alleviate this problem. The first, supervised LDA (SLDA; McAuliffe and Blei, 2008), assumes that documents have labels y which are generated conditional on the corresponding latent representation, i.e., yi ∼ p(y | θi).3 By incorporating labels into the model, it is forced to learn topics which allow documents to be represented in a way that is useful for the classification task. Such models can be used inductively as text classifiers (Balasubramanyan et al., 2012).\nSAGE (Eisenstein et al., 2011), by contrast, is an exponential-family model, where the key innovation was to replace topics with sparse deviations from the background log-frequency of words (d), i.e., p(word | softmax(d+θ>i B)). SAGE can also incorporate deviations for observed covariates, as well as interactions between topics and covariates, by including additional terms inside the softmax. In principle, this allows for inferring, for example, the effect on an author’s ideology on their choice of words, as well as ideological variations on each underlying topic. Unlike the NVDM, SAGE still constrains θi to lie on the simplex, as in LDA.\nSLDA and SAGE provide two different ways that users might wish to incorporate prior knowl-\n3Technically, the model conditions on the mean of the perword latent variables, but we elide this detail in the interest of concision.\nedge as a way of guiding the discovery of topics in a corpus: SLDA incorporates labels through a distribution conditional on topics; SAGE includes explicit sparse deviations for each unique value of a covariate, in addition to topics.4\nBecause of the Dirichlet-multinomial conjugacy in the original model, efficient inference algorithms exist for LDA. Each variation of LDA, however, has required the derivation of a custom inference algorithm, which is a time-consuming and errorprone process. In SLDA, for example, each type of distribution we might assume for p(y | θ) would require a modification of the inference algorithm. SAGE breaks conjugacy, and as such, the authors adopted L-BFGS for optimizing the variational bound. Moreover, in order to maintain computational efficiency, it assumed that covariates were limited to a single categorical label.\nMore recently, the variational autoencoder (VAE) was introduced as a way to perform approximate posterior inference on models with otherwise intractable posteriors (Kingma and Welling, 2014; Rezende et al., 2014). This approach has previously been applied to models of text by Miao et al. (2016) and Srivastava and Sutton (2017). We build on their work and show how this framework can be adapted to seamlessly incorporate the ideas of both SAGE and SLDA, while allowing for greater flexibility in the use of metadata. Moreover, by exploiting automatic differentiation, we allow for modification of the model without requiring any change to the inference procedure. The result is not only a highly adaptable family of models with scalable inference and efficient prediction; it also points the way to incorporation of many ideas found in the literature, such as a gradual evolution of topics (Blei and Lafferty, 2006), and hierarchical models (Blei et al., 2010; Nguyen et al., 2013, 2015b).\n3 SCHOLAR: A Neural Topic Model with Covariates, Supervision, and Sparsity\nWe begin by presenting the generative story for our model, and explain how it generalizes both SLDA and SAGE (§3.1). We then provide a general explanation of inference using VAEs and how it applies to our model (§3.2), as well as how to infer docu-\n4A third way of incorporating metadata is the approach used by various “upstream” models, such as Dirichletmultinomial regression (Mimno and McCallum, 2008), which uses observed metadata to inform the document prior. We hypothesize that this approach could be productively combined with our framework, but we leave this as future work.\nment representations and predict labels at test time (§3.3). Finally, we discuss how we can incorporate additional prior knowledge (§3.4)."
+  }, {
+    "heading": "3.1 Generative Story",
+    "text": "Consider a corpus of D documents, where document i is a list of Ni words, wi, with V words in the vocabulary. For each document, we may have observed covariates ci (e.g., year of publication), and/or one or more labels, yi (e.g., sentiment).\nOur model builds on the generative story of LDA, but optionally incorporates labels and covariates, and replaces the matrix product of Θ and B with a more flexible generative network, fg, followed by a softmax transform. Instead of using a Dirichlet prior as in LDA, we employ a logistic normal prior on θ as in Srivastava and Sutton (2017) to facilitate inference (§3.2): we draw a latent variable, r,5 from a multivariate normal, and transform it to lie on the simplex using a softmax transform.6\nThe generative story is shown in Figure 1a and described in equations below:\nFor each document i of length Ni: # Draw a latent representation on the simplex from a logistic normal prior: ri ∼ N (r | µ0(α), diag(σ20(α))) θi = softmax(ri) # Generate words, incorporating covariates: ηi = fg(θi, ci) For each word j in document i:\nwij ∼ p(w | softmax(ηi)) # Similarly generate labels: yi ∼ p(y | fy(θi, ci)),\nwhere p(w | softmax(ηi)) is a multinomial distribution and p(y | fy(θi, ci)) is a distribution appropriate to the data (e.g., multinomial for categorical labels). fg is a model-specific combination of latent variables and covariates, fy is a multi-layer neural network, and µ0(α) and σ20(α) are the mean and diagonal covariance terms of a multivariate normal prior. To approximate a symmetric Dirichlet\n5r is equivalent to z in the original VAE. To avoid confusion with topic assignment of words in the topic modeling literature, we use r instead of z.\n6Unlike the correlated topic model (CTM; Lafferty and Blei, 2006), which also uses a logistic-normal prior, we fix the parameters of the prior and use a diagonal covariance matrix, rather than trying to infer correlations among topics. However, it would be a straightforward extension of our framework to place a richer prior on the latent document representations, and learn correlations by updating the parameters of this prior after each epoch, analogously to the variational EM approach used for the CTM.\nprior with hyperparameter α, these are given by the Laplace approximation (Hennig et al., 2012) to be µ0,k(α) = 0 and σ20,k = (K − 1)/(αK).\nIf we were to ignore covariates, place a Dirichlet prior on B, and let η = θ>i B, this model is equivalent to SLDA with a logistic normal prior. Similarly, we can recover a model that is like SAGE, but lacks sparsity, if we ignore labels, and let\nηi = d+ θ > i B + c > i B cov + (θi ⊗ ci)>Bint, (1)\nwhere d is the V -dimensional background term (representing the log of the overall word frequency), θi ⊗ ci is a vector of interactions between topics and covariates, and Bcov and Bint are additional weight (deviation) matrices. The background is included to account for common words with approximately the same frequency across documents, meaning that the B∗ weights now represent both positive and negative deviations from this background. This is the form of fg which we will use in our experiments.\nTo recover the full SAGE model, we can place a sparsity-inducing prior on each B∗. As in Eisenstein et al. (2011), we make use of the compound normal-exponential prior for each element of the weight matrices, B∗m,n, with hyperparameter γ, 7\nτm,n ∼ Exponential(γ), (2) B∗m,n ∼ N (0, τm,n). (3)\nWe can choose to ignore various parts of this model, if, for example, we don’t have any labels or observed covariates, or we don’t wish to use interactions or sparsity.8 Other generator networks could also be considered, with additional layers to represent more complex interactions, although this might involve some loss of interpretability.\nIn the absence of metadata, and without sparsity, our model is equivalent to the ProdLDA model of Srivastava and Sutton (2017) with an explicit background term, and ProdLDA is, in turn, a\n7To avoid having to tune γ, we employ an improper Jeffery’s prior, p(τm,n) ∝ 1/τm,n, as in SAGE. Although this causes difficulties in posterior inference for the variance terms, τ , in practice, we resort to a variational EM approach, with MAP-estimation for the weights, B, and thus alternate between computing expectations of the τ parameters, and updating all other parameters using some variant of stochastic gradient descent. For this, we only require the expectation of each τmn for each E-step, which is given by 1/B2m,n. We refer the reader to Eisenstein et al. (2011) for additional details.\n8We could also ignore latent topics, in which case we would get a naïve Bayes-like model of text with deviations for each covariate p(wij | ci) ∝ exp(d+ c>i Bcov).\nspecial case of SAGE, without background logfrequencies, sparsity, covariates, or labels. In the next section we generalize the inference method used for ProdLDA; in our experiments we validate its performance and explore the effects of regularization and word-vector initialization (§3.4). The NVDM (Miao et al., 2016) uses the same approach to inference, but does not not restrict document representations to the simplex."
+  }, {
+    "heading": "3.2 Learning and Inference",
+    "text": "As in past work, each document i is assumed to have a latent representation ri, which can be interpreted as its relative membership in each topic (after exponentiating and normalizing). In order to infer an approximate posterior distribution over ri, we adopt the sampling-based VAE framework developed in previous work (Kingma and Welling, 2014; Rezende et al., 2014).\nAs in conventional variational inference, we assume a variational approximation to the posterior, qΦ(ri | wi, ci,yi), and seek to minimize the KL divergence between it and the true posterior, p(ri | wi, ci,yi), where Φ is the set of variational parameters to be defined below. After some manipulations (given in supplementary materials), we obtain the evidence lower bound (ELBO) for a sin-\ngle document,\nL(wi) = EqΦ(ri|wi,ci,yi)  Ni∑ j=1 log p(wij | ri, ci)  + EqΦ(ri|wi,ci,yi) [log p(yi | ri, ci)]\n− DKL [qΦ(ri | wi, ci,yi) || p(ri | α)] . (4)\nAs in the original VAE, we will encode the parameters of our variational distributions using a shared multi-layer neural network. Because we have assumed a diagonal normal prior on r, this will take the form of a network which outputs a mean vector, µi = fµ(wi, ci,yi) and diagonal of a covariance matrix, σ2i = fσ(wi, ci,yi), such that qΦ(ri | wi, ci,yi) = N (µi,σ2i ). Incorporating labels and covariates to the inference network used by Miao et al. (2016) and Srivastava and Sutton (2017), we use:\nπi = fe([Wxxi; Wcci; Wyyi]), (5)\nµi = Wµπi + bµ, (6)\nlogσ2i = Wσπi + bσ, (7)\nwhere xi is a V -dimensional vector representing the counts of words in wi, and fe is a multilayer perceptron. The full set of encoder parameters, Φ, thus includes the parameters of fe and all weight matrices and bias vectors in Equations 5–7 (see Figure 1b).\nThis approach means that the expectations in Equation 4 are intractable, but we can approximate them using sampling. In order to maintain differentiability with respect to Φ, even after sampling, we make use of the reparameterization trick (Kingma and Welling, 2014),9 which allows us to reparameterize samples from qΦ(r | wi, ci,yi) in terms of samples from an independent source of noise, i.e.,\n(s) ∼ N (0, I),\nr (s) i = gΦ(wi, ci,yi, (s)) = µi + σi · (s).\nWe thus replace the bound in Equation 4 with a Monte Carlo approximation using a single sam-\n9 The Dirichlet distribution cannot be directly reparameterized in this way, which is why we use the logistic normal prior on θ to approximate the Dirichlet prior used in LDA.\nple10 of (and thereby of r):\nL(wi)\n≈ Ni∑ j=1 log p(wij | r(s)i , ci) + log p(yi | r (s) i , ci)\n− DKL [qΦ(ri | wi, ci,yi) || p(ri | α)] . (8)\nWe can now optimize this sampling-based approximation of the variational bound with respect to Φ, B∗, and all parameters of fg and fy using stochastic gradient descent. Moreover, because of this stochastic approach to inference, we are not restricted to covariates with a small number of unique values, which was a limitation of SAGE. Finally, the KL divergence term in Equation 8 can be computed in closed form (see supplementary materials)."
+  }, {
+    "heading": "3.3 Prediction on Held-out Data",
+    "text": "In addition to inferring latent topics, our model can both infer latent representations for new documents and predict their labels, the latter of which was the motivation for SLDA. In traditional variational inference, inference at test time requires fixing global parameters (topics), and optimizing the per-document variational parameters for the test set. With the VAE framework, by contrast, the encoder network (Equations 5–7) can be used to directly estimate the posterior distribution for each test document, using only a forward pass (no iterative optimization or sampling).\nIf not using labels, we can use this approach directly, passing the word counts of new documents through the encoder to get a posterior qΦ(ri | wi, ci). When we also include labels to be predicted, we can first train a fully-observed model, as above, then fix the decoder, and retrain the encoder without labels. In practice, however, if we train the encoder network using one-hot encodings of document labels, it is sufficient to provide a vector of all zeros for the labels of test documents; this is what we adopt for our experiments (§4.2), and we still obtain good predictive performance.\nThe label network, fy, is a flexible component which can be used to predict a wide range of outcomes, from categorical labels (such as star ratings; McAuliffe and Blei, 2008) to real-valued outputs (such as number of citations or box-office returns;\n10Alternatively, one can average over multiple samples.\nYogatama et al., 2011). For categorical labels, predictions are given by\nŷi = argmax y ∈ Y p(y | ri, ci). (9)\nAlternatively, when dealing with a small set of categorical labels, it is also possible to treat them as observed categorical covariates during training. At test time, we can then consider all possible one-hot vectors, e, in place of ci, and predict the label that maximizes the probability of the words, i.e.,\nŷi = argmax y ∈ Y Ni∑ j=1 log p(wij | ri, ey). (10)\nThis approach works well in practice (as we show in §4.2), but does not scale to large numbers of labels, or other types of prediction problems, such as multi-class classification or regression.\nThe choice to include metadata as covariates, labels, or both, depends on the data. The key point is that we can incorporate metadata in two very different ways, depending on what we want from the model. Labels guide the model to infer topics that are relevant to those labels, whereas covariates induce explicit deviations, leaving the latent variables to account for the rest of the content."
+  }, {
+    "heading": "3.4 Additional Prior Information",
+    "text": "A final advantage of the VAE framework is that the encoder network provides a way to incorporate additional prior information in the form of word vectors. Although we can learn all parameters starting from a random initialization, it is also possible to initialize and fix the initial embeddings of words in the model, Wx, in Equation 5. This leverages word similarities derived from large amounts of unlabeled data, and may promote greater coherence in inferred topics. The same could also be done for some covariates; for example, we could embed the source of a news article based on its place on the ideological spectrum. Conversely, if we choose to learn these parameters, the learned values (Wy and Wc) may provide meaningful embeddings of these metadata (see section §4.3).\nOther variants on topic models have also proposed incorporating word vectors, both as a parallel part of the generative process (Nguyen et al., 2015a), and as an alternative parameterization of topic distributions (Das et al., 2015), but inference is not scalable in either of these models. Because of the generality of the VAE framework, we could\nalso modify the generative story so that word embeddings are emitted (rather than tokens); we leave this for future work."
+  }, {
+    "heading": "4 Experiments and Results",
+    "text": "To evaluate and demonstrate the potential of this model, we present a series of experiments below. We first test SCHOLAR without observed metadata, and explore the effects of using regularization and/or word vector initialization, compared to LDA, SAGE, and NVDM (§4.1). We then evaluate our model in terms of predictive performance, in comparison to SLDA and an l2-regularized logistic regression baseline (§4.2). Finally, we demonstrate the ability to incorporate covariates and/or labels in an exploratory data analysis (§4.3).\nThe scores we report are generalization to heldout data, measured in terms of perplexity; coherence, measured in terms of non-negative point-wise mutual information (NPMI; Chang et al., 2009; Newman et al., 2010), and classification accuracy on test data. For coherence we evaluate NPMI using the top 10 words of each topic, both internally (using test data), and externally, using a decade of articles from the English Gigaword dataset (Graff and Cieri, 2003). Since our model employs variational methods, the reported perplexity is an upper bound based on the ELBO.\nAs datasets we use the familiar 20 newsgroups, the IMDB corpus of 50,000 movie reviews (Maas et al., 2011), and the UIUC Yahoo answers dataset with 150,000 documents in 15 categories (Chang et al., 2008). For further exploration, we also make use of a corpus of approximately 4,000 timestamped news articles about US immigration, each annotated with pro- or anti-immigration tone (Card et al., 2015). We use the original author-provided implementations of SAGE11 and SLDA,12 while for LDA we use Mallet.13. Our implementation of SCHOLAR is in TensorFlow, but we have also provided a preliminary PyTorch implementation of the core of our model.14 For additional details about datasets and implementation, please refer to the supplementary material.\nIt is challenging to fairly evaluate the relative computational efficiency of our approach compared to past work (due to the stochastic nature of our ap-\n11github.com/jacobeisenstein/SAGE 12github.com/blei-lab/class-slda 13mallet.cs.umass.edu 14github.com/dallascard/scholar\nproach to inference, choices about hyperparameters such as tolerance, and because of differences in implementation). Nevertheless, in practice, the performance of our approach is highly appealing. For all experiments in this paper, our implementation was much faster than SLDA or SAGE (implemented in C and Matlab, respectively), and competitive with Mallet."
+  }, {
+    "heading": "4.1 Unsupervised Evaluation",
+    "text": "Although the emphasis of this work is on incorporating observed labels and/or covariates, we briefly report on experiments in the unsupervised setting. Recall that, without metadata, SCHOLAR equates to ProdLDA, but with an explicit background term.15 We therefore use the same experimental setup as Srivastava and Sutton (2017) (learning rate, momentum, batch size, and number of epochs) and find the same general patterns as they reported (see Table 1 and supplementary material): our model returns more coherent topics than LDA, but at the cost of worse perplexity. SAGE, by contrast, attains very high levels of sparsity, but at the cost of worse perplexity and coherence than LDA. As expected, the NVDM produces relatively low perplexity, but very poor coherence, due to its lack of constraints on θ.\nFurther experimentation revealed that the VAE framework involves a tradeoff among the scores; running for more epochs tends to result in better perplexity on held-out data, but at the cost of worse coherence. Adding regularization to encourage sparse topics has a similar effect as in SAGE, leading to worse perplexity and coherence, but it does create sparse topics. Interestingly, initializing the encoder with pretrained word2vec embeddings, and not updating them returned a model with the best internal coherence of any model we considered for IMDB and Yahoo answers, and the second-best for 20 newsgroups.\nThe background term in our model does not have much effect on perplexity, but plays an important role in producing coherent topics; as in SAGE, the background can account for common words, so they are mostly absent among the most heavily weighted words in the topics. For instance, words like film and movie in the IMDB corpus are relatively unimportant in the topics learned by our\n15Note, however, that a batchnorm layer in ProdLDA may play a similar role to a background term, and there are small differences in implementation; please see supplementary material for more discussion of this.\nmodel, but would be much more heavily weighted without the background term, as they are in topics learned by LDA."
+  }, {
+    "heading": "4.2 Text Classification",
+    "text": "We next consider the utility of our model in the context of categorical labels, and consider them alternately as observed covariates and as labels generated conditional on the latent representation. We use the same setup as above, but tune number of training epochs for our model using a random 20% of training data as a development set, and similarly tune regularization for logistic regression.\nTable 2 summarizes the accuracy of various models on three datasets, revealing that our model offers competitive performance, both as a joint model of words and labels (Eq. 9), and a model which conditions on covariates (Eq. 10). Although SCHOLAR is comparable to the logistic regression baseline, our purpose here is not to attain state-of-the-art performance on text classification. Rather, the high accuracies we obtain demonstrate that we are learning low-dimensional representations of documents that are relevant to the label of interest, outperforming SLDA, and have the same attractive properties as topic models. Further, any neural network that is successful for text classification could be incorporated into fy and trained end-to-end along with topic discovery."
+  }, {
+    "heading": "4.3 Exploratory Study",
+    "text": "We demonstrate how our model might be used to explore an annotated corpus of articles about immigration, and adapt to different assumptions about the data. We only use a small number of topics in this part (K = 8) for compact presentation.\nTone as a label. We first consider using the annotations as a label, and train a joint model to infer topics relevant to the tone of the article (pro- or anti-immigration). Figure 2 shows a set of topics learned in this way, along with the predicted probability of an article being pro-immigration conditioned on the given topic. All topics are coherent, and the predicted probabilities have strong face validity, e.g., “arrested charged charges agents operation” is least associated with pro-immigration.\nTone as a covariate. Next we consider using tone as a covariate, and build a model using both tone and tone-topic interactions. Table 3 shows a set of topics learned from the immigration data, along with the most highly-weighted words in the corresponding tone-topic interaction terms. As can be seen, these interaction terms tend to capture different frames (e.g., “criminal” vs. “detainees”, and “illegals” vs. “newcomers”, etc).\nCombined model with temporal metadata. Finally, we incorporate both the tone annotations and the year of publication of each article, treating the former as a label and the latter as a covariate. In this model, we also include an embedding matrix, Wc, to project the one-hot year vectors down to a two-dimensional continuous space, with a learned deviation for each dimension. We omit the topics in the interest of space, but Figure 3 shows the learned embedding for each year, along with the top terms of the corresponding deviations. As can be seen, the model learns that adjacent years tend to produce similar deviations, even though we have not explicitly encoded this information. The leftright dimension roughly tracks a temporal trend with positive deviations shifting from the years of Clinton and INS on the left, to Obama and ICE on the right.16 Meanwhile, the events of 9/11 dominate the vertical direction, with the words sept,\n16The Immigration and Naturalization Service (INS) was transformed into Immigration and Customs Enforcement (ICE) and other agencies in 2003.\nhijackers, and attacks increasing in probability as we move up in the space. If we wanted to look at each year individually, we could drop the embedding of years, and learn a sparse set of topic-year interactions, similar to tone in Table 3."
+  }, {
+    "heading": "5 Additional Related Work",
+    "text": "The literature on topic models is vast; in addition to papers cited throughout, other efforts to incorporate metadata into topic models include Dirichletmultinomial regression (DMR; Mimno and McCallum, 2008), Labeled LDA (Ramage et al., 2009), and MedLDA (Zhu et al., 2009). A recent paper also extended DMR by using deep neural networks to embed metadata into a richer document prior (Benton and Dredze, 2018).\nA separate line of work has pursued parameterizing unsupervised models of documents using neural networks (Hinton and Salakhutdinov,\n2009; Larochelle and Lauly, 2012), including nonBayesian approaches (Cao et al., 2015). More recently, Lau et al. (2017) proposed a neural language model that incorporated topics, and He et al. (2017) developed a scalable alternative to the correlated topic model by simultaneously learning topic embeddings.\nOthers have attempted to extend the reparameterization trick to the Dirichlet and Gamma distributions, either through transformations (Kucukelbir et al., 2016) or a generalization of reparameterization (Ruiz et al., 2016). Black-box and VAE-style inference have been implemented in at least two general purpose tools designed to allow rapid exploration and evaluation of models (Kucukelbir et al., 2015; Tran et al., 2016)."
+  }, {
+    "heading": "6 Conclusion",
+    "text": "We have presented a neural framework for generalized topic models to enable flexible incorporation of metadata with a variety of options. We take advantage of stochastic variational inference to develop a general algorithm for our framework such that variations do not require any model-specific algorithm derivations. Our model demonstrates the tradeoff between perplexity, coherence, and sparsity, and outperforms SLDA in predicting document labels. Furthermore, the flexibility of our model enables intriguing exploration of a text corpus on US immigration. We believe that our model and code will facilitate rapid exploration of document collections with metadata."
+  }, {
+    "heading": "Acknowledgments",
+    "text": "We would like to thank Charles Sutton, anonymous reviewers, and all members of Noah’s ARK for helpful discussions and feedback. This work was made possible by a University of Washington Innovation award and computing resources provided by XSEDE."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Modeling polarizing topics: When do different political communities respond differently to the same news",
+    "authors": ["Ramnath Balasubramanyan", "William W. Cohen", "Doug Pierce", "David P. Redlawsk"],
+    "venue": "Proceedings of ICWSM",
+    "year": 2012
+  }, {
+    "title": "Deep Dirichlet multinomial regression",
+    "authors": ["Adrian Benton", "Mark Dredze."],
+    "venue": "Proceedings of NAACL.",
+    "year": 2018
+  }, {
+    "title": "The nested Chinese restaurant process and Bayesian nonparametric inference of topic hierarchies",
+    "authors": ["David M. Blei", "Thomas L. Griffiths", "Michael I. Jordan."],
+    "venue": "JACM, 57(2).",
+    "year": 2010
+  }, {
+    "title": "Dynamic topic models",
+    "authors": ["David M. Blei", "John D. Lafferty."],
+    "venue": "Proceedings of ICML.",
+    "year": 2006
+  }, {
+    "title": "Latent Dirichlet allocation",
+    "authors": ["David M. Blei", "Andrew Y. Ng", "Michael I. Jordan."],
+    "venue": "JMLR, 3:993– 1022.",
+    "year": 2003
+  }, {
+    "title": "Applications of topic models",
+    "authors": ["Jordan Boyd-Graber", "Yuening Hu", "David Mimno."],
+    "venue": "Foundations and Trends in Information Retrieval, 11(2-3):143– 296.",
+    "year": 2017
+  }, {
+    "title": "A novel neural topic model and its supervised extension",
+    "authors": ["Ziqiang Cao", "Sujian Li", "Yang Liu", "Wenjie Li", "Heng Ji."],
+    "venue": "Proceedings of AAAI.",
+    "year": 2015
+  }, {
+    "title": "The media frames corpus: Annotations of frames across issues",
+    "authors": ["Dallas Card", "Amber E. Boydstun", "Justin H. Gross", "Philip Resnik", "Noah A. Smith."],
+    "venue": "Proceedings of ACL.",
+    "year": 2015
+  }, {
+    "title": "Bayesian inference for nonnegative matrix factorisation models",
+    "authors": ["Ali Taylan Cemgil."],
+    "venue": "Computational Intelligence and Neuroscience, pages 4:1– 4:17.",
+    "year": 2009
+  }, {
+    "title": "Reading tea leaves: How humans interpret topic models",
+    "authors": ["Jonathan Chang", "Sean Gerrish", "Chong Wang", "Jordan L Boyd-graber", "David M Blei."],
+    "venue": "Proceedings of NIPS.",
+    "year": 2009
+  }, {
+    "title": "Importance of semantic representation: Dataless classification",
+    "authors": ["Ming-Wei Chang", "Lev-Arie Ratinov", "Dan Roth", "Vivek Srikumar."],
+    "venue": "Proceedings of AAAI.",
+    "year": 2008
+  }, {
+    "title": "Gaussian LDA for topic models with word embeddings",
+    "authors": ["Rajarshi Das", "Manzil Zaheer", "Chris Dyer."],
+    "venue": "Proceedings of ACL.",
+    "year": 2015
+  }, {
+    "title": "Sparse additive generative models of text",
+    "authors": ["Jacob Eisenstein", "Amr Ahmed", "Eric P. Xing."],
+    "venue": "Proceedings of ICML.",
+    "year": 2011
+  }, {
+    "title": "English gigaword corpus",
+    "authors": ["David Graff", "C Cieri."],
+    "venue": "Linguistic Data Consortium.",
+    "year": 2003
+  }, {
+    "title": "Efficient correlated topic modeling with topic embedding",
+    "authors": ["Junxian He", "Zhiting Hu", "Taylor Berg-Kirkpatrick", "Ying Huang", "Eric P. Xing."],
+    "venue": "Proceedings of KDD.",
+    "year": 2017
+  }, {
+    "title": "Kernel topic models",
+    "authors": ["Philipp Hennig", "David Stern", "Ralf Herbrich", "Thore Graepel."],
+    "venue": "Proceedings of AISTATS.",
+    "year": 2012
+  }, {
+    "title": "Replicated softmax: An undirected topic model",
+    "authors": ["Geoffrey E Hinton", "Ruslan R Salakhutdinov."],
+    "venue": "Proceedings of NIPS.",
+    "year": 2009
+  }, {
+    "title": "Autoencoding variational bayes",
+    "authors": ["Diederik P Kingma", "Max Welling."],
+    "venue": "Proceedings of ICLR.",
+    "year": 2014
+  }, {
+    "title": "Automatic variational inference in stan",
+    "authors": ["Alp Kucukelbir", "Rajesh Ranganath", "Andrew Gelman", "David Blei."],
+    "venue": "Proceedings of NIPS.",
+    "year": 2015
+  }, {
+    "title": "Automatic differentiation variational inference",
+    "authors": ["Alp Kucukelbir", "Dustin Tran", "Rajesh Ranganath", "Andrew Gelman", "David M. Blei."],
+    "venue": "ArXiv:1603.00788.",
+    "year": 2016
+  }, {
+    "title": "Correlated topic models",
+    "authors": ["John D. Lafferty", "David M. Blei."],
+    "venue": "Proceedings of NIPS.",
+    "year": 2006
+  }, {
+    "title": "A neural autoregressive topic model",
+    "authors": ["Hugo Larochelle", "Stanislas Lauly."],
+    "venue": "Proceedings of NIPS.",
+    "year": 2012
+  }, {
+    "title": "Topically driven neural language model",
+    "authors": ["Jey Han Lau", "Timothy Baldwin", "Trevor Cohn."],
+    "venue": "Proceedings of ACL.",
+    "year": 2017
+  }, {
+    "title": "Learning word vectors for sentiment analysis",
+    "authors": ["Andrew L. Maas", "Raymond E. Daly", "Peter T. Pham", "Dan Huang", "Andrew Y. Ng", "Christopher Potts."],
+    "venue": "Proceedings of ACL.",
+    "year": 2011
+  }, {
+    "title": "Supervised topic models",
+    "authors": ["Jon D. McAuliffe", "David M. Blei."],
+    "venue": "Proceedings of NIPS.",
+    "year": 2008
+  }, {
+    "title": "Neural variational inference for text processing",
+    "authors": ["Yishu Miao", "Lei Yu", "Phil Blunsom."],
+    "venue": "Proceedings of ICML.",
+    "year": 2016
+  }, {
+    "title": "Topic models conditioned on arbitrary features with Dirichlet-multinomial regression",
+    "authors": ["David Mimno", "Andrew McCallum."],
+    "venue": "Proceedings of UAI.",
+    "year": 2008
+  }, {
+    "title": "Automatic evaluation of topic coherence",
+    "authors": ["David Newman", "Jey Han Lau", "Karl Grieser", "Timothy Baldwin."],
+    "venue": "Proceedings of ACL.",
+    "year": 2010
+  }, {
+    "title": "Improving topic models with latent feature word representations",
+    "authors": ["Dat Quoc Nguyen", "Richard Billingsley", "Lan Du", "Mark Johnson."],
+    "venue": "Proceedings of ACL.",
+    "year": 2015
+  }, {
+    "title": "Tea party in the house: A hierarchical ideal point topic model and its application to Republican legislators in the 112th congress",
+    "authors": ["Viet-An Nguyen", "Jordan Boyd-Graber", "Philip Resnik", "Kristina Miler."],
+    "venue": "Proceedings of ACL.",
+    "year": 2015
+  }, {
+    "title": "Lexical and hierarchical topic regression",
+    "authors": ["Viet-An Nguyen", "Jordan L. Boyd-Graber", "Philip Resnik."],
+    "venue": "Proceedings of NIPS.",
+    "year": 2013
+  }, {
+    "title": "Bayesian nonnegative matrix factorization with stochastic variational inference",
+    "authors": ["John William Paisley", "David M. Blei", "Michael I. Jordan."],
+    "venue": "Handbook of Mixed Membership Models and Their Applications, pages 205–224.",
+    "year": 2014
+  }, {
+    "title": "Labeled LDA: A supervised topic model for credit attribution in multilabeled corpora",
+    "authors": ["Daniel Ramage", "David Hall", "Ramesh Nallapati", "Christopher D. Manning."],
+    "venue": "Proceedings of EMNLP.",
+    "year": 2009
+  }, {
+    "title": "Stochastic backpropagation and approximate inference in deep generative models",
+    "authors": ["Danilo J. Rezende", "Shakir Mohamed", "Daan Wierstra."],
+    "venue": "Proceedings of ICML.",
+    "year": 2014
+  }, {
+    "title": "Structural topic models for open ended survey responses",
+    "authors": ["Molly Roberts", "Brandon Stewart", "Dustin Tingley", "Christopher Lucas", "Jetson Leder-Luis", "Shana Gadarian", "Bethany Albertson", "David Rand."],
+    "venue": "American Journal of Political Science,",
+    "year": 2014
+  }, {
+    "title": "The author-topic model for authors and documents",
+    "authors": ["Michal Rosen-Zvi", "Thomas Griffiths", "Mark Steyvers", "Padhraic Smyth."],
+    "venue": "Proceedings of UAI.",
+    "year": 2004
+  }, {
+    "title": "The generalized reparameterization gradient",
+    "authors": ["Francisco J R Ruiz", "Michalis K Titsias", "David M Blei."],
+    "venue": "Proceedings of NIPS.",
+    "year": 2016
+  }, {
+    "title": "Autoencoding variational inference for topic models",
+    "authors": ["Akash Srivastava", "Charles Sutton."],
+    "venue": "Proceedings of ICLR.",
+    "year": 2017
+  }, {
+    "title": "Edward: A library for probabilistic modeling, inference, and criticism",
+    "authors": ["Dustin Tran", "Alp Kucukelbir", "Adji B. Dieng", "Maja Rudolph", "Dawen Liang", "David M. Blei."],
+    "venue": "ArXiv:1610.09787.",
+    "year": 2016
+  }, {
+    "title": "Interpretability and measurement",
+    "authors": ["Hanna Wallach."],
+    "venue": "EMNLP Workshop on Natural Language Processing and Computational Social Science.",
+    "year": 2016
+  }, {
+    "title": "Rethinking LDA: Why priors matter",
+    "authors": ["Hanna Wallach", "David M. Mimno", "Andrew McCallum."],
+    "venue": "Proceedings of NIPS.",
+    "year": 2009
+  }, {
+    "title": "Predicting a scientific community’s response to an article",
+    "authors": ["Dani Yogatama", "Michael Heilman", "Brendan O’Connor", "Chris Dyer", "Bryan R Routledge", "Noah A Smith"],
+    "venue": "Proceedings of EMNLP",
+    "year": 2011
+  }, {
+    "title": "MedLDA: Maximum margin supervised topic models for regression and classification",
+    "authors": ["Jun Zhu", "Amr Ahmed", "Eric P. Xing."],
+    "venue": "Proceedings of ICML.",
+    "year": 2009
+  }],
+  "id": "SP:ac26639c5e243a1407ffe917a3d186bd60092b42",
+  "authors": [{
+    "name": "Dallas Card",
+    "affiliations": []
+  }, {
+    "name": "Chenhao Tan",
+    "affiliations": []
+  }, {
+    "name": "Noah A. Smith",
+    "affiliations": []
+  }],
+  "abstractText": "Most real-world document collections involve various types of metadata, such as author, source, and date, and yet the most commonly-used approaches to modeling text corpora ignore this information. While specialized models have been developed for particular applications, few are widely used in practice, as customization typically requires derivation of a custom inference algorithm. In this paper, we build on recent advances in variational inference methods and propose a general neural framework, based on topic models, to enable flexible incorporation of metadata and allow for rapid exploration of alternative models. Our approach achieves strong performance, with a manageable tradeoff between perplexity, coherence, and sparsity. Finally, we demonstrate the potential of our framework through an exploration of a corpus of articles about US immigration.",
+  "title": "Neural Models for Documents with Metadata"
+}

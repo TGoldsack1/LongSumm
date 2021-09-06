@@ -1,0 +1,355 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Deep learning methods have had enormous recent success in fields where prediction accuracy is important, e.g., computer vision and speech recognition. However, for these methods to be useful in fields such as robotics and medical diagnostics, we need to know the uncertainty of our predictions. For example, physicians might need such uncertainty estimates to choose a safe but effective treatment for their patients. Lack of such estimates might result in unreliable decisions which can sometime have disastrous consequences.\nOne of the goals of Bayesian inference is to provide uncertainty estimates by using the posterior distribution obtained\n*Equal contribution 1RIKEN Center for Advanced Intelligence project, Tokyo, Japan 2University of British Columbia, Vancouver, Canada 3University of Oxford, Oxford, UK 4University of Edinburgh, Edinburgh, UK. Correspondence to: Mohammad Emtiyaz Khan <emtiyaz.khan@riken.jp>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\nusing Bayes’ rule. Unfortunately, this is infeasible in large models such as Bayesian neural networks. Traditional methods such as Markov Chain Monte Carlo (MCMC) methods converge slowly and might require a large memory (Balan et al., 2015). In contrast, variational inference (VI) methods can scale to large models by using stochastic-gradient (SG) methods, as recent work has shown (Graves, 2011; Blundell et al., 2015; Ranganath et al., 2014; Salimans et al., 2013). These works employ adaptive learning-rate methods, such as RMSprop (Tieleman & Hinton, 2012), Adam (Kingma & Ba, 2015) and AdaGrad (Duchi et al., 2011), for which easy-to-use implementations are available in existing codebases.\nDespite their simplicity, these VI methods require more computation, memory, and implementation effort compared to maximum-likelihood estimation (MLE). One reason for this is that the number of parameters in VI is usually much larger than in MLE, which increases the memory and computation costs. Another reason is that existing codebases are designed and optimized for tasks such as MLE, and their application to VI involves significant amount of modifications in the code. We ask the following question: is it possible to avoid these issues and make VI as easy as MLE?\nIn this paper, we propose to use natural-gradient methods to address these issues for Gaussian mean-field VI. By proposing a natural-momentum method along with a series of approximations, we obtain algorithms that can be implemented with minimal changes to the existing codebases of adaptive learning-rate methods. The main change involves perturbing the network weights during the gradient computation (see Fig. 1). An uncertainty estimate can be cheaply obtained by using the vector that adapts the learning rate. This requires lower memory, computation, and implementation efforts than existing methods for VI while obtaining uncertainty estimates of comparable quality. Our experimental results confirm this, and suggest that the estimated uncertainty could improve exploration in problems such as reinforcement learning and stochastic optimization."
+  }, {
+    "heading": "1.1. Related Work",
+    "text": "Bayesian inference in models such as neural networks has a long history in machine learning (MacKay, 2003; Bishop, 2006). Earlier work proposed a variety of algo-\nrithms such as MCMC methods (Neal, 1995), Laplace’s method (Denker & Lecun, 1991), and variational inference (Hinton & Van Camp, 1993; Barber & Bishop, 1998). The mean-field approximation has also been a popular tool from very early on (Saul et al., 1996; Anderson & Peterson, 1987). These previous works lay the foundation of methods now used for Bayesian deep learning (Gal, 2016).\nRecent approaches (Graves, 2011; Blundell et al., 2015) enable the application of Gaussian mean-field VI methods to large deep-learning problems. They do so by using gradientbased methods. In contrast, we propose to use naturalgradient methods which, as we show, lead to algorithms that are simpler to implement and require lower memory and computations than gradient-based methods. Natural gradients are also better suited for VI because they can improve convergence rates by exploiting the information geometry of posterior approximations (Khan et al., 2016). Some of our algorithms inherit these properties too.\nA recent independent work on noisy-Adam by Zhang et al. (2018) is algorithmically very similar to our Vadam method, however their derivation lacks a strong motivation for the use of momentum. In our derivation, we incorporate a naturalmomentum term based on Polyak’s heavy-ball method, which provides a theoretical justification for the use of momentum. In addition, we analyze the approximation error introduced in Vadam and discuss ways to reduce it.\nZhang et al. (2018) also propose an interesting extension by using K-FAC, which could find better approximations than the mean-field method. The goal of this approach is similar to other approaches that employ structured approximations (Ritter et al., 2018; Louizos & Welling, 2016; Sun et al., 2017). Many other works have explored variety of approximation methods, e.g., Gal & Ghahramani (2016) use dropout for VI, Hernandez-Lobato & Adams (2015); Hasenclever et al. (2017) use expectation propagation, Li et al.\n(2016); Balan et al. (2015) use stochastic-gradient Langevin dynamics. Such approaches are viable alternatives to the mean-field VI approach we use.\nAnother related work by Mandt et al. (2017) views SG descent as VI but requires additional effort to obtain posterior approximations, while in our approach the approximation is automatically obtained within an adaptive method.\nOur weight-perturbed algorithms are also related to globaloptimization methods, e.g., Gaussian-homotopy continuation methods (Mobahi & Fisher III, 2015), smoothedoptimization method (Leordeanu & Hebert, 2008), graduated optimization method (Hazan et al., 2016), and stochastic search methods (Zhou & Hu, 2014). In particular, our algorithm is related to recent approaches in deep learning for exploration to avoid local minima, e.g., natural evolution strategy (Wierstra et al., 2014), entropy-SGD (Chaudhari et al., 2016), and noisy networks for reinforcement learning (Fortunato et al., 2018; Plappert et al., 2018). An earlier version of our work (Khan et al., 2017) focuses exclusively on this problem, and in this paper we modify it to be implemented within an adaptive algorithm like Adam."
+  }, {
+    "heading": "2. Gaussian Mean-Field Variational Inference",
+    "text": "We consider modeling of a dataset D = {D1,D2, . . . ,DN} by using a deep neural network (DNN). We assume a probabilistic framework where each data example Di is sampled independently from a probability distribution p(Di|θ) parameterized by a DNN with weights θ ∈ RD, e.g., the distribution could be an exponential-family distribution whose mean parameter is the output of a DNN (Bishop, 2006).\nOne of the most popular approaches to estimate θ given D is maximum-likelihood estimation (MLE), where we maximize the log-likelihood: log p(D|θ). This optimization problem can be efficiently solved by applying SG methods\nsuch as RMSProp, AdaGrad and Adam. For large problems, these methods are extremely popular, partly due to the simplicity and efficiency of their implementations (see Fig. 1 for Adam’s pseudocode).\nOne of the goals of Bayesian deep learning is to go beyond MLE and estimate the posterior distribution of θ to obtain an uncertainty estimate of the weights. Unfortunately, the computation of the posterior is challenging in deep models. The posterior is obtained by specifying a prior distribution p(θ) and then using Bayes’ rule: p(θ|D) := p(D|θ)p(θ)/p(D). This requires computation of the normalization constant p(D) = ∫ p(D|θ)p(θ)dθ which is a very difficult task for DNNs. One source of the difficulty is the size of θ and D which are usually very large in deep learning. Another source is the nonconjugacy of the likelihood p(Di|θ) and the prior p(θ), i.e., the two distributions do not take the same form with respect to θ (Bishop, 2006). As a result, the product p(D|θ)p(θ) does not take a form with which p(D) can be easily computed. Due to these issues, Bayesian inference in deep learning is computationally challenging.\nVariational inference (VI) simplifies the problem by approximating p(θ|D) with a distribution q(θ) whose normalizing constant is relatively easier to compute. Following previous work (Ranganath et al., 2014; Blundell et al., 2015; Graves, 2011), we choose both p(θ) and q(θ) to be Gaussian distributions with diagonal covariances:\np(θ) := N (θ|0, I/λ), q(θ) := N (θ|µ, diag(σ2)), (1)\nwhere λ ∈ R is a known precision parameter with λ > 0, and µ,σ ∈ RD are mean and standard deviation of q. The distribution q(θ) is known as the Gaussian mean-field variational distribution and its parameters µ and σ2 can be obtained by maximizing the following variational objective:\nL(µ,σ2) := N∑ i=1 Eq [log p(Di|θ)] + Eq [ log p(θ) q(θ) ] . (2)\nA straightforward approach used in the previous work (Ranganath et al., 2014; Blundell et al., 2015; Graves, 2011) is to maximize L by using an SG method, e.g., we can use the following update:\nµt+1 = µt + ρt∇̂µLt, σt+1 = σt + δt∇̂σLt, (3)\nwhere t is the iteration number, ∇̂xLt denotes an unbiased SG estimate of L at µt,σ2t with respect to x, and ρt, δt > 0 are learning rates which can be adapted using methods such as RMSprop or AdaGrad. These approaches make use of existing codebases for adaptive learning-rate methods to perform VI, which can handle many network architectures and can scale well to large datasets.\nDespite this, a direct application of adaptive learning-rate methods for VI may result in algorithms that use more computation and memory than necessary, and also require more implementation effort. Compared to MLE, the memory and computation costs increase because the number of parameters to be optimized is doubled and we now have two vectors µ and σ to estimate. Using adaptive methods increases this cost further as these methods require storing the scaling vectors that adapt the learning rate for both µ and σ. In addition, using existing codebases require several modifications as they are designed and optimized for MLE. For example, we need to make changes in the computation graph where the objective function is changed to the variational objective and network weights are replaced by random variables. Together, these small issues make VI more difficult to implement and execute than MLE.\nThe algorithms developed in this paper solve some of these issues and can be implemented within Adam with minimal changes to the code. We derive our algorithm by approximating a natural-gradient method and then using a naturalmomentum method. We now describe our method in detail."
+  }, {
+    "heading": "3. Approximate Natural-Gradient VI",
+    "text": "In this section, we introduce a natural-gradient method to perform VI and then propose several approximations that enable implementation within Adam.\nNatural-gradient VI methods exploit the Riemannian geometry of q(θ) by scaling the gradient with the inverse of its Fisher information matrix (FIM). We build upon the naturalgradient method of Khan & Lin (2017), which simplifies the update by avoiding a direct computation of the FIM. The main idea is to use the expectation parameters of the exponential-family distribution to compute natural gradients in the natural-parameter space. We provide a brief description of their method in Appendix B.\nFor Gaussian mean-field VI, the method of Khan & Lin (2017) gives the following update:\nNGVI : µt+1 = µt + βt σ 2 t+1 ◦ [ ∇̂µLt ] , (4)\nσ−2t+1 = σ −2 t − 2βt [ ∇̂σ2Lt ] , (5)\nwhere βt > 0 is a scalar learning rate and a ◦ b denotes the element-wise product between vectors a and b. We refer to this update as natural-gradient variational inference (NGVI). A detailed derivation is given in Appendix C.\nThe NGVI update differs from (3) in one major aspect: the learning rate βt in (4) is adapted by the variance σ2t+1. This plays a crucial role in reducing the NGVI update to an Adam-like update, as we show the next section. The update requires a constraint σ2 > 0 but, as we show in Section 3.2, we can eliminate this constraint using an approximation."
+  }, {
+    "heading": "3.1. Variational Online-Newton (VON)",
+    "text": "We start by expressing the NGVI update in terms of the MLE objective, so that we can directly compute gradients on the MLE objective using backpropagation. We start by defining the MLE objective (denoted by f ) and minibatch stochastic-gradient estimates (denoted by ĝ):\nf(θ) := 1\nN N∑ i=1 fi(θ), ĝ(θ) := 1 M ∑ i∈M ∇θfi(θ), (6)\nwhere fi(θ) := − log p(Di|θ) is the negative log-likelihood of i’th data example, and the minibatch M contains M examples chosen uniformly at random. Similarly, we can obtain a minibatch stochastic-approximation of the Hessian which we denote by ∇̂2θθf(θ).\nAs we show in Appendix D, the NGVI update can be written in terms of the stochastic gradients and Hessian of f :\nVON : µt+1 = µt − βt (ĝ(θt) + λ̃µt)/(st+1 + λ̃), (7)\nst+1 = (1− βt)st + βt diag[∇̂2θθf(θt)], (8)\nwhere a/b is an element-wise division operation between vectors a and b, and we have approximated the expectation with respect to q using one Monte-Carlo (MC) sample θt ∼ N (θ|µt,σ2t ) with σ2t := 1/[N(st + λ̃)] and λ̃ := λ/N . The update can be easily modified when multiple samples are used. This update can leverage backpropagation to perform the gradient and Hessian computation. Since the scaling vector st contains an online estimate of the diagonal of the Hessian, we call this the “variational online-Newton” (VON) method. VON is expected to perform as well as NGVI, but does not require the gradients of the variational objective.\nThe Hessian can be computed by using methods such as automatic-differentiation or the reparameterization trick. However, since f is a non-convex function, the Hessian can be negative which might make σ2 negative, in which case the method will break down. One could use a constrained optimization method to solve this issue, but this might be difficult to implement and execute (we discuss this briefly in Appendix D.1). In the next section, we propose a simple fix to this problem by using an approximation."
+  }, {
+    "heading": "3.2. Variational Online Gauss-Newton (VOGN)",
+    "text": "To avoid negative variances in the VON update, we propose to use the Generalized Gauss-Newton (GGN) approximation (Schraudolph, 2002; Martens, 2014; Graves, 2011):\n∇2θjθjf(θ) ≈ 1\nM ∑ i∈M [ ∇θjfi(θ) ]2 := ĥj(θ), (9)\nwhere θj is the j’th element of θ. This approximation will always be nonnegative, therefore if the initial σ2 at t = 1 is\npositive, it will remain positive in the subsequent iterations. Using this approximation to update st in (8) and denoting the vector of ĥj(θ) by ĥ(θ), we get,\nVOGN : st+1 = (1− βt)st + βt ĥ(θt). (10)\nUsing this update in VON, we get the “variational online Gauss-Newton” (VOGN) algorithm.\nThe GGN approximation is proposed by Graves (2011) for mean-field Gaussian VI to derive a fast gradient-based method (see Eq. (17) in his paper1). This approximation is very useful for our natural-gradient method since it eliminates the constraint on σ2, giving VOGN an algorithmic advantage over VON.\nHow good is this approximation? For an MLE problem, the approximation error of the GGN in (9) decreases as the model-fit improves during training (Martens, 2014). For VI, we expect the same however, since θ are sampled from q, the expectation of the error is unlikely to be zero. Therefore, the solutions found by VOGN will typically differ from those found by VON, but their performances are expected to be similar.\nAn issue with VOGN is that its implementation is not easy within existing deep-learning codebases. This is because these codebases are optimized to directly compute the sum of the gradients over minibatches, and do not support computation of individual gradients as required in (9). A solution for such computations is discussed by Goodfellow (2015), but this requires additional implementation effort. Instead, we address this issue by using another approximation in the next section."
+  }, {
+    "heading": "3.3. Variational RMSprop (Vprop)",
+    "text": "To simplify the implementation of VOGN, we propose to approximate the Hessian by the gradient magnitude (GM) (Bottou et al., 2016):\n∇2θjθjf(θ) ≈\n[ 1\nM ∑ i∈M ∇θjfi(θ)\n]2 = [ĝj(θ)] 2 . (11)\nCompared to the GGN which computes the sum of squaredgradients, this approximation instead computes the square of the sum. This approximation is also used in RMSprop which uses the following update given weights θt:\nRMSprop : θt+1 = θt − αt ĝ(θt)/( √\ns̄t+1 + δ), (12) s̄t+1 = (1− βt)s̄t + βt [ĝ(θt) ◦ ĝ(θt)] , (13)\nwhere s̄t is the vector that adapts the learning rate and δ is a small positive scalar added to avoid dividing by zero.\n1There is a discrepancy between Eq. (17) and (12) in Graves (2011), however the text below Eq. (12) mentions relationship to FIM, from which it is clear that the GGN approximation is used.\nThe update of s̄t uses the GM approximation to the Hessian (Bottou et al., 2016). Adam and AdaGrad also use this approximation.\nUsing the GM approximation and an additional modification in the VON update, we can make the VON update very similar to RMSprop. Our modification involves taking the square-root over st+1 in (7) and then using the GM approximation for the Hessian. We also use different learning rates αt and βt to update µ and s, respectively. The resulting update is very similar to the RMSprop update:\nVprop: µt+1 = µt − αt (ĝ(θt)+λ̃µt)/( √ st+1 + λ̃),\nst+1 = (1− βt)st + βt [ĝ(θt) ◦ ĝ(θt)] , (14)\nwhere θt ∼ N (θ|µt,σ2t ) with σ2t := 1/[N(st + λ̃)]. We call this update “Variational RMSprop” or simply “Vprop”.\nThe Vprop update resembles RMSprop but with three differences (highlighted in red). First, the gradient in Vprop is evaluated at the weights θt sampled from N (θ|µt,σ2t ). This is a weight-perturbation where the variance σ2t of the perturbation is obtained from the vector st that adapts the learning rate. The variance is also the uncertainty estimates. Therefore, VI can be performed simply by using an RMSprop update with a few simple changes. The second difference between Vprop and RMSprop is that Vprop has an extra term λ̃µt in the update of µt which is due to the Gaussian prior. Finally, the third difference is that the constant δ in RMSprop is replaced by λ̃."
+  }, {
+    "heading": "3.4. Analysis of the GM approximation",
+    "text": "It is clear that the GM approximation might not be the best approximation of the Hessian. Taking square of a sum leads to a sum with M2 terms which, depending on the correlations between the individual gradients, would either shrink or expand the estimate. The following theorem formalizes this intuition. It states that, given a minibatch of size M , the expectation of the GM approximation is somewhere between the GGN and square of the full-batch gradient.\nTheorem 1. Denote the full-batch gradient with respect to θj by gj(θ) and the corresponding full-batch GGN approximation by hj(θ). Suppose minibatchesM are sampled from the uniform distribution p(M) over all ( N M ) minibatches, and denote a minibatch gradient by ĝj(θ;M), then the expected value of the GM approximation is the following,\nEp(M) [ ĝj(θ;M)2 ] = whj(θ) + (1− w)[gj(θ)]2, (15)\nwhere w = 1M (N −M)/(N − 1).\nA proof is given in Appendix G. This result clearly shows the bias introduced in the GM approximation and also that the bias increases with the minibatch size. For a minibatch\nof size M = 1, we have w = 1 and the GM is an unbiased estimator of the GGN, but when M = N it is purely the magnitude of the gradient and does not contain any secondorder information.\nTherefore, if our focus is to obtain uncertainty estimates with good accuracy, VOGN with M = 1 might be a good choice since it is as easy as Vprop to implement. However, this might require a small learning-rate and converge slowly. Vprop with M > 1 will converge fast and is much easier to implement than VOGN with M > 1, but might result in slightly worse estimates. Using Vprop with M = 1 may not be as good because of the square-root2 over st."
+  }, {
+    "heading": "4. Variational Adam (Vadam)",
+    "text": "We now propose a natural-momentum method which will enable an Adam-like update.\nMomentum methods generally take the following form that uses Polyak’s heavy-ball method:\nθt+1 = θt + ᾱt∇θf1(θt) + γ̄t(θt − θt−1), (16)\nwhere f1 is the function we want to maximize and the last term is the momentum term. We propose a naturalmomentum version of this algorithm which employs naturalgradients instead of the gradients. We assume q to be an exponential-family distribution with natural-parameter η. We propose the following natural-momentum method in the natural-parameter space:\nηt+1 = ηt + ᾱt∇̃ηLt + γ̄t(ηt − ηt−1), (17)\nwhere ∇̃ denotes the natural-gradients in the naturalparameter space, i.e., the gradient scaled by the Fisher information matrix of q(θ).\nWe show in Appendix E that, for Gaussian q(θ), we can express the above update as a VON update with momentum3:\nµt+1 = µt − ᾱt [\n1\nst+1 + λ̃\n] ◦ ( ∇θf(θt) + λ̃µt ) + γ̄t [ st + λ̃\nst+1 + λ̃\n] ◦ (µt − µt−1), (18)\nst+1 = (1− ᾱt) st + ᾱt ∇2θθf(θt), (19)\nwhere θt ∼ N (θ|µt,σ2t ) with σ2t = 1/[N(st + λ̃)]. This update is similar to (17), but here the learning rates are adapted. An attractive feature of this update is that it is very similar to Adam. Specifically the Adam update shown in\n2Note that the square-root does not affect a fixed point (see Appendix H) but it might still affect the steps taken by the algorithm.\n3This is not an exact update for (17). We make one approximation in Appendix E to derive it.\nFig. 1 can be expressed as the following adaptive version of (16) as shown in Wilson et al. (2017)4,\nθt+1 = θt − α̃t\n[ 1√\nŝt+1 + δ\n] ◦ ∇θf(θt)\n+ γ̃t\n[ √ ŝt + δ√\nŝt+1 + δ\n] ◦ (θt − θt−1), (20)\nŝt+1 = γ2ŝt + (1− γ2) [ĝ(θt)]2, (21)\nwhere α̃t, γ̃t are appropriately defined in terms of the Adam’s learning rate α and γ1: α̃t := α (1− γ1) / (1− γt1) and γ̃t := γ1 ( 1− γt−11 ) (1− γt1).\nUsing a similar procedure as the derivation of Vprop, we can express the update as an Adam-like update, which we call “variational Adam” or simply “Vadam”. A pseudocode is given in Fig. 1, where we use learning rates of the Adam update insteof of choosing them accoring to ᾱt and γ̄t. A derivation is given in Appendix E.4."
+  }, {
+    "heading": "5. Variational AdaGrad (VadaGrad)",
+    "text": "Vprop and Vadam perform variational inference, but they can be modified to perform optimization instead of inference. We now derive such an algorithm which turns out to be a variational version of AdaGrad.\nWe follow Staines & Barber (2013) who consider minimization of black-box functions F (θ) via the variational optimization5 (VO) framework. In this framework, instead of directly minimizing F (θ), we minimize its expectation Eq [F (θ)] under a distribution q(θ) := N (θ|µ,σ2) with respect to µ and σ2. The main idea behind VO is that the expectation can be used as a surrogate to the original optimization problem since minθ F (θ) ≤ Eq [F (θ)]. The equality is attained when σ2 → 0, i.e., all mass of N (θ|µ,σ2) is at the mode. The main advantage of VO is that Eq [F (θ)] is differentiable even when F itself is non-differentiable. This way we can use SG optimizers to solve such problems.\nSimilarly to Vprop, we can derive an algorithm for VO by noting that VO can be seen as a special case of the VI problem (2) where the KL term is absent and F (θ) is the negative log-likelihood. With this in mind, we define the following variational objective with an additional parameter τ ∈ [0, 1]:\nLF (µ,σ2) := −Eq [F (θ)] + τEq [ log p(θ)\nq(θ)\n] . (22)\nThe parameter τ allows us to interpolate between inference and optimization. When τ = 1, the objective corresponds to\n4Wilson et al. (2017) do not use the constant δ, but in Adam a small constant is added for numerical stability.\n5The exact conditions on F under which VO can be applied are also discussed by Staines & Barber (2013).\nVI with a negative log-likelihood F (θ), and when τ = 0, it corresponds to VO. Similar objectives have been proposed in existing works (Blundell et al., 2015; Higgins et al., 2016) where τ is used to improve convergence.\nFor twice-differentiable F , we can follow a similar derivation as Section 3, and obtain the following algorithm,\nµt+1 = µt − αt (∇̂θF (θ) + τλµt)/(st+1 + τλ), (23)\nst+1 = (1− τβt)st + βt ∇̂2θθF (θ), (24)\nwhere θt ∼ N (θ|µt,σ2t ) with σ2t := 1/(st + τλ). This algorithm is identical to the VON algorithm when τ = 1, but when τ = 0, we perform VO with an algorithm which is a diagonal version of the Variational Adaptive-Newton (VAN) algorithm proposed in Khan et al. (2017). By setting the value of τ between 0 and 1, we can interpolate between VO and VI. When the function is not differentiable, we can still compute the derivative of Eq[F (θ)] by using methods such as REINFORCE (Williams, 1992).\nWhen Hessian is difficult to compute, we can employ a GM approximation and take the square-root as we did in Vprop. For τ = 0, the updates turn out to be similar to AdaGrad, which we call “variational AdaGrad” or simply “VadaGrad”. The exact updates are given in Appendix F. Unlike Vprop and Vadam, the scaling vector st in VadaGrad is a weighted sum of the past gradient-magnitudes. Therefore, the entries in st never decrease, and the variance estimate of VadaGrad never expands. This implies that it is highly likely that q(θ) will converge to a Dirac delta and therefore arrive at a minimum of F ."
+  }, {
+    "heading": "6. Results",
+    "text": "In this section, our goal is to show that the quality of the uncertainty approximations obtained using our algorithms are comparable to existing methods, and computation of uncertainty is scalable. We present results on Bayesian logistic regression for classification, Bayesian neural networks for regression, and deep reinforcement learning. An additional result illustrating avoidance of local-minima using Vadam is in Appendix L. Another result showing benefits of weight-perturbation in Vadam is in Appendix M. The code to reproduce our results is available at https://github.com/emtiyaz/vadam."
+  }, {
+    "heading": "6.1. Uncertainty Estimation in Logistic Regression",
+    "text": "In this experiment, we compare the posterior approximations found with our algorithms to the optimal variational approximation that minimizes the variational objective. For Bayesian logistic regression we can compute the optimal mean-field Gaussian approximations using the method described in Marlin et al. (2011) (refer to as ‘MF-Exact’), and compare it to the following methods: VOGN with\nminibatch size M = 1 and a momentum term (referred to as ‘VOGN-1’), and Vadam with M ≥ 1 (referred to as ‘Vadam’). Since our goal is to compare the accuracy of posterior approximations and not the speed of convergence, we run both the methods for many iterations with a small learning rate to make sure that they converge. We use three datasets: a toy dataset (N = 60, D = 2), USPS-3vs5 (N = 1781, D = 256) and Breast-Cancer (N = 683, D = 10). Details are in Appendix I.\nFig. 2(a) visualizes the approximations on a twodimensional toy example from Murphy (2012). The true posterior distribution is shown with the contour in the background. Both, Vadam and VOGN-1 find approximations that are different from MF-Exact, which is clearly due to differences in the type of Hessian approximations they use.\nFor real datasets, we compare performances using three metrics. First, the negative of the variational objective on the training data (the evidence lower-bound or ELBO), log-loss on the test data, and the symmetric KL distance between MF-Exact and the approximation found by a method. Fig. 2(b) shows the results averaged over 20 random splits of the USPS-3vs5 dataset. ELBO and log-loss are comparable for all methods, although Vadam does slightly worse on ELBO and VOGN-1 has slightly higher variance for log-loss. However, performance on the KL distance clearly shows the difference in the quality of posterior approximations. VOGN-1 performs quite well since it uses an unbiased approximation of the GNN. Vadam does worse due to the bias introduced in the GM approximation with minibatch M > 1, as indicated by Theorem 1.\nFig. 2(c) further shows the effect of M where, for each M , we plot results for 20 random initializations on one split of the Breast-Cancer dataset. As we decrease M , Vadam’s performance gets better, as expected. For M = 1, it closely\nmatches VOGN-1. The results are still different because Vadam does not reduce to VOGN-1, even when M = 1 due to the use of the square-root over st."
+  }, {
+    "heading": "6.2. Uncertainty Estimation in Neural Network",
+    "text": "We show results on the standard UCI benchmark. We repeat the experimental setup used in Gal & Ghahramani (2016). Following their work, we use a neural network with one hidden layer, 50 hidden units, and ReLU activation functions. We use the 20 splits of the data provided by Gal & Ghahramani (2016) for training and testing. We use Bayesian optimization to select the prior precision λ and noise precision of the Gaussian likelihood. Further details of the experiments are given in Appendix J.\nWe compare Vadam to MC-Dropout (Gal & Ghahramani, 2016) using the results reported in Gal & Ghahramani (2016). We also compare to an SG method using the reparameterization trick and the Adam optimizer (referred to as ‘BBVI’). For a fair comparison, the Adam optimizer is run with the same learning rates as Vadam, although these can be tuned further to get better performance.\nTable 1 shows the performance in terms of the test RMSE and the test log-likelihood. The better method out of BBVI and Vadam is shown in boldface found using a paired t-test with p-value > 0.01. Both methods perform comparably, which supports our conclusion, however, MC-Dropout outperforms both the methods. We also find that VOGN shows similar results to Vadam and BBVI (we omit the results due to lack of space). The convergence plots for the final runs is given in Appendix J.\nFor many tasks, we find that VOGN and Vadam converge much faster than BBVI. An example is shown in Figure 3 (see the first 3 figures in the left; details are in Appendix J).\nWe have observed similar trends on other datasets."
+  }, {
+    "heading": "6.3. Exploration in Deep Reinforcement Learning",
+    "text": "A good exploration strategy is crucial in reinforcement learning (RL) since the data is sequentially collected. We show that weight-perturbation in Vadam improves exploration in RL. Due to space constraints, we only provide a brief summary of our results, and give details in Appendix K.\nWe consider the deep deterministic policy gradient (DDPG) method for the Half-Cheetah task using a two-layer neural networks with 400 and 300 ReLU hidden units (Lillicrap et al., 2015). We compare Vadam and VadaGrad to two SGD methods, one of which does exploration (referred to as ‘SGD-Explore’), and the other does not (referred to as ‘SGD-plain’). The rightmost plot in Figure 3 shows the cumulative rewards (higher is better) of each method against training iterations. VadaGrad and Vadam clearly learn faster than both SGD-Plain and SGD-Explore. We also compare the performances against Adam variants of SGD-Plain and SGD-Explore. Their results, given in the Appendix K, show that Vadam and VadaGrad still learn faster, but only in the beginning and Adam based methods can catch up quickly.\nThis suggests that the exploration strategy has a high impact on the early learning performance in the Half-Cheetah task, and the effect of good exploration decreases over time as the agent collect more informative training samples."
+  }, {
+    "heading": "7. Discussion",
+    "text": "In this paper, we present new VI algorithms which are as simple to implement and execute as algorithms for MLE. We obtain them by using a series of approximations and a natural momentum method for a natural-gradient VI method. The resulting algorithms can be implemented within Adam with minimal changes. Our empirical findings confirm that our proposed algorithms obtain comparable uncertainty estimates to existing VI methods, but require less computational and implementation effort6.\nAn interesting direction we hope to pursue in the future is to generalize our natural-gradient approach to other types of approximation, e.g., exponetial-family distributions and their mixtures. We would also like to further explore the application to areas such as RL and stochastic optimization.\n6We made many new changes in this camera-ready version of the paper. A list of the changes is given in Appendix A."
+  }, {
+    "heading": "Acknowledgements",
+    "text": "We thank the anonymous reviewers for their feedback. We greatly appreciate many insightful discussions with Aaron Mishkin (UBC) and Frederik Kunstner (EPFL), and also thank them for their help on carrying out experiments and reviewing the manuscript. We would also like to thank Roger Grosse and David Duvenaud from the University of Toronto for useful discussions. We would like to thank Zuozhu Liu (SUTD, Singapore) for his help with the experiment on deep RL and logistic regression. Finally, we are thankful for the RAIDEN computing system at the RIKEN Center for AI Project, which we extensively used for our experiments."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Information geometry and its applications",
+    "authors": ["S. Amari"],
+    "year": 2016
+  }, {
+    "title": "A mean field theory learning algorithm for neural networks",
+    "authors": ["J.R. Anderson", "C. Peterson"],
+    "venue": "Complex Systems,",
+    "year": 1987
+  }, {
+    "title": "Bayesian dark knowledge",
+    "authors": ["A.K. Balan", "V. Rathod", "K.P. Murphy", "M. Welling"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2015
+  }, {
+    "title": "Ensemble learning in Bayesian neural networks",
+    "authors": ["D. Barber", "C.M. Bishop"],
+    "venue": "Generalization in Neural Networks and Machine Learning,",
+    "year": 1998
+  }, {
+    "title": "Pattern Recognition and Machine Learning",
+    "authors": ["C.M. Bishop"],
+    "year": 2006
+  }, {
+    "title": "Weight uncertainty in neural networks",
+    "authors": ["C. Blundell", "J. Cornebise", "K. Kavukcuoglu", "D. Wierstra"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2015
+  }, {
+    "title": "Optimization methods for large-scale machine learning",
+    "authors": ["L. Bottou", "F.E. Curtis", "J. Nocedal"],
+    "venue": "arXiv preprint arXiv:1606.04838,",
+    "year": 2016
+  }, {
+    "title": "Entropy-sgd: Biasing gradient descent into wide valleys",
+    "authors": ["P. Chaudhari", "A. Choromanska", "S. Soatto", "Y. LeCun", "C. Baldassi", "C. Borgs", "J.T. Chayes", "L. Sagun", "R. Zecchina"],
+    "venue": "In International Conference on Learning Representations,",
+    "year": 2016
+  }, {
+    "title": "Sampling Techniques, 3rd Edition",
+    "authors": ["W.G. Cochran"],
+    "venue": "John Wiley,",
+    "year": 1977
+  }, {
+    "title": "Transforming neural-net output levels to probability distributions",
+    "authors": ["J.S. Denker", "Y. Lecun"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 1991
+  }, {
+    "title": "Adaptive subgradient methods for online learning and stochastic optimization",
+    "authors": ["J. Duchi", "E. Hazan", "Y. Singer"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2011
+  }, {
+    "title": "Noisy networks for exploration",
+    "authors": ["M. Fortunato", "M.G. Azar", "B. Piot", "J. Menick", "I. Osband", "A. Graves", "V. Mnih", "R. Munos", "D. Hassabis", "O Pietquin"],
+    "venue": "In International Conference on Learning Representations,",
+    "year": 2018
+  }, {
+    "title": "Uncertainty in Deep Learning",
+    "authors": ["Y. Gal"],
+    "venue": "PhD thesis, University of Cambridge,",
+    "year": 2016
+  }, {
+    "title": "Dropout as a Bayesian approximation: Representing model uncertainty in deep learning",
+    "authors": ["Y. Gal", "Z. Ghahramani"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2016
+  }, {
+    "title": "Efficient Per-Example Gradient Computations",
+    "authors": ["I. Goodfellow"],
+    "venue": "ArXiv e-prints,",
+    "year": 2015
+  }, {
+    "title": "Practical variational inference for neural networks",
+    "authors": ["A. Graves"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2011
+  }, {
+    "title": "Distributed Bayesian learning with stochastic natural gradient expectation propagation and the posterior server",
+    "authors": ["L. Hasenclever", "S. Webb", "T. Lienart", "S. Vollmer", "B. Lakshminarayanan", "C. Blundell", "Y.W. Teh"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2017
+  }, {
+    "title": "On graduated optimization for stochastic non-convex problems",
+    "authors": ["E. Hazan", "K.Y. Levy", "S. Shalev-Shwartz"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2016
+  }, {
+    "title": "Fast variational inference in the conjugate exponential family",
+    "authors": ["J. Hensman", "M. Rattray", "N.D. Lawrence"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2012
+  }, {
+    "title": "Probabilistic backpropagation for scalable learning of Bayesian neural networks",
+    "authors": ["J.M. Hernandez-Lobato", "R. Adams"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2015
+  }, {
+    "title": "beta-VAE: Learning basic visual concepts with a constrained variational framework",
+    "authors": ["I. Higgins", "L. Matthey", "A. Pal", "C. Burgess", "X. Glorot", "M. Botvinick", "S. Mohamed", "A. Lerchner"],
+    "venue": "In International Conference on Learning Representations,",
+    "year": 2016
+  }, {
+    "title": "Keeping the neural networks simple by minimizing the description length of the weights",
+    "authors": ["G.E. Hinton", "D. Van Camp"],
+    "venue": "In Annual Conference on Computational Learning Theory, pp",
+    "year": 1993
+  }, {
+    "title": "Conjugate-computation variational inference: converting variational inference in non-conjugate models to inferences in conjugate models",
+    "authors": ["M.E. Khan", "W. Lin"],
+    "venue": "In International Conference on Artificial Intelligence and Statistics,",
+    "year": 2017
+  }, {
+    "title": "Faster stochastic variational inference using proximalgradient methods with general divergence functions",
+    "authors": ["M.E. Khan", "R. Babanezhad", "W. Lin", "M. Schmidt", "M. Sugiyama"],
+    "venue": "In Proceedings of the Conference on Uncertainty in Artificial Intelligence,",
+    "year": 2016
+  }, {
+    "title": "Variational Adaptive-Newton Method for Explorative Learning",
+    "authors": ["M.E. Khan", "W. Lin", "V. Tangkaratt", "Z. Liu", "D. Nielsen"],
+    "year": 2017
+  }, {
+    "title": "Adam: A method for stochastic optimization",
+    "authors": ["D. Kingma", "J. Ba"],
+    "venue": "In International Conference on Learning Representations,",
+    "year": 2015
+  }, {
+    "title": "Smoothing-based optimization",
+    "authors": ["M. Leordeanu", "M. Hebert"],
+    "venue": "In Computer Vision and Pattern Recognition,",
+    "year": 2008
+  }, {
+    "title": "Preconditioned stochastic gradient langevin dynamics for deep neural networks",
+    "authors": ["C. Li", "C. Chen", "D.E. Carlson", "L. Carin"],
+    "venue": "In AAAI Conference on Artificial Intelligence,",
+    "year": 2016
+  }, {
+    "title": "Continuous control with deep reinforcement learning",
+    "authors": ["T.P. Lillicrap", "J.J. Hunt", "A. Pritzel", "N. Heess", "T. Erez", "Y. Tassa", "D. Silver", "D. Wierstra"],
+    "venue": "CoRR, abs/1509.02971,",
+    "year": 2015
+  }, {
+    "title": "Structured and efficient variational deep learning with matrix gaussian posteriors",
+    "authors": ["C. Louizos", "M. Welling"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2016
+  }, {
+    "title": "Information theory, inference and learning algorithms",
+    "authors": ["D.J. MacKay"],
+    "venue": "Cambridge university press,",
+    "year": 2003
+  }, {
+    "title": "Stochastic gradient descent as approximate Bayesian inference",
+    "authors": ["S. Mandt", "M.D. Hoffman", "D.M. Blei"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2017
+  }, {
+    "title": "Piecewise bounds for estimating Bernoulli-logistic latent Gaussian models",
+    "authors": ["B. Marlin", "M. Khan", "K. Murphy"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2011
+  }, {
+    "title": "New insights and perspectives on the natural gradient method",
+    "authors": ["J. Martens"],
+    "venue": "arXiv preprint arXiv:1412.1193,",
+    "year": 2014
+  }, {
+    "title": "A theoretical analysis of optimization by Gaussian continuation",
+    "authors": ["H. Mobahi", "J.W. Fisher III"],
+    "venue": "In AAAI Conference on Artificial Intelligence,",
+    "year": 2015
+  }, {
+    "title": "Machine Learning: A Probabilistic Perspective",
+    "authors": ["K.P. Murphy"],
+    "year": 2012
+  }, {
+    "title": "Bayesian learning for neural networks",
+    "authors": ["R.M. Neal"],
+    "venue": "PhD thesis, University of Toronto,",
+    "year": 1995
+  }, {
+    "title": "The variational Gaussian approximation revisited",
+    "authors": ["M. Opper", "C. Archambeau"],
+    "venue": "Neural Computation,",
+    "year": 2009
+  }, {
+    "title": "Parameter space noise for exploration",
+    "authors": ["M. Plappert", "R. Houthooft", "P. Dhariwal", "S. Sidor", "R.Y. Chen", "X. Chen", "T. Asfour", "P. Abbeel", "M. Andrychowicz"],
+    "venue": "In International Conference on Learning Representations,",
+    "year": 2018
+  }, {
+    "title": "Black box variational inference",
+    "authors": ["R. Ranganath", "S. Gerrish", "D.M. Blei"],
+    "venue": "In International conference on Artificial Intelligence and Statistics,",
+    "year": 2014
+  }, {
+    "title": "The information geometry of mirror descent",
+    "authors": ["G. Raskutti", "S. Mukherjee"],
+    "venue": "IEEE Transactions on Information Theory,",
+    "year": 2015
+  }, {
+    "title": "Stochastic backpropagation and approximate inference in deep generative models",
+    "authors": ["D.J. Rezende", "S. Mohamed", "D. Wierstra"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2014
+  }, {
+    "title": "A scalable laplace approximation for neural networks",
+    "authors": ["H. Ritter", "A. Botev", "D. Barber"],
+    "venue": "In International Conference on Learning Representations,",
+    "year": 2018
+  }, {
+    "title": "Monte Carlo Statistical Methods (Springer Texts in Statistics)",
+    "authors": ["C.P. Robert", "G. Casella"],
+    "year": 2005
+  }, {
+    "title": "Exploring parameter space in reinforcement learning",
+    "authors": ["T. Rückstieß", "F. Sehnke", "T. Schaul", "D. Wierstra", "Y. Sun", "J. Schmidhuber"],
+    "venue": "Paladyn,",
+    "year": 2010
+  }, {
+    "title": "Fixed-form variational posterior approximation through stochastic linear regression",
+    "authors": ["T. Salimans", "Knowles", "D. A"],
+    "venue": "Bayesian Analysis,",
+    "year": 2013
+  }, {
+    "title": "Mean field theory for sigmoid belief networks",
+    "authors": ["L.K. Saul", "T. Jaakkola", "M.I. Jordan"],
+    "venue": "Journal of Artificial Intelligence Research,",
+    "year": 1996
+  }, {
+    "title": "Fast curvature matrix-vector products for second-order gradient descent",
+    "authors": ["N.N. Schraudolph"],
+    "venue": "Neural computation,",
+    "year": 2002
+  }, {
+    "title": "Deterministic policy gradient algorithms",
+    "authors": ["D. Silver", "G. Lever", "N. Heess", "T. Degris", "D. Wierstra", "M.A. Riedmiller"],
+    "venue": "In Proceedings of the 31th International Conference on Machine Learning,",
+    "year": 2014
+  }, {
+    "title": "Optimization by variational bounding",
+    "authors": ["J. Staines", "D. Barber"],
+    "venue": "In European Symposium on Artificial Neural Networks,",
+    "year": 2013
+  }, {
+    "title": "Learning structured weight uncertainty in Bayesian neural networks",
+    "authors": ["S. Sun", "C. Chen", "L. Carin"],
+    "venue": "In International Conference on Artificial Intelligence and Statistics,",
+    "year": 2017
+  }, {
+    "title": "Lecture 6.5-RMSprop: Divide the gradient by a running average of its recent magnitude",
+    "authors": ["T. Tieleman", "G. Hinton"],
+    "venue": "COURSERA: Neural Networks for Machine Learning",
+    "year": 2012
+  }, {
+    "title": "Natural evolution strategies",
+    "authors": ["D. Wierstra", "T. Schaul", "T. Glasmachers", "Y. Sun", "J. Peters", "J. Schmidhuber"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2014
+  }, {
+    "title": "Simple statistical gradient-following algorithms for connectionist reinforcement learning",
+    "authors": ["R.J. Williams"],
+    "venue": "Machine learning,",
+    "year": 1992
+  }, {
+    "title": "The marginal value of adaptive gradient methods in machine learning",
+    "authors": ["A.C. Wilson", "R. Roelofs", "M. Stern", "N. Srebro", "B. Recht"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2017
+  }, {
+    "title": "Noisy natural gradient as variational inference",
+    "authors": ["G. Zhang", "S. Sun", "D.K. Duvenaud", "R.B. Grosse"],
+    "venue": "arXiv preprint arXiv:1712.02390,",
+    "year": 2018
+  }, {
+    "title": "Gradient-based adaptive stochastic search for non-differentiable optimization",
+    "authors": ["E. Zhou", "J. Hu"],
+    "venue": "IEEE Transactions on Automatic Control,",
+    "year": 2014
+  }],
+  "id": "SP:6bd91da8b4128644247f667df7bbda256fac7308",
+  "authors": [{
+    "name": "Mohammad Emtiyaz Khan",
+    "affiliations": []
+  }, {
+    "name": "Didrik Nielsen",
+    "affiliations": []
+  }, {
+    "name": "Voot Tangkaratt",
+    "affiliations": []
+  }, {
+    "name": "Wu Lin",
+    "affiliations": []
+  }, {
+    "name": "Yarin Gal",
+    "affiliations": []
+  }, {
+    "name": "Akash Srivastava",
+    "affiliations": []
+  }],
+  "abstractText": "Uncertainty computation in deep learning is essential to design robust and reliable systems. Variational inference (VI) is a promising approach for such computation, but requires more effort to implement and execute compared to maximumlikelihood methods. In this paper, we propose new natural-gradient algorithms to reduce such efforts for Gaussian mean-field VI. Our algorithms can be implemented within the Adam optimizer by perturbing the network weights during gradient evaluations, and uncertainty estimates can be cheaply obtained by using the vector that adapts the learning rate. This requires lower memory, computation, and implementation effort than existing VI methods, while obtaining uncertainty estimates of comparable quality. Our empirical results confirm this and further suggest that the weight-perturbation in our algorithm could be useful for exploration in reinforcement learning and stochastic optimization.",
+  "title": "Fast and Scalable Bayesian Deep Learning by Weight-Perturbation in Adam"
+}

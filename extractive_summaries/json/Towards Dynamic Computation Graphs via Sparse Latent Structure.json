@@ -1,0 +1,197 @@
+{
+  "sections": [{
+    "text": "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 905–911 Brussels, Belgium, October 31 - November 4, 2018. c©2018 Association for Computational Linguistics\n905\nstructures in the data—e.g., parse trees— typically extracted using off-the-shelf parsers. Recent attempts to jointly learn the latent structure encounter a tradeoff: either make factorization assumptions that limit expressiveness, or sacrifice end-to-end differentiability. Using the recently proposed SparseMAP inference, which retrieves a sparse distribution over latent structures, we propose a novel approach for end-to-end learning of latent structure predictors jointly with a downstream predictor. To the best of our knowledge, our method is the first to enable unrestricted dynamic computation graph construction from the global latent structure, while maintaining differentiability."
+  }, {
+    "heading": "1 Introduction",
+    "text": "Latent structure models are a powerful tool for modeling compositional data and building NLP pipelines (Smith, 2011). An interesting emerging direction is to dynamically adapt a network’s computation graph, based on structure inferred from the input; notable applications include learning to write programs (Bosnjak et al., 2017), answering visual questions by composing specialized modules (Hu et al., 2017; Johnson et al., 2017), and composing sentence representations using latent syntactic parse trees (Yogatama et al., 2017).\nBut how to learn a model that is able to condition on such combinatorial variables? The question then becomes: how to marginalize over all possible latent structures? For tractability, existing approaches have to make a choice. Some of them eschew global latent structure, resorting to computation graphs built from smaller local decisions: e.g., structured attention networks use local posterior marginals as attention weights (Kim et al., 2017; Liu and Lapata, 2018), and Maillard et al. (2017) construct sentence representations from parser chart entries. Others allow more flexibility at the cost of losing end-to-end differentiability, ending up with reinforcement learning\nproblems (Yogatama et al., 2017; Hu et al., 2017; Johnson et al., 2017; Williams et al., 2018). More traditional approaches employ an off-line structure predictor (e.g., a parser) to define the computation graph (Tai et al., 2015; Chen et al., 2017), sometimes with some parameter sharing (Bowman et al., 2016). However, these off-line methods are unable to jointly train the latent model and the downstream classifier via error gradient information.\nWe propose here a new strategy for building dynamic computation graphs with latent structure, through sparse structure prediction. Sparsity allows selecting and conditioning on a tractable number of global structures, eliminating the limitations stated above. Namely, our approach is the first that:\nA) is fully differentiable;\nB) supports latent structured variables;\nC) can marginalize over full global structures.\nThis contrasts with off-line and with reinforcement learning-based approaches, which satisfy B and C but not A; and with local marginal-based methods such as structured attention networks, which satisfy A and B, but not C. Key to our approach is the recently proposed SparseMAP inference (Niculae et al., 2018), which induces, for each data example, a very sparse posterior distribution over the possible structures, allowing us to compute the expected network output efficiently and explicitly in terms of a small, interpretable set of latent structures. Our model can be trained end-to-end with gradient-based methods, without the need for policy exploration or sampling.\nWe demonstrate our strategy on inducing latent dependency TreeLSTMs, achieving competitive results on sentence classification, natural language inference, and reverse dictionary lookup."
+  }, {
+    "heading": "2 Sparse Latent Structure Prediction",
+    "text": "We describe our proposed approach for learning with combinatorial structures (in particular, nonprojective dependency trees) as latent variables."
+  }, {
+    "heading": "2.1 Latent Structure Models",
+    "text": "Let x and y denote classifier inputs and outputs, and h ∈ H(x) a latent variable; for example, H(x) can be the set of possible dependency trees for x. We would like to train a neural network to model\np(y | x) := ∑\nh∈H(x)\npθ(h | x) pξ(y | h, x), (1)\nwhere pθ(h | x) is a structured-output parsing model that defines a distribution over trees, and pξ(y | h, x) is a classifier whose computation graph may depend freely and globally on the structure h (e.g., a TreeLSTM). The rest of this section focuses on the challenge of defining pθ(h | x) such that Eqn. 1 remains tractable and differentiable."
+  }, {
+    "heading": "2.2 Global Inference",
+    "text": "Denote by fθ(h; x) a scoring function, assigning each tree a non-normalized score. For instance, we may have an arc-factored score fθ(h;x) := ∑\na∈h sθ(a;x), where we interpret a tree h as a set of directed arcs a, each receiving an atomic score sθ(a;x). Deriving pθ given fθ is known as structured inference. This can be written as a Ω-regularized optimization problem of the form\npθ(· | x) := argmax q∈△|H(x)|\n∑\nh∈H(x)\nq(h)fθ(h;x)−Ω(q),\nwhere △|H(x)| is the set of all possible probability distributions over H(x). Examples follow.\nMarginal inference. With negative entropy regularization, i.e., Ω(q) := ∑\nh∈H(x) q(h) log q(h),\nwe recover marginal inference, and the probability of a tree becomes (Wainwright and Jordan, 2008)\npθ(h | x) ∝ exp(fθ(h;x)).\nThis closed-form derivation, detailed in Appendix A, provides a differentiable expression for pθ. However, crucially, since exp(·) > 0, every tree is assigned strictly nonzero probability. Therefore—unless the downstream pξ is constrained to also factor over arcs, as in Kim et al. (2017); Liu and Lapata (2018)—the sum in Eqn. 1 requires enumerating the exponentially large H(x). This is generally intractable, and even hard to approximate via sampling, even when pθ is tractable.\nMAP inference. At the polar opposite, setting Ω(q) := 0 yields maximum a posteriori (MAP) inference (see Appendix A). MAP assigns a probability of 1 to the highest-scoring tree, and 0 to all others, yielding a very sparse pθ. However, since the top-scoring tree (or top-k, for fixed k) does not vary with small changes in θ, error gradients cannot propagate through MAP. This prevents end-to-end gradient-based training for MAPbased latent variables, which makes them more difficult to use. Related reinforcement learning approaches also yield only one structure, but sidestep non-differentiability by instead introducing more challenging search problems."
+  }, {
+    "heading": "2.3 Sparse Inference",
+    "text": "In this work, we propose using SparseMAP inference (Niculae et al., 2018) to sparsify the set H while preserving differentiability. SparseMAP\nuses a quadratic penalty on the posterior marginals\nΩ(q) := ‖u(q)‖22 , where [u(q)]a := ∑\nh:a∈h\nq(h).\nSituated between marginal inference and MAP inference, SparseMAP assigns nonzero probability to only a small set of plausible trees H̄ ⊂ H, of size at most equal to the number of arcs (Martins et al., 2015, Proposition 11). This guarantees that the summation in Eqn. 1 can be computed efficiently by iterating over H̄: this is depicted in Figure 1 and described in the next paragraphs.\nForward pass. To compute p(y | x) (Eqn. 1), we observe that the SparseMAP posterior pθ is nonzero only on a small set of trees H̄, and thus we only need to compute pξ(y | h, x) for h ∈ H̄. The support and values of pθ are obtained by solving the SparseMAP inference problem, as we describe in Niculae et al. (2018). The strategy, based on the active set algorithm (Nocedal and Wright, 1999, chapter 16), involves a sequence of MAP calls (here: maximum spanning tree problems.)\nBackward pass. We next show how to compute end-to-end gradients efficiently. Recall from Eqn. 1 p(y | x) = ∑\nh∈H pθ(h | x) pξ(y | h, x), where h is a discrete index of a tree. To train the classifier, we have ∂p(y|x)/∂ξ = ∑\nh∈H pθ(h | x)∂pξ(y|h,x)/∂ξ, therefore only the terms with nonzero probability (i.e., h ∈ H̄) contribute to the gradient. ∂pξ(y|h,x)/∂ξ is readily available by implementing pξ in an automatic differentiation library. 1 To train the latent parser, the total gradient ∂p(y|x)/θ is the sum ∑\nh∈H̄ pξ(y | h, x) ∂pθ(h|x)/∂θ. We derive the expression of ∂pθ(h|x)/∂θ in Appendix B. Crucially, the gradient sum is also sparse, like pθ, and efficient to compute, amounting to multiplying by a |H̄(x)|-by-|H̄(x)| matrix. The proof, given in Appendix B, is a novel extension of the SparseMAP backward pass (Niculae et al., 2018).\nGenerality. Our description focuses on probabilistic classifiers, but our method can be readily applied to networks that output any representation, not necessarily a probability. For this, we define a function rξ(h, x), consisting of any autodifferentiable computation w.r.t. x, conditioned on\n1Here we assume θ and ξ to be disjoint, but weight sharing is easily handled by automatic differentiation via the product rule. Differentiation w.r.t. the summation index h is not necessary: pξ may use the discrete structure h freely and globally.\nthe discrete latent structure h in arbitrary, nondifferentiable ways. We then compute\nr̄(x) := ∑\nh∈H(x)\npθ(h | x)rξ(h, x) = Eh∼pθrξ(h, x).\nThis strategy is demonstrated in our reversedictionary experiments in §3.4. In addition, our approach is not limited to trees: any structured model with tractable MAP inference may be used."
+  }, {
+    "heading": "3 Experiments",
+    "text": "We evaluate our approach on three natural language processing tasks: sentence classification, natural language inference, and reverse dictionary lookup."
+  }, {
+    "heading": "3.1 Common aspects",
+    "text": "Word vectors. Unless otherwise mentioned, we initialize with 300-dimensional GloVe word embeddings (Pennington et al., 2014) We transform every sentence via a bidirectional LSTM encoder, to produce a context-aware vector vi encoding word i.\nDependency TreeLSTM. We combine the word vectors vi in a sentence into a single vector using a tree-structured Child-Sum LSTM, which allows an arbitrary number of children at any node (Tai et al., 2015). Our baselines consist in extreme cases of dependency trees: where the parent of word i is word i+1 (resulting in a left-to-right sequential LSTM), and where all words are direct children of the root node (resulting in a flat additive model). We also consider off-line dependency trees precomputed by Stanford CoreNLP (Manning et al., 2014).\nNeural arc-factored dependency parsing. We compute arc scores sθ(a;x) with one-hidden-layer perceptrons (Kiperwasser and Goldberg, 2016).\nExperimental setup. All networks are trained via stochastic gradient with 16 samples per batch. We tune the learning rate on a log-grid, using a decay factor of 0.9 after every epoch at which the validation performance is not the best seen, and stop after five epochs without improvement. At test time, we scale the arc scores sθ by a temperature t\nchosen on the validation set, controlling the sparsity of the SparseMAP distribution. All hidden layers are 300-dimensional.2"
+  }, {
+    "heading": "3.2 Sentence classification",
+    "text": "We evaluate our models for sentence-level subjectivity classification (Pang and Lee, 2004) and for binary sentiment classification on the Stanford Sentiment Treebank (Socher et al., 2013). In both cases, we use a softmax output layer on top of the Dependency TreeLSTM output representation."
+  }, {
+    "heading": "3.3 Natural language inference (NLI)",
+    "text": "We apply our strategy to the SNLI corpus (Bowman et al., 2015), which consists of classifying premise-hypothesis sentence pairs into entailment, contradiction or neutral relations. In this case, for each pair (xP , xH ), the running sum is over two latent distributions over parse trees, i.e., ∑\nhP∈H(xP )\n∑\nhH∈H(xH) pξ(y | x{P,H}, h{P,H})\npθ(hP | xP )pθ(hH | xH). For each pair of trees, we independently encode the premise and hypothesis using a TreeLSTM. We then concatenate the two vectors, their difference, and their element-wise product (Mou et al., 2016). The result is passed through one tanh hidden layer, followed by the softmax output layer.3"
+  }, {
+    "heading": "3.4 Reverse dictionary lookup",
+    "text": "The reverse dictionary task aims to compose a dictionary definition into an embedding that is close to the defined word. We therefore used fixed input and output embeddings, set to unit-norm 500- dimensional vectors provided, together with training and evaluation data, by Hill et al. (2016). The\n2Our dynet (Neubig et al., 2017) implementation is available at https://github.com/vene/sparsemap.\n3For NLI, our architecture is motivated by our goal of evaluating the impact of latent structure for learning compositional sentence representations. State-of-the-art models conditionally transform the sentences to achieve better performance, e.g., 88.6% accuracy in Chen et al. (2017).\n28%\n⋆ a vivid cinematic portrait .\n1.0 1.0\n1.0 1.0\n1.0\nX 16%\nnetwork output is a projection of the TreeLSTM encoding back to the dimension of the word embeddings, normalized to unit ℓ2 norm. We maximize the cosine similarity of the predicted vector with the embedding of the defined word."
+  }, {
+    "heading": "4 Discussion",
+    "text": "Experimental performance. Classification and NLI results are reported in Table 1. Compared to the latent structure model of Yogatama et al. (2017), our model performs better on SNLI (80.5%) but worse on SST (86.5%). On SNLI, our model also outperforms Maillard et al. (2017) (81.6%). To our knowledge, latent structure models have not been tested on subjectivity classification. Surprisingly, the simple flat and left-to-right baselines are very strong, outperforming the off-line dependency tree models on all three datasets. The latent TreeLSTM model reaches the best accuracy on two out of the three datasets. On reverse dictionary lookup (Ta-\nble 2), our model also performs well, especially on concept classification, where the input definitions are more different from the ones seen during training. For context, we repeat the scores of the CKY-based latent TreeLSTM model of Maillard et al. (2017), as well as of the LSTM from Hill et al. (2016); these different-sized models are not entirely comparable. We attribute our model’s performance to the latent parser’s flexibility, investigated below.\nSelected latent structures. We analyze the latent structures selected by our model on SST, where the flat composition baseline is remarkably strong. We find that our model, to maximize accuracy, prefers flat or nearly-flat trees, but not exclusively: the average posterior probability of the flat tree is 28.9%. In Figure 2, the highest-ranked tree is flat, but deeper trees are also selected, including the projective CoreNLP parser output. Syntax is not necessarily an optimal composition order for a latent TreeLSTM, as illustrated by the poor performance of the off-line parser (Table 1). Consequently, our (fully unsupervised) latent structures tend to disagree with CoreNLP: the average probability of CoreNLP arcs is 5.8%; Williams et al. (2018) make related observations. Indeed, some syntactic conventions may be questionable for recursive composition. Figure 3 shows two examples where our model identifies a plausible symmetric composition order for coordinate structures: this analysis disagrees with CoreNLP, which uses the asymmetrical Stanford / UD convention of assigning the left-most conjunct as head (Nivre et al.,\n2016). Assigning the conjunction as head instead seems preferable in a Child-Sum TreeLSTM.\nTraining efficiency. Our model must evaluate at least one TreeLSTM for each sentence, making it necessarily slower than the baselines, which evaluate exactly one. Thanks to sparsity and autobatching, the actual slow-down is not problematic; moreover, as the model trains, the latent parser gets more confident, and for many unambiguous sentences there may be only one latent tree with nonzero probability. On SST, our average training epoch is only 4.7× slower than the off-line parser and 6× slower than the flat baseline."
+  }, {
+    "heading": "5 Conclusions and future work",
+    "text": "We presented a novel approach for training latent structure neural models, based on the key idea of sparsifying the set of possible structures, and demonstrated our method with competitive latent dependency TreeLSTM models. Our method’s generality opens up several avenues for future work: since it supports any structure for which MAP inference is available (e.g., matchings, alignments), and we have no restrictions on the downstream pξ(y | h, x), we may design latent versions of more complicated state-of-the-art models, such as ESIM for NLI (Chen et al., 2017). In concurrent work, Peng et al. (2018) proposed an approximate MAP backward pass, relying on a relaxation and a gradient projection. Unlike our method, theirs does not support multiple latent structures; we intend to further study the relationship between the methods."
+  }, {
+    "heading": "Acknowledgments",
+    "text": "This work was supported by the European Research Council (ERC StG DeepSPIN 758969) and by the Fundação para a Ciência e Tecnologia through contract UID/EEA/50008/2013. We thank Annabelle Carrell, Chris Dyer, Jack Hessel, Tim Vieira, Justine Zhang, Sydney Zink, and the anonymous reviewers, for helpful and well-structured feedback."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Programming with a differentiable Forth interpreter",
+    "authors": ["Matko Bosnjak", "Tim Rocktäschel", "Jason Naradowsky", "Sebastian Riedel."],
+    "venue": "Proc. ICML.",
+    "year": 2017
+  }, {
+    "title": "A large annotated corpus for learning natural language inference",
+    "authors": ["Samuel R Bowman", "Gabor Angeli", "Christopher Potts", "Christopher D Manning."],
+    "venue": "Proc. EMNLP.",
+    "year": 2015
+  }, {
+    "title": "A fast unified model for parsing and sentence understanding",
+    "authors": ["Samuel R Bowman", "Jon Gauthier", "Abhinav Rastogi", "Raghav Gupta", "Christopher D Manning", "Christopher Potts."],
+    "venue": "Proc. ACL.",
+    "year": 2016
+  }, {
+    "title": "Enhanced LSTM for natural language inference",
+    "authors": ["Qian Chen", "Xiaodan Zhu", "Zhen-Hua Ling", "Si Wei", "Hui Jiang", "Diana Inkpen."],
+    "venue": "Proc. ACL.",
+    "year": 2017
+  }, {
+    "title": "The generalized simplex method for minimizing a linear form under linear inequality restraints",
+    "authors": ["George B Dantzig", "Alex Orden", "Philip Wolfe"],
+    "venue": "Pacific Journal of Mathematics,",
+    "year": 1955
+  }, {
+    "title": "Learning to understand phrases by embedding the dictionary",
+    "authors": ["Felix Hill", "KyungHyun Cho", "Anna Korhonen", "Yoshua Bengio."],
+    "venue": "TACL, 4(1):17–30.",
+    "year": 2016
+  }, {
+    "title": "Learning to reason: End-to-end module networks for visual question answering",
+    "authors": ["Ronghang Hu", "Jacob Andreas", "Marcus Rohrbach", "Trevor Darrell", "Kate Saenko."],
+    "venue": "Proc. ICCV.",
+    "year": 2017
+  }, {
+    "title": "Inferring and executing programs for visual reasoning",
+    "authors": ["Justin Johnson", "Bharath Hariharan", "Laurens van der Maaten", "Judy Hoffman", "Li Fei-Fei", "C Lawrence Zitnick", "Ross Girshick."],
+    "venue": "Proc. ICCV.",
+    "year": 2017
+  }, {
+    "title": "Structured attention networks",
+    "authors": ["Yoon Kim", "Carl Denton", "Loung Hoang", "Alexander M Rush."],
+    "venue": "Proc. ICLR.",
+    "year": 2017
+  }, {
+    "title": "Simple and accurate dependency parsing using bidirectional LSTM feature representations",
+    "authors": ["Eliyahu Kiperwasser", "Yoav Goldberg."],
+    "venue": "TACL, 4:313– 327.",
+    "year": 2016
+  }, {
+    "title": "Learning structured text representations",
+    "authors": ["Yang Liu", "Mirella Lapata."],
+    "venue": "TACL, 6:63–75.",
+    "year": 2018
+  }, {
+    "title": "Jointly learning sentence embeddings and syntax with unsupervised tree-LSTMs",
+    "authors": ["Jean Maillard", "Stephen Clark", "Dani Yogatama."],
+    "venue": "preprint arXiv:1705.09189.",
+    "year": 2017
+  }, {
+    "title": "The Stanford CoreNLP natural language processing toolkit",
+    "authors": ["Christopher Manning", "Mihai Surdeanu", "John Bauer", "Jenny Finkel", "Steven Bethard", "David McClosky."],
+    "venue": "Proc. ACL (demonstrations).",
+    "year": 2014
+  }, {
+    "title": "AD3: Alternating directions dual decomposition for MAP inference in graphical models",
+    "authors": ["André FT Martins", "Mário AT Figueiredo", "Pedro MQ Aguiar", "Noah A Smith", "Eric P Xing."],
+    "venue": "JMLR, 16(1):495– 545.",
+    "year": 2015
+  }, {
+    "title": "How transferable are neural networks in NLP applications? In Proc",
+    "authors": ["Lili Mou", "Zhao Meng", "Rui Yan", "Ge Li", "Yan Xu", "Lu Zhang", "Zhi Jin."],
+    "venue": "EMNLP.",
+    "year": 2016
+  }, {
+    "title": "DyNet: The dynamic neural network toolkit",
+    "authors": ["Kong", "Adhiguna Kuncoro", "Gaurav Kumar", "Chaitanya Malaviya", "Paul Michel", "Yusuke Oda", "Matthew Richardson", "Naomi Saphra", "Swabha Swayamdipta", "Pengcheng Yin."],
+    "venue": "preprint arXiv:1701.03980.",
+    "year": 2017
+  }, {
+    "title": "SparseMAP: Differentiable sparse structured inference",
+    "authors": ["Vlad Niculae", "André FT Martins", "Mathieu Blondel", "Claire Cardie."],
+    "venue": "Proc. ICML.",
+    "year": 2018
+  }, {
+    "title": "Universal Dependencies v1: A multilingual treebank collection",
+    "authors": ["Joakim Nivre", "Marie-Catherine De Marneffe", "Filip Ginter", "Yoav Goldberg", "Jan Hajic", "Christopher D Manning", "Ryan T McDonald", "Slav Petrov", "Sampo Pyysalo", "Natalia Silveira"],
+    "year": 2016
+  }, {
+    "title": "Numerical optimization",
+    "authors": ["Jorge Nocedal", "Stephen Wright."],
+    "venue": "Springer New York.",
+    "year": 1999
+  }, {
+    "title": "A sentimental education: Sentiment analysis using subjectivity",
+    "authors": ["Bo Pang", "Lillian Lee."],
+    "venue": "Proc. ACL.",
+    "year": 2004
+  }, {
+    "title": "Backpropagating through structured argmax using a SPIGOT",
+    "authors": ["Hao Peng", "Sam Thomson", "Noah A Smith."],
+    "venue": "Proc. ACL.",
+    "year": 2018
+  }, {
+    "title": "GloVe: Global vectors for word representation",
+    "authors": ["Jeffrey Pennington", "Richard Socher", "Christopher D Manning."],
+    "venue": "Proc. EMNLP.",
+    "year": 2014
+  }, {
+    "title": "Linguistic structure prediction",
+    "authors": ["Noah A Smith."],
+    "venue": "Synth. Lect. Human Lang. Technol., 4(2):1–274.",
+    "year": 2011
+  }, {
+    "title": "Recursive deep models for semantic compositionality over a sentiment treebank",
+    "authors": ["Richard Socher", "Alex Perelygin", "Jean Wu", "Jason Chuang", "Christopher D Manning", "Andrew Ng", "Christopher Potts."],
+    "venue": "Proc. EMNLP.",
+    "year": 2013
+  }, {
+    "title": "Improved semantic representations from tree-structured Long Short-Term Memory networks",
+    "authors": ["Kai Sheng Tai", "Richard Socher", "Christopher D Manning."],
+    "venue": "Proc. ACL-IJCNLP.",
+    "year": 2015
+  }, {
+    "title": "Graphical models, exponential families, and variational inference",
+    "authors": ["Martin J Wainwright", "Michael I Jordan."],
+    "venue": "Foundations and Trends® in Machine Learning, 1(1–2):1–305.",
+    "year": 2008
+  }, {
+    "title": "Do latent tree learning models identify meaningful structure in sentences? TACL",
+    "authors": ["Adina Williams", "Andrew Drozdov", "Samuel R Bowman"],
+    "year": 2018
+  }, {
+    "title": "Learning to compose words into sentences with reinforcement learning",
+    "authors": ["Dani Yogatama", "Phil Blunsom", "Chris Dyer", "Edward Grefenstette", "Wang Ling."],
+    "venue": "Proc. ICLR.",
+    "year": 2017
+  }],
+  "id": "SP:4ebac0e590ad207469078458be5a5fe14c305922",
+  "authors": [{
+    "name": "Vlad Niculae",
+    "affiliations": []
+  }, {
+    "name": "André F. T. Martins",
+    "affiliations": []
+  }, {
+    "name": "Claire Cardie",
+    "affiliations": []
+  }],
+  "abstractText": "Deep NLP models benefit from underlying structures in the data—e.g., parse trees— typically extracted using off-the-shelf parsers. Recent attempts to jointly learn the latent structure encounter a tradeoff: either make factorization assumptions that limit expressiveness, or sacrifice end-to-end differentiability. Using the recently proposed SparseMAP inference, which retrieves a sparse distribution over latent structures, we propose a novel approach for end-to-end learning of latent structure predictors jointly with a downstream predictor. To the best of our knowledge, our method is the first to enable unrestricted dynamic computation graph construction from the global latent structure, while maintaining differentiability.",
+  "title": "Towards Dynamic Computation Graphs via Sparse Latent Structure"
+}

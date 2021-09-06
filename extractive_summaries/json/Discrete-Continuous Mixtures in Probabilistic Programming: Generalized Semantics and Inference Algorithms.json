@@ -1,0 +1,397 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "As originally defined by Pearl (1988), Bayesian networks express joint distributions over finite sets of random variables as products of conditional distributions. Probabilistic programming languages (PPLs) (Koller et al., 1997; Milch et al., 2005a; Goodman et al., 2008; Wood et al., 2014b) apply the same idea to potentially infinite sets of variables with general dependency structures. Thanks to their expressive power, PPLs have been used to solve many real-world applications, including Captcha (Le et al., 2017), seismic monitoring (Arora et al., 2013), 3D pose estimation (Kulkarni et al., 2015), generating design suggestions (Ritchie et al., 2015), concept learning (Lake et al., 2015), and cognitive science applications (Stuhlmüller & Goodman, 2014).\nIn practical applications, we often have to deal with a mix-\n1University of California, Berkeley 2Arizona State University 3Vicarious Inc. 4Carnegie Mellon University. Correspondence to: Yi Wu <jxwuyi@gmail.com>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\nture of continuous and discrete random variables. Existing PPLs support both discrete and continuous random variables, but not discrete-continuous mixtures, i.e., variables whose distributions combine discrete and continuous elements. Such variables are fairly common in practical applications: sensors that have thresholded limits, e.g. thermometers, weighing scales, speedometers, pressure gauges; or a hybrid sensor that can report a either real value or an error condition. The occurrence of such variables has been noted in many other applications from a wide range of scientific domains (Kharchenko et al., 2014; Pierson & Yau, 2015; Gao et al., 2017).\nMany PPLs have a restricted syntax that forces the expressed random variables to be either discrete or continuous, including WebPPL (Goodman & Stuhlmüller, 2014), Edward (Tran et al., 2016), Figaro (Pfeffer, 2009) and Stan (Carpenter et al., 2016). Even for PPLs whose syntax allows for mixtures of discrete and continuous variables, such as BLOG (Milch et al., 2005a), Church (Goodman, 2013), Venture (Mansinghka et al., 2014) and Anglican (Wood et al., 2014a), the underlying semantics of these PPLs implicitly assumes the random variables are not mixtures. Moreover, the inference algorithms associated with the semantics inherit the same assumption and can produce incorrect results when discrete-continuous mixtures are used.\nConsider the following GPA example: a two-variable Bayes net Nationality → GPA where the nationality follows a binary distribution\nP (Nationality = USA) = P (Nationality = India) = 0.5\nand the conditional probabilities are discrete-continuous mixtures\nGPA|Nationality = USA ∼0.01 · 1 {GPA = 4}+ 0.99 · Unif(0, 4),\nGPA|Nationality = India ∼0.01 · 1 {GPA = 10}+ 0.99 · Unif(0, 10).\nThis is a typical scenario in practice because many top students have perfect GPAs. Now suppose we observe a student with a GPA of 4.0. Where do they come from? If the student is Indian, the probability of any singleton set {g}\nwhere 0 < g < 10 is zero, as this range has a probability density. On the other hand if the student is American, the set {4} has the probability 0.01. Thus, by Bayes theorem, P (Nationality = USA|GPA = 4) = 1, which means the student must be from the USA.\nHowever, if we run the default Bayesian inference algorithm for this problem in PPLs, e.g., the standard importance sampling algorithm (Milch et al., 2005b), a sample that picks India receives a density weight of 0.99/10.0 = 0.099, whereas one that picks USA receives a discrete-mass weight of 0.01. Since the algorithm does not distinguish probability density and mass, it will conclude that the student is very probably from India, which is far from the truth.\nWe can fix the GPA example by considering a density weight infinitely smaller than a discrete-mass weight (Nitti et al., 2016; Tolpin et al., 2016). However, the situation becomes more complicated when involving more than one evidence variable, e.g., GPAs over multiple semesters for students who may study in both countries. Vector-valued variables also cause problems—does a point mass in three dimensions count more or less than a point mass in two dimensions? These practical issues motivate the following two tasks:\n• Inherit all the existing properties of PPL semantics and extend it to handle random variables with mixed discrete and continuous distributions;\n• Design provably correct inference algorithms for the extended semantics.\nIn this paper, we carry out all these two tasks and implement the extended semantics as well as the new algorithms in a widely used PPL, Bayesian Logic (BLOG) (Milch et al., 2005a)."
+  }, {
+    "heading": "1.1. Main Contributions",
+    "text": "Measure-Theoretical Bayesian Nets (MTBNs) Measure theory can be applied to handle discrete-continuous mixtures or even more abstract measures. In this paper, we define a generalization of Bayesian networks called measure-theoretic Bayesian networks (MTBNs) and prove that every MTBN represents a unique measure on the input space. We then show how MTBNs can provide a more general semantic foundation for PPLs.\nMore concretely, MTBNs support (1) random variables with infinitely (even uncountably) many parents, (2) random variables valued in arbitrary measure spaces (with RN as one case) distributed according to any measure (including discrete, continuous and mixed), (3) establishment of conditional independencies implied by an infinite graph, and (4) open-universe semantics in terms of the possible worlds in the vocabulary of the model.\nInference Algorithms We propose a provably correct inference algorithm, lexicographic likelihood weighting (LLW), for general MTBNs with discrete-continuous mixtures. In addition, we propose LPF, a particle-filtering variant of LLW for sequential Monte Carlo (SMC) inference on state-space models.\nIncorporating MTBNs into an existing PPL We incorporate MTBNs into BLOG with simple modifications and then define the generalized BLOG language, measuretheoretic BLOG, which formally supports arbitrary distributions, including discrete-continuous mixtures. We prove that every generalized BLOG model corresponds to a unique MTBN. Thus, all the desired theoretical properties of MTBNs can be carried to measure-theoretic BLOG. We also implement the LLW and LPF algorithms in the backend of measure-theoretic BLOG and use three representative examples to show their effectiveness."
+  }, {
+    "heading": "1.2. Organization",
+    "text": "This paper is organized as follows. We first discuss related work in Section 2. In Section 3, we formally define measure-theoretic Bayesian nets and study their theoretical properties. Section 4 describes the LLW and LPF inference algorithms for MTBNs with discrete-continuous mixtures and establishes their correctness. In Section 5, we introduce the measure-theoretic extension of BLOG and study its theoretical foundations for defining probabilistic models. In Section 6, we empirically validate the generalized BLOG system and the new inference algorithms on three representative examples."
+  }, {
+    "heading": "2. Related Work",
+    "text": "The motivating GPA example has been also discussed as a special case under some other PPL systems (Tolpin et al., 2016; Nitti et al., 2016). Tolpin et al. (2016) and Nitti et al. (2016) proposed different solutions specific to this example but did not address the general problems of representation and inference with random variables with mixtures of discrete and continuous distributions. In contrast, we present a general formulation with provably correct inference algorithms.\nOur approach builds upon the foundations of the BLOG probabilistic programming language (Milch, 2006). We use a measure theoretic formulation to generalize the syntax and semantics of BLOG to random variables that may have infinitely many parents and mixed continuous and discrete distributions. The BLP framework Kersting & De Raedt (2007) unifies logic programming with probability models, but requires each random variable to be influenced by a finite set of random variables in order to define the semantics. This amounts to requiring only finitely many ances-\ntors of each random variable. Choi et al. (2010) present an algorithm for carrying out lifted inference over models with purely continuous random variables. They also require parfactors to be functions over finitely many random variables, thus limiting the set of influencing variables for each node to be finite. Gutmann et al. (2011a) also define densities over finite dimensional vectors. In a relatively more general formulation (Gutmann et al., 2011b) define the distribution of each random variable using a definite clause, which corresponds to the limitation that each random variable (either discrete or continuous) has finitely many parents. Frameworks building on Markov networks also have similar restrictions. Wang & Domingos (2008) only consider networks of finitely many random variables, which can have either discrete or continuous distributions. Singla & Domingos (2007) extend Markov logic to infinite (non-hybrid) domains, provided that each random variable has only finitely many influencing random variables.\nIn contrast, our approach not only allows models with arbitrarily many random variables with mixed discrete and continuous distributions, but each random variable can also have arbitrarily many parents as long as all ancestor chains are finite (but unbounded). The presented work constitutes a rigorous framework for expressing probability models with the broadest range of cardinalities (uncountably infinite parent sets) and nature of random variables (discrete, mixed, and even arbitrary measure spaces), with clear semantics in terms of first-order possible worlds and the generalization of conditional independences on such models.\nLastly, there are also other works using measure-theoretic approaches to analyze the semantics properties of probabilistic programs but with different emphases, such as the commutativity (Staton, 2017), design choices for monad structures (Ramsey, 2016) and computing a disintegration (Shan & Ramsey, 2017)."
+  }, {
+    "heading": "3. Measure-Theoretic Bayesian Networks",
+    "text": "In this section, we introduce measure-theoretic Bayesian networks (MTBNs) and prove that an MTBN represents a unique measure with desired theoretical properties. We assume familiarity with measure-theoretic approaches to probability theory. Some background is included in Appx. A.\nWe begin with some necessary definitions of graph theory.\nDefinition 3.1. A digraph G is a pair G = (V,E) of a set of vertices V , of any cardinality, and a set of directed edges E ⊆ V × V . The notation u→ v denotes (u, v) ∈ E, and u 7→ v denotes the existence of a path from u to v in G.\nDefinition 3.2. A vertex v ∈ V is a root vertex if there are no incoming edges to it, i.e., there is no u ∈ V such that u → v. Let pa(v) = {u ∈ V : u → v} denote the set of parents of a vertex v ∈ V , and nd(v) = {u ∈ V : not v 7→\nu} denote its set of non-descendants. Definition 3.3. A well-founded digraph (V,E) is one with no countably infinite ancestor chain v0 ← v1 ← v2 ← . . . .\nThis is the natural generalization of a finite directed acyclic graph to the infinite case. Now we are ready to give the key definition of this paper.\nDefinition 3.4. A measure-theoretic Bayesian network M = (V,E, {Xv}v∈V , {Kv}v∈V ) consists of (a) a wellfounded digraph (V,E) of any cardinality, (b) an arbitrary measurable space Xv for each v ∈ V , and (c) a probability kernel Kv from ∏ u∈pa(v) Xu to Xv for each v ∈ V .\nBy definition, MTBNs allow us to define very general and abstract models with the following two major benefits:\n1. We can define random variables with infinitely (even uncountably) many parents because MTBN is defined on a well-founded digraph.\n2. We can define random variables in arbitrary measure spaces (with RN as one case) distributed according to any measure (including discrete, continuous and mixed).\nNext, we related MTBN to a probability measure. Fix an MTBN M = (V,E, {Xv}v∈V , {Kv}v∈V ). For U ⊆ V let XU = ∏ u∈U Xu be the product measurable space over variables u ∈ U . With this notation, Kv is a kernel from Xpa(v) to Xv. Whenever W ⊆ U let πUW : XU → XW denote the projection map. Let XV be our base measurable space upon which we will consider different probability measures µ. Let Xv for v ∈ V denote both the underlying set of Xv and the random variable given by the projection πV{v}, and XU for U ⊆ V the underlying space of XU and the random variable given by the projection πVU .\nDefinition 3.5. An MTBN M represents a measure µ on XV , if for all v ∈ V :\n• Xv is conditionally independent of its non-descendants Xnd(v) given its parents Xpa(v). • Kv(Xpa(v), A) = Pµ[Xv ∈ A|Xpa(v)] holds almost surely for any A ∈ Xv, i.e., Kv is a version of the conditional distribution of Xv given its parents.\nDef. 3.5 captures the generalization of the local properties of Bayes networks – conditional independence and conditional distributions defined by parent-child relationships. Here we assume the conditional probability exists and is unique. This is a mild condition because this holds as long as the probability space is regular (Kallenberg, 2002).\nThe next theorem shows that MTBNs are well-defined.\nTheorem 3.6. An MTBN M represents a unique measure µ on XV .\nThe proof of theorem 3.6 requires several intermediate results and is presented in Appx. B. The proof proceeds by first defining a projective family of measures. This gives a way to recursively construct our measure µ. We then define a notion of consistency such that every consistent projective family constructs a measure that M represents. Lastly, we give an explicit characterization of the unique consistent projective family, and thus of the unique measure M represents."
+  }, {
+    "heading": "4. Generalized Inference Algorithms",
+    "text": "We introduce the lexicographic likelihood weighting (LLW) algorithm for provably correct inference on MTBNs. We also present lexicographic particle filter (LPF) for statespace models by adapting LLW for the sequential Monte Carlo (SMC) framework."
+  }, {
+    "heading": "4.1. Lexicographic likelihood weighting",
+    "text": "Suppose we have an MTBN with finitely many random variables X1, . . . , XN , and that, without loss of generality, we observe real-valued random variables X1, . . . , XM for M < N as evidence. Suppose the distribution of Xi given its parents Xpa(i) is a mixture between a density fi(xi|xpa(i)) with respect to the Lebesgue measure and a discrete distribution Fi(xi|xpa(i)), i.e., for any > 0, we have P (Xi ∈ [xi − , xi]|Xpa(i)) =∑ x∈[xi− ,xi] Fi(xi|Xpa(i)) + ∫ xi xi− fi(x|Xpa(i)) dx. This implies that Fi(xi|xpa(i)) is nonzero for at most countably many values xi. If Fi is nonzero for finitely many points, it can be represented by a list of those points and their values.\nLexicographic Likelihood Weighting (LLW) extends the classical likelihood weighting (Milch et al., 2005b) to this setting. It visits each node of the graph in topological order, sampling those variables that are not observed, and accumulating a weight for those that are observed. In particular, at an evidence variable Xi we update a tuple (d,w) of the number of densities and a weight, initially (0, 1), by:\n(d,w)← { (d,wFi(xi|xpa(i))) Fi(xi|xpa(i)) > 0, (d+ 1, wfi(xi|xpa(i))) otherwise.\n(1)\nFinally, having K samples x(1), . . . , x(K) by this process and accordingly a tuple (d(i), w(i)) for each sample x(i), let d∗ = mini:w(i) 6=0 d\n(i) and estimate E[f(X)|X1:M ] by∑ {i:d(i)=d∗} w\n(i) f(x(i))∑ {i:d(i)=d∗} w (i) . (2)\nThe algorithm is summarised in Alg. 1 The next theorem shows this procedure is consistent. Theorem 4.1. LLW is consistent: (2) converges almost surely to E[f(X)|X1:M ].\nAlgorithm 1 Lexicographic Likelihood Weighting Require: densities f , masses F , evidences E, and K.\nfor i = 1 . . .K do sample all the ancestors of E from prior compute (d(i), w(i)) by Eq. (1) end for d? ← mini:w(i) 6=0 d(i)\nReturn (∑\ni:d(i)=d? w (i)f(x(i))\n) / (∑ i:d(i)=d? w (i) )\nIn order to prove Theorem 4.1, the main technique we adopt is to use a more restricted algorithm, the Iterative Refinement Likelihood Weighting (IRLW) as a reference."
+  }, {
+    "heading": "4.1.1. ITERATIVE REFINEMENT LIKELIHOOD WEIGHTING",
+    "text": "Suppose we want to approximate the posterior distribution of an X -valued random variable X conditional on a Yvalued random variable Y , for arbitrary measure spaces X and Y . In general, there is no notion of a probability density of Y given X for weighing samples. If, however, we could make a discrete approximation Yt of Y then we could weight samples by the probability P [Yt = yt|X]. If we increase the accuracy of the approximation with the number of samples, this should converge in the limit. We show this is possible, if we are careful about how we approximate:\nDefinition 4.2. An approximation scheme for a measurable space Y consists of a measurable spaceA and measurable approximation functions αi : Y → A for i = 1, 2, . . . and αji : A → A for i < j such that αj ◦ α j i = αi and y can be measurably recovered from the subsequence αt(y), αt+1(y), . . . for any t > 0.\nWhen Y is a real-valued variable we will use the approximation scheme αn(y) = 2−nd2nye where dre denotes the ceiling of r, i.e., the smallest integer no smaller than it. Observe in this case that P (αn(Y ) = αn(y)) = P (αn(y)− 2−n < Y ≤ αn(y)) which we can compute from the CDF of Y . Lemma 4.3. IfX,Y are real-valued random variables with E |X| <∞, then limi→∞ E[X|αi(Y )] = E[X|Y ].\nProof. Let Fi = σ(αi(Y )) be the sigma algebra generated by αi(Y ). Whenever i ≤ j we have αi(Y ) = (αj ◦αji )(Y ) and so Fi ⊆ Fj . This means E[X|αi(Y )] = E[X|Fi] is a martingale, so we can use martingale convergence results. In particular, since E |X| <∞\nE[X|Fi]→ E[X|F∞] a.s. and in L1, where F∞ = ⋃ i Fi is the sigma-algebra generated by {αi(Y ) : i ∈ N} (see Theorem 7.23 in (Kallenberg, 2002)).\nY is a measurable function of the sequence (α1(Y ), . . . ), as limi→∞ αi(Y ) = Y , and so σ(Y ) ⊆ F∞. By definition\nthe sequence is a measurable function of Y , and so F∞ ⊆ σ(Y ), and so E[X|F∞] = E[X|Y ] giving our result.\nIterative refinement likelihood weighting (IRLW) samples x(1), . . . , x(K) from the prior and evaluates:\n∑K i=1 P (αn(Y )|X = x(i))f(x(i))∑K\ni=1 P (αn(Y )|X = x(i)) (3)\nUsing Lemma 4.3, G.12, and G.13, we can show IRLW is consistent.\nTheorem 4.4. IRLW is consistent: (3) converges almost surely to E[f(X)|Y ]."
+  }, {
+    "heading": "4.1.2. PROOF OF THEOREM 4.1",
+    "text": "Now we are ready to prove Theorem 4.1.\nProof of Theorem 4.1. We prove the theorem for evidence variables that are leaves It is straightforward to extend the proof when the evidence variables are non-leaf nodes. Let x be a sample produced by the algorithm with number of densities and weight (d,w). With In = ∏ i=1...M (αn(xi)− 2−n, αn(xi)] a 2−n-cube around x1:M we have\nlim n→∞ P (X1:M ∈ In|XM+1:N = xM+1:N ) w 2−dn = 1.\nUsing In as an approximation scheme by Def. 4.2, the numerator in the above limit is the weight used by IRLW. But given the above limit, using w 2−dn as the weight will give the same result in the limit. Then if we have K samples, in the limit of n→∞ only those samples x(i) with minimal d(i) will contribute to the estimation, and up to normalization they will contribute weight w(i) to the estimation."
+  }, {
+    "heading": "4.2. Lexicographic particle filter",
+    "text": "We now consider inference in a special class of highdimensional models known as state-space models, and show how LLW can be adapted to avoid the curse of dimensionality when used with such models. A state-space model (SSM) consists of latent states {Xt}0≤t≤T and the observations {Yt}0≤t≤T with a special dependency structure where pa(Yt) = Xt and pa(Xt) = Xt−1 for 0 < t ≤ T .\nSMC methods (Doucet et al., 2001), also knowns as particle filters, are a widely used class of methods for inference on SSMs. Given the observed variables {Yt}0≤t≤T , the posterior distribution P (Xt|Y0:t) is approximated by a set of K particles where each particle x(k)t represents a sample of {Xi}0≤i≤t. Particles are propagated forward through the transition model P (Xt|Xt−1) and resampled at each time step t according to the weight of each particle, which is defined by the likelihood of observation Yt.\nAlgorithm 2 Lexicographic Particle Filter (LPF) Require: densities f , masses F , evidences Y , and K\nfor t = 0, . . . , T do for k = 0, . . . ,K do x\n(k) t ← sample from transition\ncompute (d(k), w(k)) by Eq. 4 end for d? ← mink:w(k) 6=0 d(k) ∀k : d(k) > d?, w(k) ← 0 Output ( w(k)f(x (k) t ) ) / (∑ k w (k) ) resample particles according to w(k)\nend for\nIn the MTBN setting, the distribution of Yt1 given its parent Xt can be a mixture of density ft(yt|xt) and a discrete distribution Ft(yt|xt). Hence, the resampling step in a particle filter should be accordingly modified: following the idea from LLW, when computing the weight of a particle, we enumerate all the observations yt,i at time step t and again update a tuple (d,w), initially (0,1), by\n(d,w)← { (d,wFt(yt,i|xt)) Ft(yt,i|xt) > 0, (d+ 1, wft(yt,i|xt)) otherwise. (4)\nWe discard all those particles with a non-minimum d value and then perform the normal resampling step. We call this algorithm lexicographical particle filter (LPF), which is summarized in Alg. 2.\nThe following theorem guarantees the correctness of LPF. Its Proof easily follows the analysis for LLW and the classical proof of particle filtering based on importance sampling.\nTheorem 4.5. LPF is consistent: the outputs of Alg. 2 converges almost surely to {E[f(Xt)|Y0:t]}0≤t≤T ."
+  }, {
+    "heading": "5. Generalized Probabilistic Programming Languages",
+    "text": "In Section 3 and Section 4 we provided the theoretical foundation of MTBN and general inference algorithms. This section describes how to incorporate MTBN into a practical PPL. We focus on a widely used open-universe PPL, BLOG (Milch, 2006). We define the generalized BLOG language, the measure-theoretic BLOG, and prove that every well-formed measure-theoretic BLOG model corresponds to a unique MTBN. Note that our approach also applies to other PPLs2.\n1There can be multiple variables observed. Here the notation Yt denotes {Yt,i}i for conciseness.\n2It has been shown that BLOG has equivalent semantics to other PPLs (Wu et al., 2014; McAllester et al., 2008)."
+  }, {
+    "heading": "1 Type Applicant, Country;",
+    "text": ""
+  }, {
+    "heading": "2 distinct Country NewZealand, India, USA;",
+    "text": ""
+  }, {
+    "heading": "3 #Applicant(Nationality = c) ˜",
+    "text": ""
+  }, {
+    "heading": "4 if (c==USA) then Poisson(50)",
+    "text": ""
+  }, {
+    "heading": "5 else Poisson(5);",
+    "text": ""
+  }, {
+    "heading": "6 origin Country Nationality(Applicant);",
+    "text": ""
+  }, {
+    "heading": "7 random Real GPA(Applicant s) ˜",
+    "text": ""
+  }, {
+    "heading": "8 if Nationality(s) == USA then",
+    "text": ""
+  }, {
+    "heading": "9 Mix({ TruncatedGauss(3, 1, 0, 4) -> 0.9998,",
+    "text": ""
+  }, {
+    "heading": "10 4 -> 0.0001, 0 -> 0.0001})",
+    "text": ""
+  }, {
+    "heading": "11 else Mix({ TruncatedGauss(5, 4, 0, 10) -> 0.989,",
+    "text": ""
+  }, {
+    "heading": "12 10 -> 0.009, 0 -> 0.002});",
+    "text": ""
+  }, {
+    "heading": "13 random Applicant David ˜",
+    "text": ""
+  }, {
+    "heading": "14 UniformChoice({a for Applicant a});",
+    "text": ""
+  }, {
+    "heading": "15 obs GPA(David) = 4;",
+    "text": ""
+  }, {
+    "heading": "16 query Nationality(David) = USA;",
+    "text": "Figure 1. A BLOG code for the GPA example.\nWe begin with a brief description of the core syntax of BLOG, with particular emphasis on (1) number statements, which are critical for expressing open-universe models3, and (2) new syntax for expressing MTBNs, i.e., the Mix distribution. Further description of BLOG’s syntax can be found in Li & Russell (2013)."
+  }, {
+    "heading": "5.1. Syntax of measure-theoretic BLOG",
+    "text": "Fig. 1 shows a BLOG model with measure-theoretic extensions for a multi-student GPA example. Line 1 declares two types, Applicant and Country. Line 2 defines 3 distinct countries with keyword distinct, New Zealand, India and USA. Lines 3 to 5 define a number statement, which states that the number of US applicants follows a Poisson distribution with a higher mean than those from New Zealand or India. Line 6 defines an origin function, which maps the object being generated to the arguments that were used in the number statement that was responsible for generating it. Here Nationality maps applicants to their nationalities. Lines 7 and 13 define two random variables by keyword random. Lines 7 to 12 state that the GPA of an applicant is distributed as a mixture of weighted discrete and continuous distributions. For US applicants, the range of values 0 < GPA < 4 follows a truncated Gaussian with bounds 0 and 4 (line 9). The probability mass outside the range is attributed to the corresponding bounds: P (GPA = 0) = P (GPA = 4) = 10−4 (line 10). GPA distributions for other countries are specified similarly. Line 13 defines a random applicant David. Line 15 states that the David’s GPA is observed to be 4 and we query in line 16 whether David is from USA.\nNumber Statement (line 3 to 5) Fig. 2 shows the syntax of a number statement for Typei. In this specification, gj are origin functions (discussed below); ȳj are tuples of arguments drawn from x̄ = x1, . . . , xk; ϕj are first-order formulas with free variables ȳj ; ēj are tuples of expressions\n3The specialized syntax in BLOG to express models with infinite number of variables.\nover a subset of x1, . . . , xk; and cj(ēj) specify kernels κj : Π{Xτe :e∈ēj}Xe → N where τe is the type of the expression e.\n#Typei(g1 = x1, . . . , gk = xk) ∼ if ϕ1(ȳ1) then c1(ē1)\nelse if ϕ2(ȳ2) then c2(ē2)\n. . .\nelse cm(ēm);\nments can be recovered using the origin functions gj , each of which is declared as:\norigin Typej gj(Typei),\nwhere Typej is the type of the argument xj in the number statement of Typei where gj was used. The value of the jth variable used in the number statement that generated u, an element of the universe, is given by gj(u). Line 6 in Fig. 1 is an example of origin function.\nMixture Distribution (line 9 to 12) In measure-theoretic BLOG, we introduce a new distribution, the mixture distribution (e.g., lines 9-10 in Fig. 1). A mixture distribution is specified as:\nMix({c1(ē1)→ w1(ē′), . . . , ck(ēk)→ wk(ē′)}), where ci are arbitrary distributions, and wi’s are arbitrary real valued functions that sum to 1 for every possible assignment to their arguments: ∀ē′ ∑ i wi(ē\n′) = 1. Note that in our implementation of measure-theoretical BLOG, we only allow a Mix distribution to express a mixture of densities and masses for simplifying the system design, although it still possible to express the same semantics without Mix."
+  }, {
+    "heading": "5.2. Semantics of measure-theoretic BLOG",
+    "text": "In this section we present the semantics of measure-theoretic BLOG and its theoretical properties. Every BLOG model implicitly defines a first-order vocabulary consisting of the set of functions and types mentioned in the model. BLOG’s semantics are based on the standard, open-universe semantics of first-order logic. We first define the set of all possible elements that may be generated for a BLOG model.\nDefinition 5.1. The set of possible elements UM for a BLOG model M with types {τ1, . . . , τk} is ⋃ j∈N{Uj}, where\n• U0 = 〈U01 , . . . , U0k 〉, U0j = {cj : cj is a distinct τi constant inM} • Ui+1 = 〈U i+11 , . . . , U i+1 k 〉, where U i+1m = U im ∪\n{uν,ū,m : ν(x̄) is a number statement of type τm, ū is a tuple of elements of the type of x̄ from U i, m ∈ N}\nDef. 5.1 allows us to define the set of random variables corresponding to a BLOG model.\nDefinition 5.2. The set of basic random variables for a BLOG modelM, BRV (M), consists of:\n• for each number statement ν(x̄), a number variable Vν [ū] over the standard measurable space N, where ū is of the type of x̄. • for each function f(x̄) and tuple ū from UM of the type of x̄, a function application variable Vf [ū] with the measurable space XVf [ū] = Xτf , where Xτf is the measurable space corresponding to τf , the return type of f .\nWe now define the space of consistent assignments to random variables.\nDefinition 5.3. An instantiation σ of the basic RVs defined by a BLOG modelM is consistent if and only if:\n• For every element uν,v̄,i used in an assignment of the form σ(Vf [ū]) = w or σ(Vν [ū]) = m > 0, σ(Vν [v̄]) ≥ i; • For every fixed function symbol f with the interpretation f̃ , σ(Vf [ū]) = f̃(ū); and • For every element uν,ū=〈u1,...,um〉,i, generated by the number statement ν, with origin functions g1, . . . , gm, for every gj ∈ {g1, . . . , gm}, σ(Vgj [uν,ū,i]) = uj . That is, origin functions give correct inverse maps.\nLemma 5.4. Every consistent assignment σ to the basic RVs forM defines a unique possible world in the vocabulary ofM.\nThe proof of Lemma 5.4 is in Appx. F. In the following definition, we use the notation e[ū/x̄] to denote a substitution of every occurrence of the variable xi with ui in the expression e. For any BLOG modelM, let V (M) = BRV (M); for each v ∈ V , Xv is the measurable space corresponding to v. Let E(M) consist of the following edges for every number statement or function application statement of the form s(x̄):\n• The edge (Vg[w̄], Vs[ū]) if g is a function symbol in M such that g(ȳ) appears in s(x̄), and either g(w̄) = g(ȳ)[ū/x̄] or an occurrence of g(ȳ) in s(x̄) uses quantified variables z1, . . . , zn, ū′ is a tuple of elements of the type of z̄ and g(w̄) = g(ȳ)[ū/x̄][ū′/z̄]. • The edge (Vν [v̄], Vs[ū]), for element uν,v̄,i ∈ ū.\nNote that the first set of edges defined in E(M) above may include infinitely many parents for Vs[ū]. Let the dependency statement in the BLOG model M corresponding to a number or function variable Vs[f̄ ] be s. Let expr(s) be the set of expressions used in s. Each such statement then defines in a straightforward manner, a kernel Ks(ū) : Xexpr(s(ū)) → XVs[ū]. In order ensure consistent assignments, we include a special value null ∈ Xτ for each τ"
+  }, {
+    "heading": "1 fixed Real sigma = 1.0; // stddev of observation",
+    "text": ""
+  }, {
+    "heading": "2 random Real FakeCoinDiff ˜",
+    "text": ""
+  }, {
+    "heading": "3 TruncatedGaussian(0.5, 1, 0.1, 1);",
+    "text": ""
+  }, {
+    "heading": "4 random Bool hasFakeCoin ˜ BooleanDistrib(0.5);",
+    "text": ""
+  }, {
+    "heading": "5 random Real obsDiff ˜ if hasFakeCoin",
+    "text": ""
+  }, {
+    "heading": "6 then Gaussian(FakeCoinDiff, sigma*sigma)",
+    "text": ""
+  }, {
+    "heading": "7 else Mix({ 0 -> 1.0 });",
+    "text": ""
+  }, {
+    "heading": "8 obs obsDiff = 0;",
+    "text": ""
+  }, {
+    "heading": "9 query hasFakeCoin;",
+    "text": "Figure 3. BLOG code for the Scale example\ninM, and require that Ks(ū)(σ(pa(Vs[ū])), {null}c) = 0 whenever σ violates the first condition of consistent assignments (Def. 5.3). In other words, all the local kernels ensure are locally consistent: variables involving an object uν,ū,i get a non-null assignment only if the assignment to its number statement represents the generation of at least i objects (σ(Vν(ū)) ≥ i). Each kernel of the formKs(ū) can be transformed into a kernel Kpa(Vs[ū]) from its parent vertices (representing basic random variables) by composing the kernels determining the truth value of each expression e ∈ expr(v) in terms of the basic random variables, with the kernel KeVs[ū]. Let κ(M) = {Kpa(Vs[ū]) : Vs[ū] ∈ BRV (M)}. Definition 5.5. The MTBN M for a BLOG model M is defined using V = V (M), E = E(M), the set of measurable spaces {Xv : v ∈ BRV (M)} and the kernels for each vertex given by κ(M).\nBy Thm. 3.6, we have the main result of this section, which provides the theoretical foundation for the generalized BLOG language:\nTheorem 5.6. If the MTBNM for a BLOG model is a wellfounded digraph, thenM represents a unique measure µ on XBRV (M)."
+  }, {
+    "heading": "6. Experiment Results",
+    "text": "We implemented the measure-theoretic extension of BLOG and evaluated our inference algorithms on three models where naive algorithms fail: (1) the GPA model (GPA); (2) the noisy scale model (Scale); and (3) a SSM, the aircraft tracking model (Aircraft-Tracking). The implementation is based on BLOG’s C++ compiler (Wu et al., 2016).\nGPA model: Fig. 1 presents the BLOG code for the GPA example as explained in Sec. 5. Since the GPA of David is exactly 4, Bayes rule implies that David must be from USA. We evaluate LLW and the naive LW on this model in Fig 4(a), where the naive LW converges to an incorrect posterior.\nScale model: In the noisy scale example (Fig. 3), we have an even number of coins and there might be a fake coin among them (Line 4). The fake coin will be slightly heavier than a normal coin (Line 2-3). We divide the coins into two halves and place them onto a noisy scale. When there is no fake coin, the scale always balances (Line 7).\nWhen there is a fake coin, the scale will noisily reflect the weight difference with standard deviation σ (sigma in Line 6). Now we observe that the scale is balanced (Line 8) and we would like to infer whether a fake coin exists. We again compare LLW against the naive LW with different choices of the σ parameter in Fig. 4(b). Since the scale is precisely balanced, there must not be a fake coin. LLW always produces the correct answer but naive LW converges to different incorrect posteriors for different values of σ; as σ increases, naive LWs result approaches the true posterior.\nAircraft-Tracking model: Fig. 5 shows a simplified BLOG model for the aircraft tracking example. In this state-space model, we have N = 6 radar points (Line 1) and a single aircraft to track. Both the radars and the aircraft are considered as points on a 2D plane. The prior of the aircraft movement is a Gaussian process (Line 3 to 6). Each radar r has an effective range radius(r): if the aircraft is within the range, the radar will noisily measure the distance from the aircraft to its own location (Line 13); if the aircraft is out of range, the radar will almost surely just output its radius (Line 10 to 11). Now we observe the measurements from all the radar points for T time steps and we want to infer the location of the aircraft. With the measure-theoretic extension, a generalized BLOG program is more expressive for modeling truncated sensors: if a radar outputs exactly its radius, we can surely infer that the aircraft must be out of the effective range of this radar. However, this information cannot be captured by the original BLOG language. To illustrate this case, we manually generated a synthesis dataset of T = 8 time steps4 and evaluated LPF against the naive particle filter with different numbers of particles in Fig. 4(c). We take the mean of the samples from all the particles as the predicted aircraft location. Since we know the ground truth, we measure the average mean square error between the true location and the prediction. LPF accurately predicts the\n4The full BLOG programs with complete data are available at https://goo.gl/f7qLwy."
+  }, {
+    "heading": "1 type t_radar; distinct t_radar R[6];",
+    "text": ""
+  }, {
+    "heading": "2 // model aircraft movement",
+    "text": ""
+  }, {
+    "heading": "3 random Real X(Timestep t) ˜ if t == @0",
+    "text": ""
+  }, {
+    "heading": "4 then Gaussian(2, 1) else Gaussian(X(prev(t)), 4);",
+    "text": ""
+  }, {
+    "heading": "5 random Real Y(Timestep t) ˜ if t == @0",
+    "text": ""
+  }, {
+    "heading": "6 then Gaussian(-1, 1) else Gaussian(Y(prev(t)), 4);",
+    "text": ""
+  }, {
+    "heading": "7 // observation model of radars",
+    "text": ""
+  }, {
+    "heading": "8 random Real obs_dist(Timestep t, t_radar r) ˜",
+    "text": ""
+  }, {
+    "heading": "9 if dist(X(t),Y(t),r) > radius(r) then",
+    "text": ""
+  }, {
+    "heading": "10 mixed({radius(r)->0.999,",
+    "text": ""
+  }, {
+    "heading": "11 TruncatedGauss(radius(r),0.01,0,radius(r))->0.001})",
+    "text": ""
+  }, {
+    "heading": "12 else",
+    "text": ""
+  }, {
+    "heading": "13 TruncatedGauss(dist(X(t),Y(t),r),0.01,0,radius(r));",
+    "text": ""
+  }, {
+    "heading": "14 // observation and query",
+    "text": ""
+  }, {
+    "heading": "15 obs obs_dist(@0, R[0]) = ...;",
+    "text": ""
+  }, {
+    "heading": "16 ... // evidence numbers omitted",
+    "text": ""
+  }, {
+    "heading": "17 query X(t) for Timestep t;",
+    "text": ""
+  }, {
+    "heading": "18 query Y(t) for Timestep t;",
+    "text": "Figure 5. BLOG code for the Aircraft-Tracking example\ntrue locations while the naive PF converges to the incorrect results."
+  }, {
+    "heading": "7. Conclusion",
+    "text": "We presented a new formalization, measure-theoretic Bayesian networks, for generalizing the semantics of PPLs to include random variables with mixtures of discrete and continuous distributions. We developed provably correct inference algorithms for such random variables and incorporated MTBNs into a widely used PPL, BLOG. We believe that together with the foundational inference algorithms, our proposed rigorous framework will facilitate the development of powerful techniques for probabilistic reasoning in practical applications from a much wider range of scientific areas."
+  }, {
+    "heading": "Acknowledgment",
+    "text": "This work is supported by the DARPA PPAML program, contract FA8750-14-C-0011. Simon S. Du is funded by NSF grant IIS1563887, AFRL grant FA8750-17-2-0212 and DARPA D17AP00001."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "NET-VISA: Network processing vertically integrated seismic analysis",
+    "authors": ["N.S. Arora", "S. Russell", "E. Sudderth"],
+    "venue": "Bulletin of the Seismological Society of America,",
+    "year": 2013
+  }, {
+    "title": "Stan: A probabilistic programming language",
+    "authors": ["B. Carpenter", "A. Gelman", "M. Hoffman", "D. Lee", "B. Goodrich", "M. Betancourt", "M.A. Brubaker", "J. Guo", "P. Li", "A Riddell"],
+    "venue": "Journal of Statistical Software,",
+    "year": 2016
+  }, {
+    "title": "Lifted inference for relational continuous models",
+    "authors": ["J. Choi", "E. Amir", "D.J. Hill"],
+    "venue": "In UAI,",
+    "year": 2010
+  }, {
+    "title": "An introduction to sequential Monte Carlo methods",
+    "authors": ["A. Doucet", "N. De Freitas", "N. Gordon"],
+    "venue": "In Sequential Monte Carlo methods in practice,",
+    "year": 2001
+  }, {
+    "title": "Probability: Theory and Examples",
+    "authors": ["R. Durrett"],
+    "year": 2013
+  }, {
+    "title": "Estimating mutual information for discrete-continuous mixtures",
+    "authors": ["W. Gao", "S. Kannan", "S. Oh", "P. Viswanath"],
+    "venue": "In Advances in Neural Information Processing Systems,",
+    "year": 2017
+  }, {
+    "title": "The principles and practice of probabilistic programming",
+    "authors": ["N.D. Goodman"],
+    "venue": "In ACM SIGPLAN Notices,",
+    "year": 2013
+  }, {
+    "title": "The Design and Implementation of Probabilistic Programming Languages",
+    "authors": ["N.D. Goodman", "A. Stuhlmüller"],
+    "venue": "http: //dippl.org,",
+    "year": 2014
+  }, {
+    "title": "A language for generative models",
+    "authors": ["N.D. Goodman", "V.K. Mansinghka", "D.M. Roy", "K. Bonawitz", "Tenenbaum", "J.B. Church"],
+    "venue": "In UAI-08,",
+    "year": 2008
+  }, {
+    "title": "Extending problog with continuous distributions",
+    "authors": ["B. Gutmann", "M. Jaeger", "L. De Raedt"],
+    "venue": "In Inductive Logic Programming,",
+    "year": 2011
+  }, {
+    "title": "The magic of logical inference in probabilistic programming",
+    "authors": ["B. Gutmann", "I. Thon", "A. Kimmig", "M. Bruynooghe", "L. De Raedt"],
+    "venue": "Theory and Practice of Logic Programming,",
+    "year": 2011
+  }, {
+    "title": "Bayesian logic programming: Theory and tool",
+    "authors": ["K. Kersting", "L. De Raedt"],
+    "venue": "Statistical Relational Learning,",
+    "year": 2007
+  }, {
+    "title": "Bayesian approach to single-cell differential expression analysis",
+    "authors": ["P.V. Kharchenko", "L. Silberstein", "D.T. Scadden"],
+    "venue": "Nature methods,",
+    "year": 2014
+  }, {
+    "title": "Effective Bayesian inference for stochastic programs",
+    "authors": ["D. Koller", "D. McAllester", "A. Pfeffer"],
+    "year": 1997
+  }, {
+    "title": "Picture: A probabilistic programming language for scene perception",
+    "authors": ["T.D. Kulkarni", "P. Kohli", "J.B. Tenenbaum", "V. Mansinghka"],
+    "venue": "In Proceedings of the ieee conference on computer vision and pattern recognition,",
+    "year": 2015
+  }, {
+    "title": "Humanlevel concept learning through probabilistic program induction",
+    "authors": ["B.M. Lake", "R. Salakhutdinov", "J.B. Tenenbaum"],
+    "year": 2015
+  }, {
+    "title": "Inference compilation and universal probabilistic programming",
+    "authors": ["T.A. Le", "A.G. Baydin", "F. Wood"],
+    "venue": "In Artificial Intelligence and Statistics,",
+    "year": 2017
+  }, {
+    "title": "The BLOG language reference",
+    "authors": ["L. Li", "S.J. Russell"],
+    "venue": "Technical report, Technical Report UCB/EECS-2013-51, EECS Department,",
+    "year": 2013
+  }, {
+    "title": "Venture: a higherorder probabilistic programming platform with programmable inference",
+    "authors": ["V. Mansinghka", "D. Selsam", "Y. Perov"],
+    "venue": "arXiv preprint arXiv:1404.0099,",
+    "year": 2014
+  }, {
+    "title": "Random-world semantics and syntactic independence for expressive languages",
+    "authors": ["D. McAllester", "B. Milch", "N.D. Goodman"],
+    "venue": "Technical report,",
+    "year": 2008
+  }, {
+    "title": "BLOG: Probabilistic models with unknown objects",
+    "authors": ["B. Milch", "B. Marthi", "S.J. Russell", "D. Sontag", "D.L. Ong", "A. Kolobov"],
+    "venue": "In Proc. of IJCAI,",
+    "year": 2005
+  }, {
+    "title": "Approximate inference for infinite contingent Bayesian networks",
+    "authors": ["B. Milch", "B. Marthi", "D. Sontag", "S. Russell", "D.L. Ong", "A. Kolobov"],
+    "venue": "In Tenth International Workshop on Artificial Intelligence and Statistics, Barbados,",
+    "year": 2005
+  }, {
+    "title": "Probabilistic models with unknown objects",
+    "authors": ["B.C. Milch"],
+    "venue": "PhD thesis, University of California at Berkeley,",
+    "year": 2006
+  }, {
+    "title": "Probabilistic logic programming for hybrid relational domains",
+    "authors": ["D. Nitti", "T. De Laet", "L. De Raedt"],
+    "venue": "Machine Learning,",
+    "year": 2016
+  }, {
+    "title": "Probabilistic reasoning in intelligent systems: networks of plausible inference",
+    "authors": ["J. Pearl"],
+    "year": 1988
+  }, {
+    "title": "Figaro: An object-oriented probabilistic programming language. Charles River Analytics",
+    "authors": ["A. Pfeffer"],
+    "venue": "Technical Report,",
+    "year": 2009
+  }, {
+    "title": "Dimensionality reduction for zeroinflated single-cell gene expression analysis",
+    "authors": ["E. Pierson", "Yau", "C. Zifa"],
+    "venue": "Genome biology,",
+    "year": 2015
+  }, {
+    "title": "All you need is the monad.. what monad was that again",
+    "authors": ["N. Ramsey"],
+    "venue": "In PPS Workshop,",
+    "year": 2016
+  }, {
+    "title": "Generating design suggestions under tight constraints with gradient-based probabilistic programming",
+    "authors": ["D. Ritchie", "S. Lin", "N.D. Goodman", "P. Hanrahan"],
+    "venue": "In Computer Graphics Forum,",
+    "year": 2015
+  }, {
+    "title": "Exact Bayesian inference by symbolic disintegration",
+    "authors": ["Shan", "C.-c", "N. Ramsey"],
+    "venue": "In Proceedings of the 44th ACM SIGPLAN Symposium on Principles of Programming Languages,",
+    "year": 2017
+  }, {
+    "title": "Markov logic in infinite domains",
+    "authors": ["P. Singla", "P. Domingos"],
+    "venue": "In In Proc. UAI-07,",
+    "year": 2007
+  }, {
+    "title": "Commutative semantics for probabilistic programming",
+    "authors": ["S. Staton"],
+    "venue": "In European Symposium on Programming,",
+    "year": 2017
+  }, {
+    "title": "Reasoning about reasoning by nested conditioning: Modeling theory of mind with probabilistic programs",
+    "authors": ["A. Stuhlmüller", "N.D. Goodman"],
+    "venue": "Cognitive Systems Research,",
+    "year": 2014
+  }, {
+    "title": "Design and implementation of probabilistic programming language anglican",
+    "authors": ["D. Tolpin", "J.W. van de Meent", "H. Yang", "F. Wood"],
+    "venue": "arXiv preprint arXiv:1608.05263,",
+    "year": 2016
+  }, {
+    "title": "A library for probabilistic modeling, inference, and criticism",
+    "authors": ["D. Tran", "A. Kucukelbir", "A.B. Dieng", "M. Rudolph", "D. Liang", "Blei", "D.M. Edward"],
+    "venue": "arXiv preprint arXiv:1610.09787,",
+    "year": 2016
+  }, {
+    "title": "Hybrid Markov logic networks",
+    "authors": ["J. Wang", "P. Domingos"],
+    "venue": "In AAAI,",
+    "year": 2008
+  }, {
+    "title": "A new approach to probabilistic programming inference",
+    "authors": ["F. Wood", "J.W. Meent", "V. Mansinghka"],
+    "venue": "In Artificial Intelligence and Statistics,",
+    "year": 2014
+  }, {
+    "title": "A new approach to probabilistic programming inference",
+    "authors": ["F. Wood", "J.W. van de Meent", "V. Mansinghka"],
+    "venue": "In Proceedings of the 17th International conference on Artificial Intelligence and Statistics,",
+    "year": 2014
+  }, {
+    "title": "BFiT: From possible-world semantics to random-evaluation semantics in open universe",
+    "authors": ["Y. Wu", "L. Li", "S. Russell"],
+    "venue": "3rd NIPS Workshop on Probabilistic Programming,",
+    "year": 2014
+  }, {
+    "title": "Compiled inference for probabilistic programming languages",
+    "authors": ["Y. Wu", "L. Li", "S. Russell", "Bodik", "R. Swift"],
+    "venue": "In Proceedings of the 25th International Joint Conference on Artificial Intelligence (IJCAI),",
+    "year": 2016
+  }],
+  "id": "SP:adfab760caa9217afca6fc6477bbcffdc869fd9a",
+  "authors": [{
+    "name": "Yi Wu",
+    "affiliations": []
+  }, {
+    "name": "Siddharth Srivastava",
+    "affiliations": []
+  }, {
+    "name": "Nicholas Hay",
+    "affiliations": []
+  }, {
+    "name": "Simon S. Du",
+    "affiliations": []
+  }, {
+    "name": "Stuart Russell",
+    "affiliations": []
+  }],
+  "abstractText": "Despite the recent successes of probabilistic programming languages (PPLs) in AI applications, PPLs offer only limited support for random variables whose distributions combine discrete and continuous elements. We develop the notion of measure-theoretic Bayesian networks (MTBNs) and use it to provide more general semantics for PPLs with arbitrarily many random variables defined over arbitrary measure spaces. We develop two new general sampling algorithms that are provably correct under the MTBN framework: the lexicographic likelihood weighting (LLW) for general MTBNs and the lexicographic particle filter (LPF), a specialized algorithm for statespace models. We further integrate MTBNs into a widely used PPL system, BLOG, and verify the effectiveness of the new inference algorithms through representative examples.",
+  "title": "Discrete-Continuous Mixtures in Probabilistic Programming: Generalized Semantics and Inference Algorithms"
+}

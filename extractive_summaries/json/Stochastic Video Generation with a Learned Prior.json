@@ -1,0 +1,241 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Learning to generate future frames of a video sequence is a challenging research problem with great relevance to reinforcement learning, planning and robotics. Although impressive generative models of still images have been demonstrated (e.g. Reed et al. (2017); Karras et al. (2017)), these techniques do not extend to video sequences. The main issue is the inherent uncertainty in the dynamics of the world. For example, when a bouncing ball hits the ground unknown effects, such surface imperfections or ball spin, ensure that its future trajectory is inherently random.\nConsequently, pixel-level frame predictions of such an event degrade when a deterministic loss function is used, e.g. with the ball itself blurring to accommodate multiple possible futures. Recently, loss functions that impose a distribution instead have been explored. One such approach are adversarial losses (Goodfellow et al., 2014), but training difficulties and mode collapse often mean the full distribution is not captured well.\nWe propose a new stochastic video generation (SVG) model that combines a deterministic frame predictor with time-\n1New York University 2Facebook AI Research. Correspondence to: Emily Denton <denton@cs.nyu.edu>.\nProceedings of the 35 th International Conference on Machine Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018 by the author(s).\ndependent stochastic latent variables. We propose two variants of our model: one with a fixed prior over the latent variables (SVG-FP) and another with a learned prior (SVGLP). The key insight we leverage for the learned-prior model is that for the majority of the ball’s trajectory, a deterministic model suffices. Only at the point of contact does the modeling of uncertainty become important. The learned prior can can be interpreted as a a predictive model of uncertainty. For most of the trajectory the prior will predict low uncertainty, making the frame estimates deterministic. However, at the instant the ball hits the ground it will predict a high variance event, causing frame samples to differ significantly.\nWe train our model by introducing a recurrent inference network to estimate the latent distribution for each time step. This novel recurrent inference architecture facilitates easy end-to-end training of SVG-FP and SVG-LP. We evaluate SVG-FP and SVG-LP on two real world datasets and a stochastic variant of the Moving MNIST dataset. Sample generations are both varied and sharp, even many frames into the future."
+  }, {
+    "heading": "2. Related work",
+    "text": "Several models have been proposed that use prediction within video to learn deep feature representations appropriate for high-level tasks such as object detection. Wang & Gupta (2015) learn an embedding for patches taken from object video tracks. Zou et al. (2012) use similar principles to learn features that exhibit a range of complex invariances. Lotter et al. (2016) propose a predictive coding model that learns features effective for recognition of synthetic faces, as well as predicting steering angles in the KITTI benchmark. Criterions related to slow feature analysis (Wiskott & Sejnowski, 2002) have been proposed such as linearity of representations (Goroshin et al., 2015) and equivariance to ego-motion (Jayaraman & Grauman, 2015). Agrawal et al. (2015) learn a representation by predicting transformations obtained by ego-motion.\nA range of deep video generation models have recently been proposed. Srivastava et al. (2015) use LSTMs trained on prelearned low dimensional image representations. Ranzato et al. (2014) adopt a discrete vector quantization approach inspired by text models. Video Pixel Networks (Kalchbrenner et al., 2016) are a probabilistic approach to generation\nwhereby pixels are generated one at a time in raster-scan order (similar autoregressive image models include Salimans et al. (2017); van den Oord et al. (2016)). Our approach differs from these in that it uses continuous representations throughout and generates the new frame directly, rather than via a sequential process over scale or location.\nFinn et al. (2016) use an LSTM framework to model motion via transformations of groups of pixels. Other works predict optical flows fields that can be used to extrapolate motion beyond the current frame, e.g. (Liu, 2009; Xue et al., 2016; Walker et al., 2015). Although we directly generate pixels, our model also computes local transformations but in an implicit fashion. Skip connections between encoder and decoder allow direct copying of the previous frame, allowing the rest of the model to focus on changes. However, our approach is able handle stochastic information in a more principled way.\nAnother group of approaches factorize the video into static and dynamic components before learning predictive models of the latter. Denton & Birodkar (2017) decomposes frames into content and pose representations using a form of adversarial loss to give a clean separation. An LSTM is then applied to the pose vectors to generate future frames. Villegas et al. (2017a) do pixel level prediction using an LSTM that separates out motion and content in video sequences. A reconstruction term is used that combines mean squared error and a GAN-based loss. Although our approach also factorizes the video, it does so into deterministic and stochastic components, rather than static/moving ones. This is an important distinction, since the difficulty in making accurate predictions stems not so much from the motion itself, but the uncertainty in that motion.\nVillegas et al. (2017b) propose a hierarchical model that first generates high level structure of a video and then generates pixels conditioned on the high level structure. This method is able to successfully generate complex scenes, but unlike our unsupervised approach, requires annotated pose information at training time.\nChiappa et al. (2017) and Oh et al. (2015) focus on actionconditional prediction in video game environments, where known actions at each frame are assumed. These models produce accurate long-range predictions. In contrast to the above works, we do not utilize any action information.\nSeveral video prediction approaches have been proposed that focus on handling the inherent uncertainty in predicting the future. Mathieu et al. (2016) demonstrate that a loss based on GANs can produce sharper generations than traditional `2-based losses. Vondrick et al. (2016) train a generative adversarial network that separates out foreground and background generation. Vondrick & Torralba (2017) propose a model based on transforming pixels from the past\nand train with an adversarial loss. All these approaches use a GAN to handle uncertainty in pixel-space and this introduces associated difficulties with GANs, i.e. training instability and mode collapse. By contrast, our approach only relies on an `2 loss for pixel-space reconstruction, having no GANs or other adversarial terms.\nOther approaches address uncertainty in predicting the future by introducing latent variables into the prediction model. Henaff et al. (2017) disentangle deterministic and stochastic components of a video by encoding prediction errors of a deterministic model in a low dimensional latent variable. This approach is broadly similar to ours, but differs in the way the latent variables are inferred during training and sampled at test time. The closest work to ours is that of Babaeizadeh et al. (2017), who propose a variational approach from which stochastic videos can be sampled. We discuss the relationship to our model in more depth in Section 3.1.\nStochastic temporal models have also been explored outside the domain of video generation. Bayer & Osendorfer (2014) introduce stochastic latent variables into a recurrent network in order to model music and motion capture data. This method utilizes a recurrent inference network similar to our approach and the same time-independent Gaussian prior as our fixed-prior model. Several additional works train stochastic recurrent neural networks to model speech, handwriting, natural language (Chung et al., 2015; Fraccaro et al., 2016; Bowman et al., 2016), perform counterfactual inference (Krishnan et al., 2015) and anomaly detection (Sölch et al., 2016). As in our work, these methods all optimize a bound on the data likelihood using an approximate inference network. They differ primarily in the parameterization of the approximate posterior and the choice of prior model."
+  }, {
+    "heading": "3. Approach",
+    "text": "We start by explaining how our model generates new video frames, before detailing the training procedure. Our model has two distinct components: (i) a prediction model pθ that generates the next frame x̂t, based on previous ones in the sequence x1:t−1 and a latent variable zt and (ii) a prior distribution p(z) from which zt is sampled at at each time step . The prior distribution can be fixed (SVG-FP) or learned (SVG-LP). Intuitively, the latent variable zt carries all the stochastic information about the next frame that the deterministic prediction model cannot capture. After conditioning on a short series of real frames, the model can generate multiple frames into the future by passing generated frames back into the input of the prediction model and, in the case of the SVG-LP model, the prior also.\nThe model is trained with the aid of a separate inference\nmodel (not used a test time). This takes as input the frame xt, i.e. the target of the prediction model, and previous frames x1:t−1. From this it computes a distribution qφ(zt|x1:t) from which we sample zt. To prevent zt just copying xt, we force qφ(zt|x1:t) to be close to the prior distribution p(z) using a KL-divergence term. This constrains the information that zt can carry, forcing it to capture new information not present in previous frames. A second term in the loss penalizes the reconstruction error between x̂t and xt. Fig. 1a shows the inference procedure for both SVG-FP and SVG-LP. The generation procedure for SVG-FP and SVG-LP are shown in Fig. 1b and Fig. 1c respectively.\nTo further explain our model we adopt the formalism of variational auto-encoders. Our recurrent frame predictor pθ(xt|x1:t−1, z1:t) is specified by a fixed-variance conditional Gaussian distributionN (µθ(x1:t−1, z1:t), σ). In practice, we set x̂t = µθ(x1:t−1, z1:t), i.e. the mean of the distribution, rather than sampling. Note that at time step t the frame predictor only receives xt−1 and zt as input. The dependencies on all previous x1:t−2 and z1:t−1 stem from the recurrent nature of the model.\nSince the true distribution over latent variables zt is intractable we rely on a time-dependent inference network qφ(zt|x1:t) that approximates it with a conditional Gaussian distributionN (µφ(x1:t), σφ(x1:t)). The model is trained by optimizing the variational lower bound:\nLθ,φ(x1:T ) = T∑ t=1 [ Eqφ(z1:t|x1:t) log pθ(xt|x1:t−1, z1:t)\n−βDKL(qφ(zt|x1:t)||p(z)) ]\nGiven the form of pθ the likelihood term reduces to an `2 penalty between x̂t and xt. We train the model using the re-parameterization trick (Kingma & Welling, 2014) and by estimating the expectation over qφ(z1:t|x1:t) with a single sample. See Appendix A for a full derivation of the loss.\nThe hyper-parameter β represents the trade-off between minimizing frame prediction error and fitting the prior. A smaller β increases the capacity of the inference network. If β is too small the inference network may learn to simply copy the target frame xt, resulting in low prediction error during training but poor performance at test time due to the mismatch between the posterior qφ(zt|x1:t) and the prior p(zt). If β is too large, the model may under-utilize or completely ignore latent variables zt and reduce to a deterministic predictor. In practice, we found β easy to tune, particularly for the learned-prior variant we discuss below. For a discussion of hyperparameter β in the context of variational autoencoders see Higgins et al. (2017).\nFixed prior: The simplest choice for p(zt) is a fixed GaussianN (0, I), as is typically used in variational auto encoder models. We refer to this as the SVG-FP model, as shown\nin Fig. 2a. A drawback is that samples at each time step will be drawn randomly, thus ignore temporal dependencies present between frames.\nLearned prior: A more sophisticated approach is to learn a prior that varies across time, being a function of all past frames up to but not including the frame being predicted pψ(zt|x1:t−1). Specifically, at time t a prior network observes frames x1:t−1 and output the parameters of a conditional Gaussian distribution N (µψ(x1:t−1), σψ(x1:t−1)). The prior network is trained jointly with the rest of the model by maximizing:\nLθ,φ,ψ(x1:T ) = T∑ t=1 [ Eqφ(z1:t|x1:t) log pθ(xt|x1:t−1, z1:t)\n−βDKL(qφ(zt|x1:t)||pψ(zt|x1:t−1)) ]\nWe refer to this model as SVG-LP and illustrate the training procedure in Fig. 2b.\nAt test time, a frame at time t is generated by first sampling zt from the prior. In SVG-FP we draw zt ∼ N (0, I) and in SVG-LP we draw zt ∼ pψ(zt|x1:t−1). Then, a frame is generated by x̂t = µθ(x1:t−1, z1:t). After conditioning on a short series of real frames, the model begins to pass generated frames x̂t back into the input of the prediction model and, in the case of the SVG-LP model, the prior. The sampling procedure for SVG-LP is illustrated in Fig. 2c.\nArchitectures: We use a generic convolutional LSTM for pθ, qφ and pψ. Frames are input to the LSTMs via a feedforward convolutional network, shared across all three parts of the model. A convolutional frame decoder maps the output of the frame predictor’s recurrent network back to pixel space.\nFor a time step t during training, the generation is as follows, where the LSTM recurrence is omitted for brevity:\nµφ(t), σφ(t) = LSTMφ(ht) ht = Enc(xt) zt ∼ N (µφ(t), σφ(t)) gt = LSTMθ(ht−1, zt) ht−1 = Enc(xt−1)\nµθ(t) = Dec(gt)\nDuring training, the parameters of the encoder Enc and decoder Dec are also learned, along with the rest of the\nmodel, in an end-to-end fashion (we omit their parameters from the loss functions above for brevity).\nIn the learned-prior model (SVG-LP), the parameters of the prior distribution at time t are generated as follows, where the LSTM recurrence is omitted for brevity:\nht−1 = Enc(xt−1) µψ(t), σψ(t) = LSTMψ(ht−1)"
+  }, {
+    "heading": "3.1. Discussion of related models",
+    "text": "Our model is related to a recent stochastic variational video prediction model of Babaeizadeh et al. (2017). Although their variational framework is broadly similar, a key difference between this work and ours is the way in which the latent variables zt are estimated during training and sampled at test time.\nThe inference network of Babaeizadeh et al. (2017) encodes the entire video sequence via a feed forward convolutional network to estimate qθ(z|x1:T ). They propose two different models that use this distribution. In the time-invariant version, a single z is sampled for the entire video sequence. In the time-variant model, a different zt ∼ qθ(z|x1:T ) is sampled for every time step, all samples coming from the same distribution.\nIn contrast, both our fixed-prior and learned-prior models utilize a more flexible inference network that outputs a different posterior distribution for every time step given by qθ(zt|x1:t) (note x1:t, not x1:T as above).\nAt test time, our fixed-prior model and the time-variant model of Babaeizadeh et al. (2017) sample zt from a fixed Gaussian prior at every time step. By contrast, our learned-\nprior model draws samples from the time-varying distribution: pψ(zt|x1:t−1), whose parameters ψ were estimated during training.\nThese differences manifest themselves in two ways. First, the generated frames are significantly sharper with both our models (see direct comparisons to Babaeizadeh et al. (2017) in Figure Fig. 8). Second, training our model is much easier. Despite the same prior distribution being used for both our fixed-prior model and Babaeizadeh et al. (2017), the time variant posterior distribution introduced in our model appears crucial for successfully training the model. Indeed, Babaeizadeh et al. (2017) report difficulties training their model by naively optimizing the variational lower bound, noting that the model simply ignores the latent variables. Instead, they propose a scheduled three phase training procedure whereby first the deterministic element of the model is trained, then latent variables are introduced but the KL loss is turned off and in the final stage the model is trained with the full loss. In contrast, both our fixed-prior and learned-prior models are easily trainable end-to-end in a single phase using a unified loss function."
+  }, {
+    "heading": "4. Experiments",
+    "text": "We evaluate our SVG-FP and SVG-LP model on one synthetic video dataset (Stochastic Moving MNIST) and two real ones (KTH actions (Schuldt et al., 2004) and BAIR robot (Ebert et al., 2017)). We show quantitative comparisons by computing structural similarity (SSIM) and Peak Signal-to-Noise Ratio (PSNR) scores between ground truth and generated video sequences. Since neither of these metrics fully captures perceptual fidelity of generated sequences we also make a qualitative comparison between samples from our model and current state-of-the-art methods. We\nencourage the reader to view additional generated videos at: https://sites.google.com/view/svglp/."
+  }, {
+    "heading": "4.1. Model architectures",
+    "text": "LSTMθ is a two layer LSTMs with 256 cells in each layer. LSTMφ and LSTMψ are both single layer LSTMs with 256 cells in each layer. Each network has a linear embedding layer and a fully connected output layer. The output of LSTMθ is passed through a tanh nonlinearity before going into the frame decoder.\nFor Stochastic Moving MNIST, the frame encoder has a DCGAN discriminator architecture (Radford et al., 2016) with output dimensionality |h| = 128. Similarly, the decoder uses a DCGAN generator architecture and a sigmoid output layer. The output dimensionalities of the LSTM networks are |g| = 128, |µφ| = |µψ| = 10.\nFor KTH and BAIR datasets, the frame encoder uses the same architecture as VGG16 (Simonyan & Zisserman, 2015) up until the final pooling layer with output dimensionality |h| = 128. The decoder is a mirrored version of the encoder with pooling layers replaced with spatial up-sampling and a sigmoid output layer. The output dimensionalities of the LSTM networks are |g| = 128, |µφ| = |µψ| = 32 for KTH and |g| = 128, |µφ| = |µψ| = 64 for BAIR.\nFor all datasets we add skip connections from the encoder at the last ground truth frame to the decoder at t, enabling the model to easily generate static background features.\nWe also train a deterministic baseline with the same encoder, decoder and LSTM architecture as our frame predictor pθ but with the latent variables omitted.\nWe train all the models with the ADAM optimizer (Kingma & Ba, 2014) and learning rate η = 0.002. We set β = 1e-4 for KTH and BAIR and β = 1e-6 for KTH. Source code and trained models are available at https://github.com/ edenton/svg."
+  }, {
+    "heading": "4.2. Stochastic Moving MNIST",
+    "text": "We introduce the Stochastic Moving MNIST (SM-MNIST) dataset which consists of sequences of frames of size 64×64, containing one or two MNIST digits moving and bouncing off edge of the frame (walls). In the original Moving MNIST dataset (Srivastava et al., 2015) the digits move with constant velocity and bounce off the walls in a deterministic manner. By contrast, SM-MNIST digits move with a constant velocity along a trajectory until they hit at wall at which point they bounce off with a random speed and direction. This dataset thus contains segments of deterministic motion interspersed with moments of uncertainty, i.e. each time a digit hits a wall.\nTraining sequences were generated on the fly by sampling two different MNIST digits from the training set (60k total digits) and two distinct trajectories. Trajectories were constructed by uniformly sampling (x, y) starting locations and initial velocity vectors (∆x,∆y) ∈ [−4, 4]× [−4, 4]. Every time a digit hits a wall a new velocity vector is sampled.\nWe trained our SVG models and a deterministic baseline on SM-MNIST by conditioning on 5 frames and training the model to predict the next 10 frames in the sequence. We compute SSIM for SVG-FP and SVG-LP by drawing 100 samples from the model for each test sequence and picking the one with the best score with respect to the ground truth.\nFig. 6(left) plots average SSIM on unseen test videos. Both SVG-FP and SVG-LP outperform the deterministic baseline and SVG-LP performs best overall, particularly in later time steps. Fig. 3 (top) shows sample generations from the deterministic model and SVG-LP. Generations from the\ndeterministic model are sharp for several time steps, but the model rapidly degrades after a digit collides with the wall, since the subsequent trajectory is uncertain.\nWe hypothesize that the improvement of SVG-LP over the SVG-FP model is due to the mix of deterministic and stochastic movement in the dataset. In SVG-FP, the frame predictor must determine how and if the latent variables for a given time step should be integrated into the prediction. In SVG-LP , the burden of predicting points of high uncertainty can be offloaded to the prior network.\nEmpirically, we measure this in Fig. 5. Five hundred different video sequences were constructed, each with different test digits, but whose trajectories were synchronized. The plot shows the mean of σψ(x1:t), i.e., the variance of the distribution over zt predicted by the learned prior over 100 time steps. Superimposed in red and blue are the time instants when the the respective digits hit a wall. We see that the learned prior is able to accurately predict these collisions that result in significant randomness in the trajectory.\nOne major challenge when evaluating generative video models is assessing how accurately they capture the full distribution of possible outcomes, mainly due to the high dimensionality of the space in which samples are drawn. However, the synthetic nature of single digit SM-MNIST allows us to investigate this in a principled way. A key point to note is that with each sequence, the digit appearance remains constant with the only randomness coming from its trajectory once it hits the image boundary. Thus for a sequence generated from our model, we can establish the digit trajectory by taking a pair of frames at any time step and cross-correlating them with the digit used in the initial conditioning frames. Maxima in each frame reveal the location of the digit, and the difference between the two gives us the velocity vector at that time. By taking an expectation over many samples from our model (also using the same trajectory but different digits), we can compute the empirical distribution of trajectories produced by our model. We can then perform the same operation on a validation set of ground truth se-\nquences, to produce the true distribution of digit trajectories and compare it to the one produced by our model.\nFig. 4 shows SVG-LP (trained on single digit SM-MNIST) accurately capturing the distribution of MNIST digit trajectories for many time steps. The digit trajectory is deterministic before a collision. This is accurately reflected by the highly peaked distribution of velocity vectors from SVG-LP in the time steps leading up to a collision. Following a collision, the distribution broadens to approximately uniform before being reshaped by subsequent collisions. Crucially, SVG-LP accurately captures this complex behavior for many time steps. The temporally varying nature of the true trajectory distributions further supports the need for a learned prior pψ(zt|x1:t−1)."
+  }, {
+    "heading": "4.3. KTH Action Dataset",
+    "text": "The KTH Action dataset (Schuldt et al., 2004) consists of real-world videos of people performing one of six actions (walking, jogging, running, boxing, handwaving, handclapping) against fairly uniform backgrounds. The human motion in the video sequences is fairly regular, however there is still uncertainty regarding the precise locations of the person’s joints at subsequent time steps. We trained SVG-FP, SVG-LP and the deterministic baseline on 64×64 video sequences by conditioning on 10 frames and training the model to predict the next 10 frames in the sequence.\nWe compute SSIM for SVG-FP and SVG-LP by drawing 100 samples from the model for each test sequence and picking the one with the best score with respect to the ground truth. Fig. 6(right) plots average SSIM on unseen test videos. SVG-FP and SVG-LP perform comparably on this dataset and both outperform the deterministic baseline. Fig. 3 (bottom) shows generations from the deterministic baseline and SVG-FP. The deterministic model predicts plausible future frames but, due to the inherent uncertainty in precise limb locations, often deviates from the ground truth. In contrast, different samples from the stochastic model reflect the variability in future frames indicating the latent variables are being utilized even on this simple dataset. Additional generations are available in the supplemental material."
+  }, {
+    "heading": "4.4. BAIR robot pushing dataset",
+    "text": "The BAIR robot pushing dataset (Ebert et al., 2017) contains videos of a Sawyer robotic arm pushing a variety of objects around a table top. The movements of the arm are highly stochastic, providing a good test for our model. Although the dataset does contain actions given to the arm, we discard them during training and make frame predictions based solely on the video input.\nFollowing Babaeizadeh et al. (2017), we train SVG-FP, SVG-LP and the deterministic baseline by conditioning on the first two frames of a sequence and predicting the subsequent 10 frames. We compute SSIM for SVG-FP and SVG-LP by drawing 100 samples from the model for each test sequence and picking the one with the best score with respect to the ground truth. Fig. 7 plots average SSIM and PSNR scores on 256 held out test sequences, comparing to the state-of-the-art approach of Babaeizadeh et al. (2017). This evaluation consists of conditioning on 2 frames and generating 28 subsequent ones, i.e. longer than at train\ntime, demonstrating the generalization capability of SVGFP and SVG-LP. Both SVG-FP and SVG-LP outperform Babaeizadeh et al. (2017) in terms of SSIM. SVG-LP outperforms the remaining models in terms of PSNR for the first few steps, after which Babaeizadeh et al. (2017) is marginally better. Qualitatively, SVG-FP and SVG-LP produce significantly sharper generations than Babaeizadeh et al. (2017), as illustrated in Fig. 8. PSNR is biased towards overly smooth (i.e. blurry) results which might explain the slightly better PSNR scores obtained by Babaeizadeh et al. (2017) for later time steps.\nSVG-FP and SVG-LP produce crisp generations many time steps into the future. Fig. 3 in Appendix B shows sample generations up to 30 time steps alongside the ground truth video frames. We also ran SVG-LP forward for 100 time steps and continue to see crisp motion of the robot arm (see Fig. 9)."
+  }, {
+    "heading": "5. Discussion",
+    "text": "We have introduced a novel video prediction model that combines a deterministic prediction of the next frame with stochastic latent variables, drawn from a time-varying distribution learned from training sequences. Our recurrent inference network estimates the latent distribution for each time step allowing easy end-to-end training. Evaluating the model on real-world sequences, we demonstrate high quality generations that are comparable to, or better than, existing approaches. On synthetic data where it is possible to characterize the distribution of samples, we see that is able to match complex distributions of futures. The framework is sufficiently general that it can readily be applied to more complex datasets, given appropriate encoder and decoder modules."
+  }, {
+    "heading": "Acknowledgements",
+    "text": "Emily Denton is grateful for the support of a Google PhD fellowship. This work was supported by ONR #N00014-131-0646 and an NSF CAREER grant."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "Learning to see by moving",
+    "authors": ["P. Agrawal", "J. Carreira", "J. Malik"],
+    "venue": "In Proceedings of the International Conference on Computer Vision (ICCV),",
+    "year": 2015
+  }, {
+    "title": "Stochastic variational video prediction",
+    "authors": ["M. Babaeizadeh", "C. Finn", "D. Erhan", "R.H. Campbell", "S. Levine"],
+    "year": 2017
+  }, {
+    "title": "Learning stochastic recurrent networks",
+    "authors": ["J. Bayer", "C. Osendorfer"],
+    "year": 2014
+  }, {
+    "title": "Generating sentences from a continuous space",
+    "authors": ["S.R. Bowman", "L. Vilnis", "O. Vinyals", "A.M. Dai", "R. Jozefowicz", "S. Bengio"],
+    "venue": "In Proceedings of The SIGNLL Conference on Computational Natural Language Learning (CoNLL),",
+    "year": 2016
+  }, {
+    "title": "Recurrent environment simulators",
+    "authors": ["S. Chiappa", "S. Racaniere", "D. Wierstra", "S. Mohamed"],
+    "venue": "In Proceedings of the International Conference on Learning Representations (ICLR),",
+    "year": 2017
+  }, {
+    "title": "A recurrent latent variable model for sequential data",
+    "authors": ["J. Chung", "K. Kastner", "L. Dinh", "K. Goel", "A. Courville", "Y. Bengio"],
+    "venue": "In Advances in Neural Information Processing Systems (NIPS),",
+    "year": 2015
+  }, {
+    "title": "Unsupervised learning of disentangled representations from video",
+    "authors": ["E. Denton", "V. Birodkar"],
+    "venue": "In Advances in Neural Information Processing Systems (NIPS),",
+    "year": 2017
+  }, {
+    "title": "Selfsupervised visual planning with temporal skip connections",
+    "authors": ["F. Ebert", "C. Finn", "A.X. Lee", "S. Levine"],
+    "venue": "In Conference on Robot Learning (CoRL),",
+    "year": 2017
+  }, {
+    "title": "Unsupervised learning for physical interaction through video prediction",
+    "authors": ["C. Finn", "I. Goodfellow", "S. Levine"],
+    "venue": "In Advances in Neural Information Processing Systems (NIPS),",
+    "year": 2016
+  }, {
+    "title": "Sequential neural models with stochastic layers",
+    "authors": ["M. Fraccaro", "S.K. Snderby", "U. Paquet", "O. Winther"],
+    "venue": "In Advances in Neural Information Processing Systems (NIPS),",
+    "year": 2016
+  }, {
+    "title": "Generative adversarial nets",
+    "authors": ["I.J. Goodfellow", "J. Pouget-Abadie", "M. Mirza", "B. Xu", "D. Warde-Farley", "S. Ozair", "A. Courville", "Y. Bengio"],
+    "venue": "In Advances in Neural Information Processing Systems (NIPS),",
+    "year": 2014
+  }, {
+    "title": "Learning to linearize under uncertainty",
+    "authors": ["R. Goroshin", "M. Mathieu", "Y. LeCun"],
+    "venue": "In Advances in Neural Information Processing Systems",
+    "year": 2015
+  }, {
+    "title": "Prediction under uncertainty with error-encoding networks",
+    "authors": ["M. Henaff", "J. Zhao", "Y. LeCun"],
+    "year": 2017
+  }, {
+    "title": "Early visual concept learning with unsupervised deep learning",
+    "authors": ["I. Higgins", "L. Matthey", "A. Pal", "C. Burgess", "X. Glorot", "M. Botvinick", "S. Mohamed", "A. Lerchner"],
+    "venue": "In Proceedings of the International Conference on Learning Representations (ICLR),",
+    "year": 2017
+  }, {
+    "title": "Learning image representations tied to ego-motion",
+    "authors": ["D. Jayaraman", "K. Grauman"],
+    "venue": "In International Conference on Computer Vision,",
+    "year": 2015
+  }, {
+    "title": "Progressive growing of gans for improved quality, stability, and variation",
+    "authors": ["T. Karras", "T. Aila", "S. Laine", "J. Lehtinen"],
+    "year": 2017
+  }, {
+    "title": "Adam: A method for stochastic optimization",
+    "authors": ["D. Kingma", "J. Ba"],
+    "venue": "Proceedings of the International Conference on Learning Representations (ICLR),",
+    "year": 2014
+  }, {
+    "title": "Auto-encoding variational bayes",
+    "authors": ["D. Kingma", "M. Welling"],
+    "venue": "In Proceedings of the International Conference on Learning Representations (ICLR),",
+    "year": 2014
+  }, {
+    "title": "Beyond pixels: exploring new representations and applications for motion analysis",
+    "authors": ["C. Liu"],
+    "venue": "PhD thesis, Massachusetts Institute of Technology,",
+    "year": 2009
+  }, {
+    "title": "Deep predictive coding networks for video prediction and unsupervised learning",
+    "authors": ["W. Lotter", "G. Kreiman", "D. Cox"],
+    "year": 2016
+  }, {
+    "title": "Deep multi-scale video prediction beyond mean square error",
+    "authors": ["M. Mathieu", "C. Couprie", "Y. LeCun"],
+    "venue": "In Proceedings of the International Conference on Learning Representations (ICLR),",
+    "year": 2016
+  }, {
+    "title": "Actionconditional video prediction using deep networks in Atari games",
+    "authors": ["J. Oh", "X. Guo", "H. Lee", "R. Lewis", "S. Singh"],
+    "venue": "In Advances in Neural Information Processing Systems (NIPS),",
+    "year": 2015
+  }, {
+    "title": "Unsupervised representation learning with deep convolutional generative adversarial networks",
+    "authors": ["A. Radford", "L. Metz", "S. Chintala"],
+    "venue": "In Proceedings of the International Conference on Learning Representations (ICLR),",
+    "year": 2016
+  }, {
+    "title": "Video (language) modeling: a baseline for generative models of natural videos",
+    "authors": ["M. Ranzato", "A. Szlam", "J. Bruna", "M. Mathieu", "R. Collobert", "S. Chopra"],
+    "venue": "arXiv 1412.6604,",
+    "year": 2014
+  }, {
+    "title": "Parallel multiscale autoregressive density estimation",
+    "authors": ["S. Reed", "A. van den Oord", "N. Kalchbrenner", "S.G. Colmenarejo", "Z. Wang", "D. Belov", "N. de Freitas"],
+    "venue": "In Proceedings of the International Conference on Machine Learning (ICML),",
+    "year": 2017
+  }, {
+    "title": "Pixelcnn++: Improving the pixelcnn with discretized logistic mixture likelihood and other modifications",
+    "authors": ["T. Salimans", "A. Karpathy", "X. Chen", "D.P. Kingma"],
+    "year": 2017
+  }, {
+    "title": "Recognizing human actions: A local svm approach",
+    "authors": ["C. Schuldt", "I. Laptev", "B. Caputo"],
+    "venue": "In Proceedings of the International Conference on Pattern Recognition,",
+    "year": 2004
+  }, {
+    "title": "Very deep convolutional networks for large-scale image recognition",
+    "authors": ["K. Simonyan", "A. Zisserman"],
+    "venue": "In Proceedings of the International Conference on Learning Representations (ICLR),",
+    "year": 2015
+  }, {
+    "title": "Variational inference for on-line anomaly detection in high-dimensional time series",
+    "authors": ["M. Sölch", "J. Bayer", "M. Ludersdorfer", "P. van der Smagt"],
+    "year": 2016
+  }, {
+    "title": "Unsupervised learning of video representations using LSTMs",
+    "authors": ["N. Srivastava", "E. Mansimov", "R. Salakhutdinov"],
+    "venue": "In Proceedings of the International Conference on Machine Learning (ICML),",
+    "year": 2015
+  }, {
+    "title": "Pixel recurrent neural networks",
+    "authors": ["A. van den Oord", "N. Kalchbrenner", "K. Kavukcuoglu"],
+    "venue": "In Proceedings of the International Conference on Machine Learning (ICML),",
+    "year": 2016
+  }, {
+    "title": "Decomposing motion and content for natural video sequence prediction",
+    "authors": ["R. Villegas", "J. Yang", "S. Hong", "X. Lin", "H. Lee"],
+    "venue": "In Proceedings of the International Conference on Learning Representations (ICLR),",
+    "year": 2017
+  }, {
+    "title": "Learning to generate long-term future via hierarchical prediction",
+    "authors": ["R. Villegas", "J. Yang", "Y. Zou", "S. Sohn", "X. Lin", "H. Lee"],
+    "venue": "In Proceedings of the International Conference on Machine Learning (ICML),",
+    "year": 2017
+  }, {
+    "title": "Generating the future with adversarial transformers",
+    "authors": ["C. Vondrick", "A. Torralba"],
+    "venue": "In Proceedings of the 2011 IEEE Conference on Computer Vision and Pattern Recognition,",
+    "year": 2017
+  }, {
+    "title": "Generating videos with scene dynamics",
+    "authors": ["C. Vondrick", "H. Pirsiavash", "A. Torralba"],
+    "venue": "In arXiv",
+    "year": 2016
+  }, {
+    "title": "Dense optical flow prediction from a static image",
+    "authors": ["J. Walker", "A. Gupta", "M. Hebert"],
+    "venue": "In ICCV,",
+    "year": 2015
+  }, {
+    "title": "Unsupervised learning of visual representations using videos",
+    "authors": ["X. Wang", "A. Gupta"],
+    "venue": "In CVPR, pp",
+    "year": 2015
+  }, {
+    "title": "Slow feature analysis: Unsupervised learning of invariance",
+    "authors": ["L. Wiskott", "T. Sejnowski"],
+    "venue": "Neural Computation,",
+    "year": 2002
+  }, {
+    "title": "Visual dynamics: Probabilistic future frame synthesis via cross convolutional networks",
+    "authors": ["T. Xue", "J. Wu", "K.L. Bouman", "W.T. Freeman"],
+    "venue": "In Advances in Neural Information Processing Systems (NIPS),",
+    "year": 2016
+  }, {
+    "title": "Deep learning of invariant features via simulated fixations in video",
+    "authors": ["W.Y. Zou", "S. Zhu", "A.Y. Ng", "K. Yu"],
+    "venue": "In Advances in Neural Information Processing Systems (NIPS),",
+    "year": 2012
+  }],
+  "id": "SP:f10434e3854072af265474ff004dc989bf93ab0f",
+  "authors": [{
+    "name": "Emily Denton",
+    "affiliations": []
+  }, {
+    "name": "Rob Fergus",
+    "affiliations": []
+  }],
+  "abstractText": "Generating video frames that accurately predict future world states is challenging. Existing approaches either fail to capture the full distribution of outcomes, or yield blurry generations, or both. In this paper we introduce a video generation model with a learned prior over stochastic latent variables at each time step. Video frames are generated by drawing samples from this prior and combining them with a deterministic estimate of the future frame. The approach is simple and easily trained end-to-end on a variety of datasets. Sample generations are both varied and sharp, even many frames into the future, and compare favorably to those from existing approaches.",
+  "title": "Stochastic Video Generation with a Learned Prior"
+}

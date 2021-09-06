@@ -1,0 +1,200 @@
+{
+  "sections": [{
+    "heading": "1. Introduction",
+    "text": "Known to be simple and fast, coordinate descent is a highly popular algorithm for training machine learning models. For `1-regularized loss minimization problems, such as the Lasso (Tibshirani, 1996), CD iteratively updates just one weight variable at a time. As it turns out, these small yet inexpensive updates efficiently lead to the desired solution. Another attractive property of CD is its lack of parameters that require tuning, such as a learning rate.\nDue to its appeal, CD has been researched extensively in\n1University of Washington, Seattle, WA. Correspondence to: Tyler Johnson <tbjohns@washington.edu>, Carlos Guestrin <guestrin@cs.washington.edu>.\nProceedings of the 34 th International Conference on Machine Learning, Sydney, Australia, PMLR 70, 2017. Copyright 2017 by the author(s).\nrecent years. This includes theoretical (Nesterov, 2012; Shalev-Shwartz & Tewari, 2011) and more applied (Fan et al., 2008; Friedman et al., 2010) contributions. Many works also consider scaling CD using parallelism (Bradley et al., 2011; Richtárik & Takáč, 2016). For surveys of research on CD, see (Wright, 2015) or (Shi et al., 2016).\nDespite its popularity, CD has a significant drawback: in many applications, the majority of coordinate updates yield no progress toward convergence. In sparse regression, most entries of the optimal weight vector equal zero. When CD updates these weights during optimization, the weights often equal zero both before and after they are updated. This is immensely wasteful! Computing these “zero updates” requires time yet leaves the iterate unchanged.\nIn this work, we propose StingyCD, an improved CD algorithm for sparse optimization and linear SVM problems. With minimal added overhead, StingyCD identifies many coordinate updates that are guaranteed to result in no change to the current iterate. By skipping over these zero updates, StingyCD obtains much faster convergence times.\nStingyCD is related to safe screening tests (El Ghaoui et al., 2012), which for Lasso problems, guarantee some weights equal zero at the solution. The algorithm can subsequently ignore screened weights for the remainder of optimization. Unfortunately, for screening to be effective, a good approximate solution must already be available. For this reason, screening often has little impact until convergence is near (Johnson & Guestrin, 2016).\nBy identifying zero updates rather than zero-valued weights at the solution, StingyCD drastically improves convergence times compared to safe screening. At the same time, we find that skipping only updates that are guaranteed to be zero is limiting. For this reason, we also propose StingyCD+, an algorithm that estimates a probability that each update is zero. By also skipping updates that are likely zero, StingyCD+ achieves even greater speed-ups.\nStingyCD and StingyCD+ require only simple changes to CD. Thus, we can combine these algorithms with other improvements to CD. In this work, we apply StingyCD+ to proximal Newton and working set algorithms. In both cases, incorporating StingyCD+ leads to efficiency improvements, demonstrating that “stingy updates” are a ver-\nAlgorithm 1 Coordinate descent for solving (P) initialize x(0) ← 0m; r(0) ← b for t = 1, 2, . . . T do\ni← get next coordinate() δ ← max { −x(t−1)i , 〈Ai,r(t−1)〉−λ ‖Ai‖2 } x(t) ← x(t−1) + δei r(t) ← r(t−1) − δAi\nreturn x(T )\nsatile and effective tool for scaling CD algorithms."
+  }, {
+    "heading": "2. StingyCD for nonnegative Lasso",
+    "text": "We introduce StingyCD for solving the problem\nminimize x∈Rm\nf(x) := 12 ‖Ax− b‖ 2 + λ 〈1,x〉 s.t. x ≥ 0 . (P)\n(P) is known as the “nonnegative Lasso.” Importantly, applications of StingyCD are not limited to (P). In §4, we explain how to apply StingyCD to general Lasso and sparse logistic regression objectives as well as SVM problems.\nIn (P), A is an n×m design matrix, while b ∈ Rn is a labels vector. Solving (P) results in a set of learned weights, which define a linear predictive model. The right term in the objective—commonly written as λ ‖x‖1 for Lasso problems without the nonnegativity constraint—is a regularization term that encourages the weights to have small value. The parameter λ > 0 controls the impact of the regularization term. Due to the nonnegativity constraint, a solution to (P) is sparse for sufficiently large λ. That is, the majority of entries in a solution to (P) have value zero.\nAdvantages of sparsity include reduced resources needed at test time, more interpretable models, and statistical efficiency (Wainwright, 2009). In this paper, we propose an algorithm that exploits sparsity for efficient optimization."
+  }, {
+    "heading": "2.1. Coordinate descent",
+    "text": "Coordinate descent (CD) is a popular algorithm for solving (P). Algorithm 1 defines a CD algorithm for this problem. During iteration t, a coordinate i ∈ [m] is selected, usually at random or in round-robin fashion. The ith entry in x(t) is updated via x(t)i ← x (t−1) i + δ, while remaining weights do not change. The value of δ is chosen to maximally decrease the objective subject to the nonnegativity constraint. Defining the residuals vector r(t−1) = b − Ax(t−1), we can write δ as\nδ = max { −x(t−1)i , 1‖Ai‖2 (〈 Ai, r (t−1) 〉 − λ )} . (1)\nIteration t requires O(NNZ (Ai)) time, where NNZ (Ai) is the number of nonzero entries in column Ai. Bottleneck operations are computing the dot product 〈 Ai, r (t−1)〉 and updating r(t). We note implementations typically compute ‖Ai‖2 once and then cache this value for later updates."
+  }, {
+    "heading": "2.2. Wasteful updates in coordinate descent",
+    "text": "Because of the nonnegativity constraint and regularization penalty in (P), often x(t−1)i = 0 in Algorithm 1. In this case, if r(t−1) lies outside of the “active update” region\nAi = {r : 〈Ai, r〉 − λ > 0} ,\nmeaning 〈 Ai, r (t−1)〉−λ ≤ 0, then (1) implies that δ = 0. In this scenario, weight i equals zero at the beginning and end of iteration t. When solutions to (P) are sufficiently sparse, these “zero updates” account for the majority of iterations in naive CD algorithms. Computing these updates is very wasteful! Each zero update requires O(NNZ (Ai)) time yet results in no progress toward convergence."
+  }, {
+    "heading": "2.3. Stingy updates",
+    "text": "Our proposed algorithm, StingyCD, improves convergence times for CD by “skipping over” many zero updates. Put differently, StingyCD computes some zero updates inO(1) time rather thanO(NNZ (Ai)) time by guaranteeing δ = 0 without computing this quantity via (1).\nWe saw in §2.2 that sufficient conditions for δ = 0 are (i) x(t−1)i = 0 and (ii) r\n(t−1) /∈ Ai. Since directly testing the second condition requires O(NNZ (Ai)) time, simply checking these conditions does not lead to a useful method for quickly guaranteeing δ = 0.\nThe insight that enables StingyCD is that we can relax the condition r(t−1) /∈ Ai to form a condition that is testable in constant time. This relaxation depends on a region S(t) for which r(t−1) ∈ S(t). In particular, S(t) is a ball:\nS(t) = { r : ‖r− rr‖2 < q(t−1) } ,\nwhere q(t−1) = ∥∥r(t−1) − rr∥∥2 .\nAbove, rr is a “reference residuals” vector—a copy of the residuals from a previous iteration. Formally, rr = r(t−k) for some k ≥ 1 (to be defined more precisely later). Note that r(t−1) lies on the boundary of S(t).\nAt any iteration t such that x(t−1)i = 0, StingyCD considers whether S(t)∩Ai = ∅ before computing δ. If this condition is true, it is guaranteed that δ = 0, and StingyCD continues to iteration t+1 without computing δ directly. We illustrate this concept in Figure 1. Defining gi = −〈Ai, rr〉+λ, we\ni = 0 and r\n(t−1) /∈ Ai, then δ = 0. In this case, computing\nδ is wasteful because the “update” makes no change to x(t−1). StingyCD skips over many zero updates by establishing a region S(t) for which r(t−1) ∈ S(t). If S(t) ∩ Ai = ∅, it is guaranteed that δ = 0, and StingyCD continues to iteration t + 1 without computing δ directly. In the illustration, StingyCD successfully guarantees δ = 0, since q(t−1) ≤ τi. In contrast, StingyCD would compute δ directly if q(t−1) > τi. We note √ τi is welldefined in the illustration; since rr /∈ Ai, we have τi ≥ 0.\ncan simplify the condition S(t) ∩ Ai = ∅ as follows:\nS(t) ∩ Ai = ∅ ⇔ max r∈S(t) 〈Ai, r〉 − λ ≤ 0\n⇔ −gi + ‖Ai‖ √ q(t−1) ≤ 0\n⇔ q(t−1) ≤ sign (gi) g 2 i\n‖Ai‖2 := τi .\nThus, if q(t−1) ≤ τi, then r(t−1) /∈ Ai (implying δ = 0 if also x(t−1)i = 0). We note that τi can take positive or negative value, depending on if rr ∈ Ai. If rr /∈ Ai, then gi ≥ 0, which implies τi ≥ 0. However, if rr ∈ Ai, then τi < 0, and since q(t−1) is nonnegative, it cannot be true that q(t−1) ≤ τi—StingyCD does not skip over coordinate i in this case. Thus, the magnitude of τi is not significant to StingyCD when τi < 0, though this magnitude has greater importance for StingyCD+ in §3.\nImportantly, the condition q(t−1) ≤ τi can be tested with minimal overhead by (i) updating rr only occasionally, (ii) precomputing 〈Ai, rr〉 and τi for all i whenever rr is updated, and (iii) caching the value of q(t−1), which is updated appropriately after each nonzero coordinate update."
+  }, {
+    "heading": "2.4. StingyCD definition and guarantees",
+    "text": "StingyCD is defined in Algorithm 2. StingyCD builds upon Algorithm 1 with three simple changes. First, during some iterations, StingyCD updates a reference residuals vector, rr ← r(t−1). When rr is updated, StingyCD also computes a thresholds vector, τ . This requires evaluating 〈Ai, rr〉 for all columns in A. While updating rr is relatively costly, more frequent updates to rr result in greater computational savings due to skipped updates.\nAlgorithm 2 StingyCD for solving (P) initialize x(0) ← 0m; r(0) ← b; rr← r(0);\nq(0) ← 0; τ ← compute thresholds(x(0)) for t = 1, 2, . . . T do\n# Update reference residuals on occasion: if should update reference() then\nrr← r(t−1) τ ← compute thresholds(x(t−1)) q(t−1) ← 0\ni← get next coordinate()\nif q(t−1) ≤ τi and x(t−1)i = 0 then # Skip update: x(t) ← x(t−1); r(t) ← r(t−1); q(t) ← q(t−1) continue\n# Perform coordinate update: δ ← max { −x(t−1)i , 〈Ai,r(t−1)〉−λ ‖Ai‖2 } x(t) ← x(t−1) + δei r(t) ← r(t−1) − δAi q(t) ← q(t−1) − 2δ 〈 Ai, r (t−1) − rr 〉 + δ2 ‖Ai‖2\nreturn x(T )\nfunction compute thresholds(x) initialize τ ← 0m for i ∈ [m] do\ngi ← 〈Ai,Ax− b〉+ λ τi ← sign (gi) g 2 i\n‖Ai‖2\nreturn τ\nThe second change to CD is that StingyCD tracks the quantity q(t) = ∥∥r(t) − rr∥∥2. After each update to rr, StingyCD sets q(t) to 0. After each nonzero residuals update, r(t) ← r(t−1) − δAi, StingyCD makes a corresponding update to q(t). Importantly, the quantities required for this update to q(t)—‖Ai‖2, 〈 Ai, r\n(t−1)〉, 〈Ai, rr〉, and δ— have all been computed earlier by the algorithm. Thus, by caching these values, updating q(t) requires negligible time.\nThe final modification to CD is StingyCD’s use of stingy updates. Before computing δ during each iteration t, StingyCD checks whether q(t−1) ≤ τi and x(t−1)i = 0. If both are true, StingyCD continues to the next iteration without computing δ. The threshold τi is computed after each update to rr. If rr /∈ Ai, the value of τi equals the squared distance between rr andAi. If rr ∈ Ai, this quantity is the negative squared distance between rr and ACi .\nStingyCD’s choice of τ ensures that each skipped update is “safe.” We formalize this concept with our first theorem:\nTheorem 2.1 (Safeness of StingyCD). In Algorithm 2, every skipped update would, if computed, result in δ = 0.\nThat is, if q(t−1) ≤ τi and x(t−1)i = 0, then\nmax { −x(t−1)i , 〈 Ai,b−Ax(t−1) 〉 − λ\n‖Ai‖2\n} = 0 .\nWe prove Theorem 2.1 in Appendix A.\nTheorem 2.1 is useful because it guarantees that although StingyCD skips many updates, CD and StingyCD have identical weight vectors for all iterations (assuming each algorithm updates coordinates in the same order). Our next theorem formalizes the notion that these skipped updates come nearly “for free.” We prove this result in Appendix B.\nTheorem 2.2 (Per iteration time complexity of StingyCD). Algorithm 2 can be implemented so that iteration t requires\n• Less time than an identical iteration of Algorithm 1 if q(t−1) ≤ τi and x(t−1)i = 0 (the update is skipped) and rr is not updated. Specifically, StingyCD requires O(1) time, while CD requires O(NNZ (Ai)) time. • The same amount of time (up to an O(1) term) as a CD iteration if the update is not skipped and rr is not updated. In particular, both algorithms require the same number of O(NNZ (Ai)) operations. • More time than a CD iteration if rr is updated. In this case, StingyCD requires O(NNZ (A)) time.\nNote StingyCD requires no more computation than CD for nearly all iterations (and often much less). However, the cost of updating rr is not negligible. To ensure updates to rr do not overly impact convergence times, we schedule reference updates so that StingyCD invests less than 20% of its time in updating rr. Specifically, StingyCD first updates rr after the second epoch and records the time that this update requires. Later on, rr is updated each time an additional 5x of this amount of time has passed."
+  }, {
+    "heading": "3. Skipping extra updates with StingyCD+",
+    "text": "As we will see in §6, StingyCD can significantly reduce convergence times. However, StingyCD is also limited by the requirement that only updates guaranteed to be zero are skipped. In cases where q(t−1) is only slightly greater than τi, intuition suggests that these updates will likely be zero too. Perhaps StingyCD should skip these updates as well.\nIn this section, we propose StingyCD+, an algorithm that also skips many updates that are not guaranteed to be zero. To do so, StingyCD+ adds two components to StingyCD: (i) a computationally inexpensive model of the probability that each update is zero, and (ii) a decision rule that applies this model to determine whether or not to skip each update."
+  }, {
+    "heading": "3.1. Modeling the probability of nonzero updates",
+    "text": "During iteration t of StingyCD, suppose x(t−1)i = 0 but τi < q\n(t−1). StingyCD does not skip update t. For now, we also assume τi > −q(t−1) (otherwise we can guarantee r(t−1) ∈ Ai, which implies δ 6= 0). Let U (t) be a variable that is true if δ 6= 0—update t is useful—and false otherwise. From the algorithm’s perspective, it is uncertain whether U (t) is true or false when iteration t begins. Whether or not U (t) is true depends on whether r(t−1) ∈ Ai, which requires O(NNZ (Ai)) time to test. This computation will be wasteful if U (t) is false.\nStingyCD+ models the probability that U (t) is true using information available to the algorithm. Specifically, r(t−1) lies on the boundary of S(t), which is a ball with center rr and radius √ q(t−1). This leads to a simple assumption:\nAssumption 3.1 (Distribution of r(t−1)). To model the probability P (U (t)), StingyCD+ assumes r(t−1) is uniformly distributed on the boundary of S(t).\nBy making this assumption, P (U (t)) is tractable. In particular, we have the following equation for P (U (t)):\nTheorem 3.2 (Equation for P (U (t))). Assume x(t−1)i = 0 and τi ∈ (−q(t−1), q(t−1)). Then Assumption 3.1 implies\nP (U (t)) =\n{ 1 2I(1−τi/q(t−1))( n−1 2 , 1 2 ) if τi ≥ 0,\n1− 12I(1+τi/q(t−1))( n−1 2 , 1 2 ) otherwise,\nwhere Ix(a, b) is the regularized incomplete beta function.\nIncluded in Appendix C, Theorem 3.2’s proof calculates the probability that r(t−1) ∈ Ai by dividing the area of\nAi ∩ bd(S(t)) by that of bd(S(t)) (illustrated in Figure 2). This fraction is a function of the incomplete beta function since Ai ∩ bd(S(t)) is a hyperspherical cap (Li, 2011).\nUsing Theorem 3.2, StingyCD+ can approximately evaluate P (U (t)) efficiently using a lookup table. Specifically, for 128 values of x ∈ (0, 1), our implementation defines an approximate lookup table for Ix(n−12 , 1 2 ) prior to iteration 1. Before update t, StingyCD+ computes τi/q(t−1) and then finds an appropriate estimate of P (U (t)) using the table. We elaborate on this procedure in Appendix D.\nSo far, P (U (t)) models the probability that δ 6= 0 when τi ∈ (−q(t−1), q(t−1)) and x(t−1)i = 0. We can also define P (U (t)) for other x(t−1)i and τi. When x (t−1) i 6= 0, we define P (U (t)) = 1. If τi ≥ q(t−1) and x(t−1)i = 0 (the scenario in which StingyCD skips update t), we let P (U (t)) = 0. If τi ≤ −q(t−1) and x(t−1)i = 0, we define P (U (t)) = 1 (in this final case, we can show that S(t) ⊆ Ai, which guarantees r(t−1) ∈ Ai and δ 6= 0)."
+  }, {
+    "heading": "3.2. Decision rule for skipping updates",
+    "text": "Given P (U (t)), consider the decision of whether to skip update t. Let tlasti denote the most recent iteration during which StingyCD+ updated (did not skip) coordinate i. If this has not yet occurred, define tlasti = 0. We define the “delay” D(t)i as the number of updates that StingyCD+ did not skip between iterations tlasti and t− 1 inclusive.\nOur intuition for StingyCD+ is that during iteration t, if D\n(t) i is large and U (t) is true, then StingyCD+ should not skip update t. However, if D(t)i is small and U\n(t) is true, the algorithm may want to skip the update in favor of updating a coordinate with larger delay. Finally, if U (t) is false, StingyCD+ should skip the update, regardless of D(t)i .\nBased on this intuition, StingyCD+ skips update t if the “expected relevant delay,” defined as E[D(t)i U (t)], is small. That is, given a threshold ξ(t), StingyCD+ skips update t if\nP (U (t))D (t) i < ξ (t) . (2)\nInserting (2) in place of StingyCD’s condition for skipping updates is the only change from StingyCD to StingyCD+. In practice, we define ξ(t) = NNZ ( x(t−1) ) . Defining ξ(t) in this way leads to the following convergence guarantee:\nTheorem 3.3 (StingyCD+ converges to a solution of (P)). In StingyCD+, assume ξ(t) ≤ NNZ ( x(t−1) ) for all t > 0. Also, for each i ∈ [m], assume the largest number of consecutive iterations during which get next coordinate() does not return i is bounded as t→∞. Then\nlim t→∞\nf(x(t)) = f(x?) .\nProven in Appendix E, Theorem 3.3 ensures StingyCD+ convergences to a solution when ξ(t) ≤ NNZ ( x(t−1) ) for all t. As long as ξ(t) is smaller than this limit, at least one coordinate—specifically a coordinate for which x (t−1) i 6= 0—will satisfy (2) during a future iteration. By defining ξ(t) as this limit in practice, StingyCD+ achieves fast convergence times by skipping many updates."
+  }, {
+    "heading": "4. Extending StingyCD to other objectives",
+    "text": "For simplicity, we introduced StingyCD for nonnegative Lasso problems. In this section, we briefly describe how to apply StingyCD to some other objectives."
+  }, {
+    "heading": "4.1. General (not nonnegative) Lasso problems",
+    "text": "It is simple to extend StingyCD to general Lasso problems:\nminimize x∈Rm\nfL(x) := 1 2 ‖Ax− b‖ 2 + λ ‖x‖1 (PL)\n(PL) can be transformed into an instance of (P) by introducing two features (a positive and negative copy) for each column of A. That is, we can solve (PL) with design matrix A by solving (P) with design matrix [A,−A]. Importantly, we perform this feature duplication implicitly in practice.\nTwo modifications to Algorithm 2 are needed to solve (PL). First, we adapt each update δ to the new objective:\nδ ← argmin δ fL(x (t−1) + δei) .\nSecond, we consider a positive and negative copy of Ai in the condition for skipping update t. Specifically, we define\nτ+i ← sign (λ− 〈Ai, rr〉) (λ−〈Ai,rr〉)2\n‖Ai‖2 , and\nτ−i ← sign (λ+ 〈Ai, rr〉) (λ+〈Ai,rr〉)2\n‖Ai‖2 .\nStingyCD skips update t if and only if x(t−1)i = 0 and q(t−1) ≤ min{τ+i , τ − i }. Modifying StingyCD+ to solve (PL) is similar. P (U (t)) becomes the sum of two probabilities corresponding to features +Ai and −Ai. Specifically, P (U (t)) = P (U (t)+ ) + P (U (t) − ). We define P (U (t) + ) and P (U (t)− ) the same way as we define P (U (t)) in §3.1 except we use τ+i and τ − i in place of τi.\n4.2. General `1-regularized smooth loss minimization\nWe can also use StingyCD to solve problems of the form\nminimize x∈Rm\n∑n i=1 φi(〈ai,x〉) + λ ‖x‖1 , (PL1)\nwhere each φi is smooth. To solve this problem, we redefine r(t−1) as a vector of derivatives:\nr(t−1) = [−φ′1( 〈 a1,x (t−1)〉), . . . ,−φ′n(〈an,x(t−1)〉)]T .\nWhen updating coordinate i, it remains true that δ = 0 if x (t−1) i = 0 and r\n(t−1) /∈ Ai—the same geometry from Figure 1 applies. Unfortunately, updating q(t−1) no longer requires negligible computation. This is because in general, r(t) 6= r(t−1)−δAi. Thus, the update to q(t) in Algorithm 2 no longer applies. In other words, q(t) =\n∥∥r(t) − rr∥∥2 cannot be computed from q(t−1) using negligible time.\nNevertheless, we can use StingyCD to efficiently solve (PL1) by incorporating StingyCD into a proximal Newton algorithm. At each outer-iteration, the loss ∑ i φi(〈ai,x〉) is approximated by a second-order Taylor expansion. This results in a subproblem of the form (PL), which we solve using StingyCD. CD-based proximal Newton methods are known to be very fast for solving (PL1), especially in the case of sparse logistic regression (Yuan et al., 2012)."
+  }, {
+    "heading": "4.3. Linear support vector machines",
+    "text": "We can also apply StingyCD to train SVMs:\nminimize x∈Rn\n1 2 ‖Mx‖ 2 − 〈1,x〉 s.t. x ∈ [0, C]n .\n(PSVM)\nThis is the dual problem for training linear support vector machines. For this problem, we can apply concepts from §2.3 to guarantee δ = 0 for many updates when x(t−1)i = 0 or x(t−1)i = C. To do so, the changes to StingyCD are straightforward. Due to limited space, we provide details in Appendix F."
+  }, {
+    "heading": "5. Related work",
+    "text": "StingyCD is related to safe screening tests as well as alternative strategies for prioritizing coordinate updates in CD."
+  }, {
+    "heading": "5.1. Safe screening",
+    "text": "Introduced in (El Ghaoui et al., 2012) for `1-regularized objectives, safe screening tests use sufficient conditions for which entries of the solution equal zero. Coordinates satisfying these conditions are discarded to simplify the problem. Follow-up works considered other problems, including sparse group Lasso (Wang & Ye, 2014), SVM training (Wang et al., 2014), and low-rank problems (Zhou & Zhao, 2015). Recent works proposed more flexible tests that avoid major issues of prior tests (Bonnefoy et al., 2014; 2015; Fercoq et al., 2015; Ndiaye et al., 2015; 2016), such as the fact that initial tests apply only prior to optimization.\nThe current state-of-the-art screening test was proposed in (Johnson & Guestrin, 2016). For the problem (P), this test relies on geometry similar to Figure 1. Specifically, the test defines a ball, SScreen, that is proven to contain the residual vector of a solution to (P). If SScreen ∩ cl(Ai) = ∅, it is guaranteed that the ith weight in (P)’s solution has value 0.\nThe radius of SScreen is typically much larger than that of S(t) in StingyCD, however. Unlike S(t), SScreen must contain the optimal residual vector. Unless a good approximate solution is available already, SScreen is overly large, often resulting in few screened features (Johnson & Guestrin, 2016). By ensuring only that S(t) contains the current residual vector and identifying zero-valued updates rather than zero-valued entries in a solution, StingyCD improves convergence times drastically more compared to screening."
+  }, {
+    "heading": "5.2. Other approaches to prioritizing CD updates",
+    "text": "Similar to StingyCD, recent work by (Fujiwara et al., 2016) also uses a reference vector concept for prioritizing updates in CD. Unlike StingyCD, this work focuses on identifying nonzero-valued coordinates, resulting in an active set algorithm. The reference vector is also a primal weight vector as opposed to a residual vector.\nSimilarly, shrinking heuristics (Fan et al., 2008; Yuan et al., 2012) and working set algorithms (Johnson & Guestrin, 2015; 2016) have been shown to be effective for prioritizing computation in CD algorithms. These algorithms solve a sequence of smaller subproblems which consider only prioritized subsets of coordinates. In these algorithms, StingyCD could be used to solve each subproblem to further prioritize computation. In §6, we show that using StingyCD+ instead of CD for solving subproblems in the working set algorithm from (Johnson & Guestrin, 2015) can lead to further convergence time improvements.\nFinally, recent work has also considered adaptive sampling approaches for CD (Csiba et al., 2015). While also an interesting direction, this work does not apply to (P) due to a strong convexity requirement. Currently this approach also requires an additional pass over the data before each epoch as well as additional overhead for non-uniform sampling."
+  }, {
+    "heading": "6. Empirical comparisons",
+    "text": "This section demonstrates the impact of StingyCD and StingyCD+ in practice. We first compare these algorithms to CD and safe screening for Lasso problems. Later, we show that StingyCD+ also leads to speed-ups when combined with working set and proximal Newton algorithms."
+  }, {
+    "heading": "6.1. Lasso problem comparisons",
+    "text": "We implemented CD, CD with safe screening, StingyCD, and StingyCD+ to solve (PL). Coordinates are updated in round-robin fashion. We normalize columns of A and include an unregularized intercept term. We also remove features that have nonzero values in fewer than ten examples. For CD with safe screening, we apply the test from (Johnson & Guestrin, 2016), which is state-of-the-art to our knowledge. Following (Fercoq et al., 2015), screening is\nperformed after every ten epochs. Performing screening requires a full pass over the data, which is non-negligible.\nWe compare the algorithms using a financial document dataset (finance)1 and an insurance claim prediction task (allstate)2. finance contains 1.6×104 examples, 5.5×105 features, and 8.8×107 nonzero values. The result included in this section uses regularization λ = 0.05λmax, where λmax is the smallest λ value that results in an all-zero solution. The solution contains 1746 nonzero entries.\nThe allstate data contains 2.5 × 105 examples, 1.5 × 104 features, and 1.2 × 108 nonzero values. For this problem, we set λ = 0.05λmax, resulting in 1404 selected features. We include results for additional λ values in Appendix G. StingyCD seems to have slightly greater impact when λ is larger, but the results generally do not change much with λ.\nWe evaluate the algorithms using three metrics. The first metric is relative suboptimality, defined as\nRelative suboptimality = f(x(t))− f(x?)\nf(x?) ,\nwhere f(x(t)) is the objective value at iteration t, and x? is the problem’s solution. The other metrics are support set precision and recall. Let F (t) = {i : x(t)i 6= 0}, and let F? be the analogous set for x?. We define\nPrecision = ∣∣F (t) ∩ F?∣∣∣∣F (t)∣∣ , Recall = ∣∣F (t) ∩ F?∣∣ |F?| .\n1https://www.csie.ntu.edu.tw/∼cjlin/libsvmtools/ datasets/regression.html#E2006-log1p\n2https://www.kaggle.com/c/allstate-claims-severity\nPrecision and recall are arguably more important than suboptimality since (PL) is typically used for feature selection.\nResults of these experiments are included in Figure 3. We see that StingyCD and StingyCD+ both greatly improve convergence times. For the reasons discussed in §5, safe screening provides little improvement compared to CD in these cases—even with the relative suboptimality is plotted until 10−9. StingyCD provides a “safeness” similar to safe screening yet with drastically greater impact."
+  }, {
+    "heading": "6.2. Combining StingyCD+ with working sets",
+    "text": "This section demonstrates that StingyCD+ can be useful when combined with other algorithms. We consider the problem of sparse logistic regression, an instance of (PL1) in which each φi term is a logistic loss function. For each training example (ai, bi) ∈ Rm × [−1, 1], we have\nφi(〈ai,x〉) = log(1 + exp(−bi 〈ai,x〉)) .\nIn this section, we use StingyCD+ as a subproblem solver for a proximal Newton algorithm and a working set algorithm. Specifically, we implement StingyCD+ within the “Blitz” working set algorithm proposed in (Johnson & Guestrin, 2015). At each iteration of Blitz, a subproblem is formed by selecting a set of priority features. The objective is then approximately minimized by updating weights only for features in this working set. Importantly, each subproblem in Blitz is solved approximately with a proximal Newton algorithm (overviewed in §4.2), and each proximal Newton subproblem is solved approximately with CD.\nFor these comparisons, we have replaced the aforemen-\ntioned CD implementation with a StingyCD+ implementation. We demonstrate the effects of this change when working sets are and are not used. In the case that working sets are omitted, we refer to the algorithm as “StingyCD+ ProxNewton” or “CD ProxNewton,” depending on whether StingyCD+ is incorporated. We note that Blitz and the proximal Newton solver have not otherwise been modified, although it is likely possible to achieve improved convergence times by accounting for the use of StingyCD+. For example, Blitz could likely be improved by including more features in each working set, since StingyCD+ provides an additional layer of update prioritization.\nThe datasets used for this comparison are an educational performance dataset (kdda)3 and a loan default prediction task (lending club)4. After removing features with fewer than ten nonzeros, kdda’s design matrix contains 8.4×106 examples, 2.2 × 106 features, and 2.8 × 108 nonzero values. We solve this problem with λ = 0.005λmax, which results in 692 nonzero weights at the problem’s solution. The lending club data contains 1.1× 105 examples, 3.1× 104 features, and 1.0×108 nonzero values. We solve this problem with λ = 0.02λmax, resulting in 878 selected features. We include plots for additional λ values in Appendix H.\nResults of this experiment are shown in Figure 4. We see that replacing CD with StingyCD+ in both Blitz and ProxNewton can result in immediate efficiency improvements. We remark that the amount that StingyCD+ improved upon\n3https://www.csie.ntu.edu.tw/∼cjlin/libsvmtools/ datasets/binary.html#kdd2010(algebra)\n4https://www.kaggle.com/wendykan/ lending-club-loan-data\nthe working set approach depended significantly on λ, at least in the case of lending club. For this dataset, when λ is relatively large (and thus the solution is very sparse), we observed little or no improvement due to StingyCD+. However, for smaller values of λ, StingyCD+ produced more significant gains. Moreover, StingyCD+ was the best performing algorithm in some cases (though in other cases, Blitz was much faster). This observation suggests that there likely exists a better approach to using working sets with StingyCD+—an ideal algorithm would obtain excellent performance across all relevant λ values."
+  }, {
+    "heading": "7. Discussion",
+    "text": "We proposed StingyCD, a coordinate descent algorithm that avoids large amounts of wasteful computation in applications such as sparse regression. StingyCD borrows geometric ideas from safe screening to guarantee many updates will result in no progress toward convergence. Compared to safe screening, StingyCD achieves considerably greater convergence time speed-ups. We also introduced StingyCD+, which applies a probabilistic assumption to StingyCD in order to further prioritize coordinate updates.\nIn general, we find the idea of “stingy updates” to be deserving of significantly more exploration. Currently this idea is limited to CD algorithms and, for the most part, objectives with quadratic losses. However, it seems likely that similar ideas would apply in many other contexts. For example, it could be useful to use stingy updates in distributed optimization algorithms in order to significantly reduce communication requirements."
+  }, {
+    "heading": "Acknowledgments",
+    "text": "We thank our anonymous reviewers for their thoughtful feedback. This work is supported in part by PECASE N00014-13-1-0023, NSF IIS-1258741, and the TerraSwarm Research Center 00008169."
+  }],
+  "year": 2017,
+  "references": [{
+    "title": "A dynamic screening principle for the lasso",
+    "authors": ["A. Bonnefoy", "V. Emiya", "L. Ralaivola", "R. Gribonval"],
+    "venue": "In 22nd European Signal Processing Conference,",
+    "year": 2014
+  }, {
+    "title": "Dynamic screening: Accelerating first-order algorithms for the lasso and group-lasso",
+    "authors": ["A. Bonnefoy", "V. Emiya", "L. Ralaivola", "R. Gribonval"],
+    "venue": "IEEE Transactions on Signal Processing,",
+    "year": 2015
+  }, {
+    "title": "Parallel coordinate descent for L1-regularized loss minimization",
+    "authors": ["J.K. Bradley", "A. Kyrola", "D. Bickson", "C. Guestrin"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2011
+  }, {
+    "title": "Stochastic dual coordinate ascent with adaptive probabilities",
+    "authors": ["D. Csiba", "Z. Qu", "P. Richtárik"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2015
+  }, {
+    "title": "Safe feature elimination for the Lasso and sparse supervised learning problems",
+    "authors": ["L. El Ghaoui", "V. Viallon", "T. Rabbani"],
+    "venue": "Pacific Journal of Optimization,",
+    "year": 2012
+  }, {
+    "title": "LIBLINEAR: A library for large linear classification",
+    "authors": ["Fan", "R.-E", "Chang", "K.-W", "Hsieh", "C.-J", "Wang", "X.-R", "Lin"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2008
+  }, {
+    "title": "Mind the duality gap: safer rules for the lasso",
+    "authors": ["O. Fercoq", "A. Gramfort", "J. Salmon"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2015
+  }, {
+    "title": "Regularization paths for generalized linear models via coordinate descent",
+    "authors": ["J. Friedman", "T. Hastie", "R. Tibshirani"],
+    "venue": "Journal of Statistical Software,",
+    "year": 2010
+  }, {
+    "title": "Fast lasso algorithm via selective coordinate descent",
+    "authors": ["Y. Fujiwara", "Y. Ida", "H. Shiokawa", "S. Iwamura"],
+    "venue": "In Proceedings of the Thirtieth AAAI Conference on Artificial Intelligence,",
+    "year": 2016
+  }, {
+    "title": "Blitz: a principled metaalgorithm for scaling sparse optimization",
+    "authors": ["T.B. Johnson", "C. Guestrin"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2015
+  }, {
+    "title": "Unified methods for exploiting piecewise linear structure in convex optimization",
+    "authors": ["T.B. Johnson", "C. Guestrin"],
+    "venue": "In Advances in Neural Information Processing Systems",
+    "year": 2016
+  }, {
+    "title": "Concise formulas for the area and volume of a hyperspherical cap",
+    "authors": ["S. Li"],
+    "venue": "Asian Journal of Mathematics and Statistic,",
+    "year": 2011
+  }, {
+    "title": "GAP safe screening rules for sparse multi-task and multi-class models",
+    "authors": ["E. Ndiaye", "O. Fercoq", "A. Gramfort", "J. Salmon"],
+    "venue": "In Advances in Neural Information Processing Systems",
+    "year": 2015
+  }, {
+    "title": "Gap safe screening rules for sparse-group lasso",
+    "authors": ["E. Ndiaye", "O. Fercoq", "A. Gramfort", "J. Salmon"],
+    "venue": "In Advances in Neural Information Processing Systems",
+    "year": 2016
+  }, {
+    "title": "Efficiency of coordinate descent methods on huge-scale optimization problems",
+    "authors": ["Y. Nesterov"],
+    "venue": "SIAM Journal on Optimization,",
+    "year": 2012
+  }, {
+    "title": "Parallel coordinate descent methods for big data optimization",
+    "authors": ["P. Richtárik", "M. Takáč"],
+    "venue": "Mathematical Programming,",
+    "year": 2016
+  }, {
+    "title": "Stochastic methods for `1-regularized loss minimization",
+    "authors": ["S. Shalev-Shwartz", "A. Tewari"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2011
+  }, {
+    "title": "A primer on coordinate descent algorithms",
+    "authors": ["Shi", "H.-J. M", "S. Tu", "Y. Xu", "W. Yin"],
+    "venue": "Technical Report",
+    "year": 2016
+  }, {
+    "title": "Regression shrinkage and selection via the Lasso",
+    "authors": ["R. Tibshirani"],
+    "venue": "Journal of the Royal Statistical Society, Series B,",
+    "year": 1996
+  }, {
+    "title": "Sharp thresholds for high-dimensional and noisy sparsity recovery using `1-constrained quadratic programming (Lasso)",
+    "authors": ["M.J. Wainwright"],
+    "venue": "IEEE Transactions on Information Theory,",
+    "year": 2009
+  }, {
+    "title": "Two-layer feature reduction for sparsegroup lasso via decomposition of convex sets",
+    "authors": ["J. Wang", "J. Ye"],
+    "venue": "In Advances in Neural Information Processing Systems",
+    "year": 2014
+  }, {
+    "title": "Scaling SVM and least absolute deviations via exact data reduction",
+    "authors": ["J. Wang", "P. Wonka", "J. Ye"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2014
+  }, {
+    "title": "Coordinate descent algorithms",
+    "authors": ["S.J. Wright"],
+    "venue": "Mathematical Programming,",
+    "year": 2015
+  }, {
+    "title": "An improved GLMNET for L1-regularized logistic regression",
+    "authors": ["G.X. Yuan", "C.H. Ho", "C.J. Lin"],
+    "venue": "Journal of Machine Learning Research,",
+    "year": 2012
+  }, {
+    "title": "Safe subspace screening for nuclear norm regularized least squares problems",
+    "authors": ["Q. Zhou", "Q. Zhao"],
+    "venue": "In International Conference on Machine Learning,",
+    "year": 2015
+  }],
+  "id": "SP:a21ef3d0d142de028009b822c57c38f98d3fbe33",
+  "authors": [{
+    "name": "Tyler B. Johnson",
+    "affiliations": []
+  }, {
+    "name": "Carlos Guestrin",
+    "affiliations": []
+  }],
+  "abstractText": "Coordinate descent (CD) is a scalable and simple algorithm for solving many optimization problems in machine learning. Despite this fact, CD can also be very computationally wasteful. Due to sparsity in sparse regression problems, for example, often the majority of CD updates result in no progress toward the solution. To address this inefficiency, we propose a modified CD algorithm named “StingyCD.” By skipping over many updates that are guaranteed to not decrease the objective value, StingyCD significantly reduces convergence times. Since StingyCD only skips updates with this guarantee, however, StingyCD does not fully exploit the problem’s sparsity. For this reason, we also propose StingyCD+, an algorithm that achieves further speed-ups by skipping updates more aggressively. Since StingyCD and StingyCD+ rely on simple modifications to CD, it is also straightforward to use these algorithms with other approaches to scaling optimization. In empirical comparisons, StingyCD and StingyCD+ improve convergence times considerably for `1-regularized optimization problems.",
+  "title": "StingyCD: Safely Avoiding Wasteful Updates in Coordinate Descent"
+}

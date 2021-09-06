@@ -1,0 +1,258 @@
+{
+  "sections": [{
+    "text": "Proceedings of NAACL-HLT 2018, pages 69–81 New Orleans, Louisiana, June 1 - 6, 2018. c©2018 Association for Computational Linguistics"
+  }, {
+    "heading": "1 Introduction",
+    "text": "While parsing has become a relatively mature technology for written text, parser performance on conversational speech lags behind. Speech poses challenges for parsing: transcripts may contain errors and lack punctuation; even perfect transcripts can be difficult to handle because of disfluencies (restarts, repetitions, and self-corrections), filled pauses (“um”, “uh”), interjections (“like”), parentheticals (“you know”, “I mean”), and sentence fragments. Some of these phenomena can be handled in standard grammars, but disfluencies typically require extensions of the model. Different approaches have been explored in both constituency parsing (Charniak and Johnson, 2001; Johnson and Charniak, 2004) and dependency parsing (Rasooli and Tetreault, 2013; Honnibal and Johnson, 2014).\n∗Equal Contribution.\nDespite these challenges, speech carries helpful extra information – beyond the words – associated with the prosodic structure of an utterance and encoded via variation in timing and intonation. Speakers pause in locations that are correlated with syntactic structure (Grosjean et al., 1979), and listeners use prosodic structure in resolving syntactic ambiguities (Price et al., 1991). Prosodic cues also signal disfluencies by marking the interruption point (Shriberg, 1994). However, most speech parsing systems in practice take little advantage of these cues. Our study focuses on this last challenge, aiming to incorporate prosodic cues in a neural parser, handling disfluencies as constituents via a neural attention mechanism.\nA challenge of incorporating prosody in parsing is that multiple acoustic cues interact to signal prosodic structure, including pauses, lengthening, fundamental frequency modulation, and spectral shape. These cues also vary with the phonetic segment, emphasis, emotion and speaker, so feature extraction typically involves multiple time windows and normalization techniques. The most successful constituent parsers have mapped these features to prosodic boundary posteriors by using labeled training data (Kahn et al., 2005; Hale et al., 2006; Dreyer and Shafran, 2007). The approach proposed here takes advantage of advances in neural networks to automatically learn a good feature representation without the need to explicitly represent prosodic constituents. To narrow the scope of this work and facilitate error analysis, our experiments use known transcripts and sentence segmentation.\nOur work offers the following contributions. We introduce a framework for directly integrating acoustic-prosodic features with text in a neural encoder-decoder parser that does not require handannotated prosodic structure. We demonstrate improvements in constituent parsing of conversational\n69\nspeech over a high-quality text-only parser and provide analyses showing where prosodic features help and that assessment of their utility is affected by human transcription errors."
+  }, {
+    "heading": "2 Task and Model Description",
+    "text": "Our model maps a sequence of word-level input features to a linearized parse output sequence. The word-level input feature vector consists of the concatenation of (learnable) word embeddings ei and several types of acoustic-prosodic features, described in Section 2.3."
+  }, {
+    "heading": "2.1 Task Setup",
+    "text": "We assume the availability of a training treebank of conversational speech (in our case, SwitchboardNXT (Calhoun et al., 2010)) and corresponding constituent parses. The transcriptions are preprocessed by removing punctuation and lower-casing all text to better mimic the speech recognition setting. Following Vinyals et al. (2015), the parse trees are linearized, and pre-terminals are normalized as “XX” (see Appendix A.1)."
+  }, {
+    "heading": "2.2 Encoder-Decoder Parser",
+    "text": "Our attention-based encoder-decoder model is similar to the one used by Vinyals et al. (2015). The encoder is a deep long short-term memory recurrent neural network (LSTM-RNN) (Hochreiter and Schmidhuber, 1997) that reads in a word-level inputs,1 represented as a sequence of vectors x = (x1, · · · ,xTs), and outputs high-level features h = (h1, · · · ,hTs) where hi = LSTM(xi,hi−1).2\nThe parse decoder is also a deep LSTM-RNN that predicts the linearized parse sequence y = (y1, · · · , yTo) as follows:\nP (y|x) = To∏\nt=1\nP (yt|h,y<t)\nIn attention-based models, the posterior distribution of the output yt at time step t is given by:\nP (yt|h,y<t) = softmax(W s[ct;dt] + bs),\nwhere vector bs and matrix W s are learnable parameters; ct is referred to as a context vector that summarizes the encoder’s output h; and dt is the\n1As in Vinyals et al. (2015) the input sequence is processed in reverse order, as shown in Figure 1.\n2For brevity we omit the LSTM equations. The details can be found, e.g., in Zaremba et al. (2014).\ndecoder hidden state at time step t, which captures the previous output sequence context y<t.\nuit = v > tanh(W 1hi +W 2dt + ba)\nαt = softmax(ut) ct = Ts∑\ni=1\nαtihi\nwhere vectors v, ba and matrices W 1, W 2 are learnable parameters; ut and αt are the attention score and attention weight vector, respectively, for decoder time step t.\nThe above attention mechanism is only contentbased, i.e., it is only dependent on hi, dt. It is not location-aware, i.e., it does not consider the “location” of the previous attention vector. For parsing conversational text, location awareness is beneficial since disfluent structures can have duplicate words/phrases that may “confuse” the attention mechanism.\nIn order to make the model location-aware, the attention mechanism takes into account the previous attention weight vector αt−1. In particular, we use the attention mechanism proposed by Chorowski et al. (2015), in which αt−1 is represented via a feature vector f t = F ∗αt−1, where F ∈ Rk×r represents k learnable convolution filters of width r. The filters are used for performing 1-D convolution over αt−1 to extract k features f ti for each time step i of the input sequence. The extracted features are then incorporated in the alignment score calculation as:\nuit = v > tanh(W 1hi +W 2dt +W ff ti + ba)\nwhere W f is another learnable parameter matrix. Finally, the decoder state dt is computed as dt = LSTM([ỹt−1; ct−1],dt−1), where ỹt−1 is the embedding vector corresponding to the previous output symbol yt−1. As we will see in Sec. 4.1, the location-aware attention mechanism is especially useful for handling disfluencies."
+  }, {
+    "heading": "2.3 Acoustic-Prosodic Features",
+    "text": "In previous work using encoder-decoder models for parsing (Vinyals et al., 2015; Luong et al., 2016), vector xi is simply the word embedding ei of the word at position i of the input sentence. For parsing conversational speech, we can incorporate acousticprosodic features. Here we explore four types of features widely used in computational models of prosody: pauses, duration lengthening, fundamental frequency, and energy. Since prosodic cues are\nat sub- and multi-word time scales, they are integrated with the encoder-decoder using different mechanisms.\nAll features are extracted from transcriptions that are time-aligned at the word level.3 We use time alignments associated with the corpus to be consistent with other studies. In a small number of cases, the time alignment for a particular word boundary is missing. Some cases are due to tokenization. For example, contractions, such as don’t in the original transcript, are treated as separated words for the parser (do and n’t), and the internal word boundary time is missing. In such cases, these internal times are estimated. In other cases, there are transcription mismatches that lead to missing time alignments, where we cannot estimate times. For the roughly 1% of sentences where time alignments are missing, we simply back off to the text-based parser.\nPause. The pause feature vector pi for word i is the concatenation of pre-word pause feature ppre,i and post-word pause feature ppost,i, where each subvector is a learned embedding for 6 pause categories: no pause, missing, 0 < p ≤ 0.05 s, 0.05 s < p ≤ 0.2 s, 0.2 < p ≤ 1 s, and p > 1 s (including turn boundaries). The bins are chosen based on the observed distribution (see Appendix A.1). We did not use (real-valued) pause duration directly, for two main reasons: (1) to handle missing time alignments; and (2) duration of pause does\n3The assumption of known word alignments is standard for prosodic feature extraction in many spoken language processing studies. Time alignments can be obtained as a by-product of recognition or from forced alignment.\nnot matter beyond a threshold (e.g. p > 1 s).\nWord duration. Both word duration and wordfinal duration lengthening are strong cues to prosodic phrase boundaries (Wightman et al., 1992; Pate and Goldwater, 2013). The word duration feature δi is computed as the actual word duration divided by the mean duration of the word, clipped to a maximum value of 5. The sample mean is used for frequent words (count ≥ 15). For infrequent words we estimate the mean as the sum over the sample means for the phonemes in the word’s dictionary pronunciation. We refer to the manually defined prosodic feature pair of pi and δi as φi.\nFundament frequency (f0) and Energy (E) contours (f0/E). We use a CNN to automatically learn the mapping from the time series of f0/E features to a word-level vector. The contour features are extracted from 25-ms frames with 10-ms hops using Kaldi (Povey et al., 2011). Three f0 features are used: warped Normalized Cross Correlation Function (NCCF), log-pitch with Probability of Voicing (POV)-weighted mean subtraction over a 1.5-second window, and the estimated derivative (delta) of the raw log pitch. Three energy features are extracted from the Kaldi 40-mel-frequency filter bank features: Etotal, the log of total energy normalized by dividing by the speaker side’s max total energy; Elow, the log of total energy in the lower 20 mel-frequency bands, normalized by total energy, and Ehigh, the log of total energy in the higher 20 mel-frequency bands, normalized by total energy. Multi-band energy features are used as a\nsimple mechanism to capture articulatory strengthening at prosodic constituent onsets (Fourgeron and Keating, 1997).\nFigure 1 summarizes the feature learning approach. The f0 and E features are processed at the word level: each sequence of frames corresponding to a time-aligned word (and potentially its surrounding context) is convolved with N filters of m sizes (a total of mN filters). The motivation for the multiple filter sizes is to enable the computation of features that capture information on different time scales. For each filter, we perform a 1-D convolution over the 6-dimensional f0/E features with a stride of 1. Each filter output is max-pooled, resulting in mN -dimensional speech features si. Our overall acoustic-prosodic feature vector is the concatenation of pi, δi, and si in various combinations."
+  }, {
+    "heading": "3 Experiments",
+    "text": ""
+  }, {
+    "heading": "3.1 Dataset",
+    "text": "Our core corpus is Switchboard-NXT (Calhoun et al., 2010), a subset of the Switchboard corpus (Godfrey and Holliman, 1993): 2,400 telephone conversations between strangers; 642 of these were hand-annotated with syntactic parses and further augmented with richer layers of annotation facilitated by the NITE XML toolkit (Calhoun et al., 2010). Our sentence segmentations and syntactic trees are based on the annotations from the Treebank set, with a few manual corrections from the NXT release. This core dataset consists of 100K sentences, totaling 830K tokens forming a vocabulary of 13.5K words. We use the time alignments available from NXT, which is based on a corrected word transcript that occasionally differs from the Treebank, leading to some missing time alignments. We follow the sentence boundaries defined by the parsed data available,4 and the data split (90% train; 5% dev; 5% test) defined by related work done on Switchboard (Charniak and Johnson, 2001; Kahn et al., 2005; Honnibal and Johnson, 2014)."
+  }, {
+    "heading": "3.2 Evaluation Metrics and Baselines",
+    "text": "The standard evaluation metric for constituent parsing is the parseval metric which uses bracketing precision, recall, and F1, as in the canonical implementation of EVALB.5 For written text, punc-\n4Note that these sentence units can be inconsistent with other layers of Switchboard annotations, such as slash units.\n5http://nlp.cs.nyu.edu/evalb/\ntuation is sometimes represented as part of the sequence and impacts the final score, but for speech the punctuation is not explicitly available so it does not contribute to the score. Another challenge of transcribed speech is the presence of disfluencies. Speech repairs are indicated under “EDITED” nodes in Switchboard parse trees, which include structure under these nodes that is not of interest for simple text clean-up. Therefore, some studies report flattened-edit parseval F1 scores (“flatF1”), which is parseval computed on trees where the structure under edit nodes has been eliminated so that all leaves are immediate children. We report both scores for the baseline text-only model showing that the differences are small, then use the standard parseval F1 score for most results.6\nDisfluencies are particularly problematic for statistical parsers, as explained by Charniak and Johnson (2001), and some systems incorporate a separate disfluency detection stage. For this reason, and because it is useful for understanding system performance, most studies also report disfluency detection performance, which is measured in terms of the F1 score for detecting whether a word is in an edit region. Our approach does not involve a separate disfluency detection stage, but identifies disfluencies implicitly via the parse structure. Consequently, the disfluency detection results are not competitive with work that directly optimize for disfluency detection. We report disfluency detection scores primarily as a diagnostic.\nMost previous work on integrating prosody and parsing has used the Switchboard corpus, but it is still difficult to compare results because of differences in constraints, objectives and the use of constituent vs. dependency structure, as discussed further in Section 6. The most relevant prior studies (on constituent parsing) that we compare to are a bit old. The text-only result from our neural parser represents a stronger baseline and is important for decoupling the impact of prosody vs. the parsing framework."
+  }, {
+    "heading": "3.3 Model Training and Inference",
+    "text": "Both the encoder and decoder are 3-layer deep LSTM-RNNs with 256 hidden units in each layer. For the location-aware attention, the convolution operation uses 5 filters of width 40 each. We use 512-dimensional embedding vectors to repre-\n6A variant of the “flat-F1” score is used in (Charniak and Johnson, 2001; Kahn et al., 2005), which uses a relaxed edited node precision and recall but also ignores filled pauses.\nsent words and linearized parsing symbols, such as “(S”.7\nA number of configurations are explored for the acoustic-prosodic features, tuning based on dev set parsing performance. Pause embeddings are tuned over {4, 16, 32} dimensions. For the CNN, we try different configurations of filter widths w ∈ {[10, 25, 50], [5, 10, 25, 50]} and number of filters N ∈ {16, 32, 64, 128} for each filter width.8 These filter size combinations are chosen to capture f0 and energy phenomena on various levels: w = 5, 10 for sub-word, w = 25 for word, and w = 50 for word and extended context. Our best model uses 32-dimensional pause embeddings and N = 32 filters of widthsw = [5, 10, 25, 50], which corresponds to m = 4 and 128 filters.\nFor optimization we use Adam (Kingma and Ba, 2014) with a minibatch size of 64. The initial learning rate is 0.001 which is decayed by a factor of 0.9 whenever training loss, calculated after every 500 updates, degrades relative to the worst of its previous 3 values. All models are trained for up to 50 epochs with early stopping. For regularization, dropout with 0.3 probability is applied on the output of all LSTM layers (Pham et al., 2014).\nFor inference, we use a greedy decoder to generate the linearized parse. The output token with maximum posterior probability is chosen at every time step and fed as input in the next time step. The decoder stops upon producing the end-of-sentence symbol. We use TensorFlow (Abadi et al., 2015) to implement all models.9"
+  }, {
+    "heading": "4 Results",
+    "text": ""
+  }, {
+    "heading": "4.1 Text-only Results",
+    "text": "7The number of layers, dimension of hidden units, dimension of embedding, and convolutional attention filter parameters of the text-only parser were explored in earlier experiments on the development set and then fixed as described.\n8Note that a filter of width 10 has size 6 × 10, since the features are of dimension 6.\n9Our code resources can be found in Appendix A.1.\nWe first show our results on the model using only text (i.e. xi = ei) to establish a strong baseline, on top of which we can add acousticprosodic features. We experiment with the contentonly attention model used by Vinyals et al. (2015) and the content+location attention of Chorowski et al. (2015). For comparison with previous nonneural models, we use a high-quality latent-variable parser, the Berkeley parser (Petrov et al., 2006), retrained on our Switchboard data. Table 1 compares the three text-only models. In terms of F1, the content+location attention beats the Berkeley parser by about 2.5% and content-only attention by about 4.5%. Flat-F1 scores for both encoder-decoder models is lower than their corresponding F1 scores, suggesting that the encoder-decoder models do well on predicting the internal structure of EDIT nodes while the reverse is true for the Berkeley parser.\nTo explain the gains of content+location attention over content-only attention, we compare their scores on fluent (without EDIT nodes) and disfluent sentences, shown in Table 1. It is clear that most of the gains for content+location attention are from disfluent sentences. A possible explanation is the presence of duplicate words or phrases in disfluent sentences, which can be problematic for a contentonly attention model. Since our best model is the content+location attention model, we will henceforth refer to it as the “CL-attn” text-only model. All models using acoustic-prosodic features are extensions of this model, which provides a strong text-only baseline."
+  }, {
+    "heading": "4.2 Adding Acoustic-Prosodic Features",
+    "text": "We extend our CL-attn model with the three kinds of acoustic-prosodic features: pause (p), word duration (δ), and CNN mappings of fundamental frequency (f0) and energy (E) features (f0/E-CNN).\nThe results of several model configurations on our dev set are presented in Table 2. First, we note that adding any combination of acoustic-prosodic features (individually or in sets) improves performance over the text-only baseline. However, certain combinations of acoustic-prosodic features are not always better than their subsets. The text + p + δ + f0/E-CNN model that uses all three types of features has the best performance with a gain of 0.7% over the already-strong text-only baseline. We will henceforth refer to the text + p + δ + f0/E-CNN model as our “best model”.\nAs a robustness check, we report results of averaging 10 runs on the CL-attn text-only and the best model in Table 3. We performed a bootstrap test (Efron and Tibshirani, 1993) that simulates 105 random test draws on the models giving median performance on the dev set. These median models gave a statistically significant difference between the text-only and best model (p-value < 0.02). Additionally, a simple t-test over the two sets of 10 results also shows statistical significance p-value < 0.03.\nTable 4 presents the results on the test set. Again, adding the acoustic-prosodic features improves over the text-only baseline. The gains are statistically significant for the best model with p-value < 0.02, again using a bootstrap test with simulated 105 random test draws on the two models.\nTable 5 includes results from prior studies that compare systems using text alone with ones that incorporate prosody, given hand transcripts and sentence segmentation. It is difficult to compare systems directly, because of the many differences in the experimental set-up. For example, the original Charniak and Johnson (2001) result (reporting F=85.9 for parsing and F=78.2 for disfluencies) leverages punctuation in the text stream, which is not realistic for speech transcripts and not used in most other work. Our work benefits from more text training material than others, but others benefit from gold part-of-speech tags. Kahn et al. (2005) use a modified sentence segmentation. There are probably minor differences in handling of word fragments and scoring edit regions. Thus, this table primarily shows that our framework leads to more benefits from sentence-internal prosodic cues than others have obtained."
+  }, {
+    "heading": "5 Analysis",
+    "text": "Effect of sentence length. Figure 2 shows performance differences between our best model and the text-only model for varying sentence lengths.\nBoth models do worse on longer sentences, as expected since the corresponding parse trees tend to be more complex. The performance difference between our best model and the text-only model increases with sentence length. This is likely because longer sentences more often have multiple prosodic phrases and disfluencies.\nEffect of disfluencies. Table 6 presents parse scores on the subsets of fluent and disfluent sentences, showing that the performance gain is in the disfluent set (65% of the dev set sentences). Because sentence boundaries are given, and so many fluent sentences in spontaneous speech are short, there is less potential for benefit from prosody in the fluent set.\nTypes of errors. We use the Berkeley Parser Analyzer (Kummerfeld et al., 2012) to compare the types of errors made by the different parsers.10 Table 7 presents the relative error reductions over the text-only baseline achieved by the text + p model and our best model for disfluent sentences. The two models differ in the types of error reductions they provide. Including pause information gives largest improvements on PP attachment and Modifier at-\n10This analysis omits the 1% of the sentences that did not have timing information.\ntachment errors. Adding the remaining acousticprosodic features helps to correct more types of attachment errors, especially VP and NP attachment. Figure 3 demonstrates one case where the pause feature helps in correcting a PP attachment error made by a text-only parser. Other interesting examples (see Appendix A.2) suggest that the learned f0/E features help reduce NP attachment errors where the audio reveals a prominent word at the constituent boundary, even though there is no pause at that word.\nEffect of transcription errors. The results and analyses so far have assumed that we have reliable transcripts. In fact, the original transcripts contained errors, and the Treebank annotators used these without reference to audio files. Mississippi State University (MS-State) ran a clean-up project\nthat produced more accurate word transcripts and time alignments (Deshmukh et al., 1998). The NXT corpus provides reconciliation between Treebank and MS-State transcripts in terms of annotating missed/extra/substituted words, but parses were not re-annotated. The transcript errors mean that the acoustic signal is inconsistent with the “gold” parse tree. Below are some examples of “fluent” sentences (according to the Treebank transcripts) with transcription errors, for which prosodic features “hurt” parsing. Words that transcribers missed are in brackets and those inserted are underlined. S1: and because <uh> like if your spouse died <all of a sudden you be> all alone it ’d be nice to go someplace with people similar to you to have friends S2: uh uh <i have had> my wife ’s picked up a couple of things saying uh boy if we could refinish that ’d be a beautiful piece of furniture\nMulti-syllable errors are especially problematic, leading to serious inconsistencies between the text and the acoustic signal. Further, the missed words lead to an incorrect attachment in the “gold” parse in S1 and a missing restart edit in S2. Indeed, for sentences with consecutive transcript errors, which we expect to impact the prosodic features, there is a statistically significant (p-value < 0.05) negative effect on parsing with prosody. Not included in this analysis are sentence boundary errors, which also change the “gold” parse. Thus, prosody may be more useful than results here indicate."
+  }, {
+    "heading": "6 Related Work",
+    "text": "Related work on parsing conversational speech has mainly addressed four problems: speech recognition errors, unknown sentence segmentation, disfluencies, and integrating prosodic cues. Our work addresses the last two problems, which involve studies based on hand-transcribed text and known sentence boundaries, as in much speech parsing work. The related studies are thus the focus of this discussion. We describe studies using the Switchboard corpus, since it has dominated work in this area, being the largest source of treebanked English spontaneous speech.\nOne major challenge of parsing conversational speech is the presence of disfluencies, which are grammatical and prosodic interruptions. Disfluencies include repetitions (‘I am + I am’), repairs (‘I am + we are’), and restarts (‘What I + Today is the...’), where the ‘+’ corresponds to an interruption point. Repairs often involve parallel grammatical\nconstructions, but they can be more complex, involving hedging, clarifications, etc. Charniak and Johnson (Charniak and Johnson, 2001; Johnson and Charniak, 2004) demonstrated that disfluencies are different in character than other constituents and that parsing performance improves from combining a PCFG parser with a separate module for disfluency detection via parse rescoring. Our approach does not use a separate disfluency detection module; we hypothesized that the location-sensitive attention model helps handle these differences based on analysis of the text-only results (Table 1). However, more explicit modeling of disfluency pattern match characteristics in a dependency parser (Honnibal and Johnson, 2014) leads to better disfluency detection performance (F = 84.1 vs. 76.7 for our text only model). Pattern match features also benefit a neural model for disfluency detection alone (F = 87.0) (Zayats et al., 2016), and similar gains are observed by formulating disfluency detection in a transition-based framework (F = 87.5) (Wang et al., 2017). Experiments with oracle disfluencies as features improve the CL-attn text-only parsing performance from 87.85 to 89.38 on the test set, showing that more accurate disfluency modeling is a potential area of improvement.\nIt is well known that prosodic features play a role in human resolution of syntactic ambiguities, with more than two decades of studies seeking to incorporate prosodic features in parsing. A series of studies looked at constituent parsing informed by the presence (or likelihood) of prosodic breaks at word boundaries (Kahn et al., 2004, 2005; Hale et al., 2006; Dreyer and Shafran, 2007). Our approach improves over performance of these systems using raw acoustic features, without the need for handlabeling prosodic breaks. The gain is in part due to the improved text-based parser, but the incremental benefit of prosody here is similar to that in these prior studies. (In prior work using acoustic feature directly (Gregory et al., 2004), prosody actually degraded performance.) Our analyses of the impact of prosody also extends prior work.\nProsody is also known to provide useful cues to sentence boundaries (Liu et al., 2006), and automatic sentence segmentation performance has been shown to have a significant impact on parsing performance (Kahn and Ostendorf, 2012). In our study, sentence boundaries are given so as to focus on the role of prosody in resolving sentenceinternal parse ambiguity, for which prior work had\nobtained smaller gains. Studies have also shown that parsing lattices or confusion networks can improve ASR performance (Kahn and Ostendorf, 2012; Yoshikawa et al., 2016). Our analysis of performance degradation for the system with prosody when the gold transcript and associated parse are in error suggests that prosody may have benefits for parsers operating on alternative ASR hypotheses.\nThe results we compare to in Section 4 are relatively old. More recent parsing results on spontaneous speech involve dependency parsers using only text (Rasooli and Tetreault, 2013; Honnibal and Johnson, 2014; Yoshikawa et al., 2016), with the exception of a study on unsupervised dependency parsing (Pate and Goldwater, 2013). With the recent success of transition-based neural approaches in dependency parsing, researchers have adapted transition-based ideas to constituent parsing (Zhu et al., 2013; Watanabe and Sumita, 2015; Dyer et al., 2016). These approaches have not yet been used with speech, to our knowledge, but we expect it to be straightforward to extend our prosody integration framework to these systems, both for dependency and constituency parsing."
+  }, {
+    "heading": "7 Conclusion",
+    "text": "We have presented a framework for directly integrating acoustic-prosodic features with text in a neural encoder-decoder parser that does not require hand-annotated prosodic structure. On conversational sentences, we obtained strong results when including word-level acoustic-prosodic features over using only transcriptions. The acousticprosodic features provide the largest gains when sentences are disfluent or long, and analysis of error types shows that these features are especially helpful in repairing attachment errors. In cases where prosodic features hurt performance, we observe a statistically significant negative effect caused by imperfect human transcriptions that make the “ground truth” parse tree and the acoustic signal inconsistent, which suggests that there is more to be gained from prosody than observed in prior studies. We thus plan to investigate aligning the Treebank and MS-State versions of Switchboard for future work.\nHere, we assumed known sentence boundaries and hand transcripts, leaving open the question of whether increased benefits from prosody can be gained by incorporating sentence segmentation in parsing and/or in parsing ASR lattices. Most prior work using prosody in parsing has been on con-\nstituent parsing, since prosodic cues tend to align with constituent boundaries. However, it remains an open question as to whether dependency, constituency or other parsing frameworks are better suited to leveraging prosody. Our study builds on a parser that uses reverse order text processing, since it provides a stronger text-only baseline. However, the prosody modeling component relies only on a 1 second lookahead of the current word (for pause binning), so it could be easily incorporated in an incremental parser."
+  }, {
+    "heading": "Acknowledgement",
+    "text": "We thank the anonymous reviewers for their helpful feedback. We also thank Pranava Swaroop Madhyastha, Hao Tang, Jon Cai, Hao Cheng, and Navdeep Jaitly for their help with initial discussions and code setup. This research was partially funded by a Google Faculty Research Award to Mohit Bansal, Karen Livescu, and Kevin Gimpel; and NSF grant no. IIS-1617176. The opinions expressed in this work are those of the authors and do not necessarily reflect the views of the funding agency."
+  }, {
+    "heading": "A Appendix",
+    "text": "A.1 Miscellany\nOur main model code is available at https://github.com/shtoshni92/ speech_parsing. Most of the data preprocessing code is available at https://github. com/trangham283/seq2seq_parser/ tree/master/src/data_preps. Part of our data preprocessing pipeline also uses https: //github.com/syllog1sm/swbd_tools.\nTable 8 shows statistics of our Switchboard dataset. As defined, for example, in (Charniak and Johnson, 2001; Honnibal and Johnson, 2014), the splits are: conversations sw2000 to sw3000 for training, sw4500 to sw4936 for validation (dev), and sw4000 to sw4153 for evaluation (test). In addition, previous work has reserved sw4154 to sw4500 for “future use” (dev2), but we added this set to our training set. That is, all of our models are trained on Switchboard conversations sw2000 to sw3000 as well as sw4154 to sw4500.\nFigure 4 illustrates the data preprocessing step. On the decoder end, we also use a post-processing step that merges the original sentence with the decoder output to obtain the standard constituent tree representation. During inference, in rare cases (and virtually none as our models converge), the decoder does not generate a valid parse sequence, due to the mismatch in brackets and/or the mismatch in the number of pre-terminals and terminals, i.e., num(XX) 6= num(tokens). In such cases, we simply add/remove brackets from either end of the parse, or add/remove pre-terminal symbols XX in the middle of the parse to match the number of input tokens.\nFigure 5 shows the distribution of pause durations in our training data. Our pause buckets of\n0 < p ≤ 0.05 s, 0.05 s < p ≤ 0.2 s, 0.2 < p ≤ 1 s, and p > 1 s described in the main paper were based on this distribution of pause lengths.\nTable 9 shows the comprehensive error counts in all error categories defined in the Berkeley Parse Analyzer (Kummerfeld et al., 2012) in both the fluent and disfluent subsets.\nA.2 Tree Examples In figures 6, 7, and 8, we follow node correction notations as in (Kummerfeld et al., 2012). In particular, missing nodes are marked in blue on the gold tree, extra nodes are marked red in the predicted tree, and yellow nodes denote crossing."
+  }],
+  "year": 2018,
+  "references": [{
+    "title": "TensorFlow: Large-Scale Machine Learning on Heterogeneous Systems",
+    "authors": ["Martı́n Abadi", "Ashish Agarwal", "Paul Barham", "Eugene Brevdo", "Zhifeng Chen", "Craig Citro", "Greg S. Corrado", "Xiaoqiang Zheng"],
+    "year": 2015
+  }, {
+    "title": "The NXT-format Switchboard Corpus: a rich resource for investigating the syntax, semantics, pragmatics and prosody of dialogue",
+    "authors": ["Sasha Calhoun", "Jean Carletta", "Jason M. Brenier", "Neil Mayo", "Dan Jurafsky", "Mark Steedman", "David Beaver."],
+    "venue": "Lan-",
+    "year": 2010
+  }, {
+    "title": "Edit Detection and Parsing for Transcribed Speech",
+    "authors": ["Eugene Charniak", "Mark Johnson."],
+    "venue": "Proc. NAACL.",
+    "year": 2001
+  }, {
+    "title": "Attention-Based Models for Speech Recognition",
+    "authors": ["Jan Chorowski", "Dzmitry Bahdanau", "Dmitriy Serdyuk", "KyungHyun Cho", "Yoshua Bengio."],
+    "venue": "CoRR abs/1506.07503.",
+    "year": 2015
+  }, {
+    "title": "Resegmentation of SWITCHBOARD",
+    "authors": ["Neeraj Deshmukh", "Andi Gleeson", "Joseph Picone", "Aravind Ganapathiraju", "Jonathan Hamaker."],
+    "venue": "Proc. ICSLP.",
+    "year": 1998
+  }, {
+    "title": "Exploiting prosody for PCFGs with latent annotations",
+    "authors": ["Markus Dreyer", "Izhak Shafran."],
+    "venue": "Proc. Interspeech.",
+    "year": 2007
+  }, {
+    "title": "Recurrent Neural Network Grammars",
+    "authors": ["Chris Dyer", "Adhiguna Kuncoro", "Miguel Ballesteros", "Noah A. Smith."],
+    "venue": "Proc. NAACL.",
+    "year": 2016
+  }, {
+    "title": "An Introduction to the Bootstrap",
+    "authors": ["Bradley Efron", "Robert J. Tibshirani."],
+    "venue": "Chapman & Hall/CRC.",
+    "year": 1993
+  }, {
+    "title": "Articulatory strengthening at edges of prosodic domains",
+    "authors": ["Cécile Fourgeron", "Patricia A. Keating."],
+    "venue": "Journal of the Acoustical Society of America 101(6).",
+    "year": 1997
+  }, {
+    "title": "Switchboard-1 Release 2",
+    "authors": ["John J. Godfrey", "Edward Holliman."],
+    "venue": "Linguistic Data Consortium.",
+    "year": 1993
+  }, {
+    "title": "Sentence-Internal Prosody Does not Help Parsing the Way Punctuation Does",
+    "authors": ["Michelle L Gregory", "Mark Johnson", "Eugene Charniak."],
+    "venue": "Proc. NAACL.",
+    "year": 2004
+  }, {
+    "title": "The patterns of silence: Performance structures in sentence production",
+    "authors": ["Franćois Grosjean", "Lysiane Grosjean", "Harlan Lane."],
+    "venue": "Cognitive Psychology .",
+    "year": 1979
+  }, {
+    "title": "PCFGs with Syntactic and Prosodic Indicators of Speech Repairs",
+    "authors": ["John Hale", "Izhak Shafran", "Lisa Yung", "Bonnie Dorr", "Mary Harper", "Anna Krasnyanskaya", "Matthew Lease", "Yang Liu", "Brian Roark", "Mathew Snover", "Robin Stewart."],
+    "venue": "Proc. COLING-",
+    "year": 2006
+  }, {
+    "title": "Long Short-Term Memory",
+    "authors": ["Sepp Hochreiter", "Jürgen Schmidhuber."],
+    "venue": "Neural Computation 9(8).",
+    "year": 1997
+  }, {
+    "title": "Joint Incremental Disfluency Detection and Dependency Parsing",
+    "authors": ["Matthew Honnibal", "Mark Johnson."],
+    "venue": "TACL .",
+    "year": 2014
+  }, {
+    "title": "A TAGbased Noisy Channel Model of Speech Repairs",
+    "authors": ["Mark Johnson", "Eugene Charniak."],
+    "venue": "Proc. ACL.",
+    "year": 2004
+  }, {
+    "title": "Effective Use of Prosody in Parsing Conversational Speech",
+    "authors": ["Jeremy G. Kahn", "Matthew Lease", "Eugene Charniak", "Mark Johnson", "Mari Ostendorf."],
+    "venue": "Proc. HLT/EMNLP.",
+    "year": 2005
+  }, {
+    "title": "Joint reranking of parsing and word recognition with automatic segmentation",
+    "authors": ["Jeremy G. Kahn", "Mari Ostendorf."],
+    "venue": "Computer Speech & Language .",
+    "year": 2012
+  }, {
+    "title": "Parsing Conversational Speech Using Enhanced Segmentation",
+    "authors": ["Jeremy G. Kahn", "Mari Ostendorf", "Ciprian Chelba."],
+    "venue": "Proc. NAACL.",
+    "year": 2004
+  }, {
+    "title": "Adam: A Method for Stochastic Optimization",
+    "authors": ["Diederik P. Kingma", "Jimmy Ba."],
+    "venue": "CoRR abs/1412.6980.",
+    "year": 2014
+  }, {
+    "title": "Parser Showdown at the Wall Street Corral: An Empirical Investigation of Error Types in Parser Output",
+    "authors": ["Jonathan K. Kummerfeld", "David Hall", "James R. Curran", "Dan Klein."],
+    "venue": "Proc. EMNLP.",
+    "year": 2012
+  }, {
+    "title": "Enriching Speech Recognition with Automatic Detection of Sentence Boundaries and Disfluencies",
+    "authors": ["Y. Liu", "E. Shriberg", "A. Stolcke", "D. Hillard", "M. Ostendorf", "M. Harper."],
+    "venue": "IEEE TASLP 14.",
+    "year": 2006
+  }, {
+    "title": "Multi-task Sequence to Sequence Learning",
+    "authors": ["Minh-Thang Luong", "Quoc V. Le", "Ilya Sutskever", "Oriol Vinyals", "Lukasz Kaiser."],
+    "venue": "Proc. ICLR.",
+    "year": 2016
+  }, {
+    "title": "Unsupervised Dependency Parsing with Acoustic Cues",
+    "authors": ["John Pate", "Sharon Goldwater."],
+    "venue": "TACL 1.",
+    "year": 2013
+  }, {
+    "title": "Learning Accurate, Compact, and Interpretable Tree Annotation",
+    "authors": ["Slav Petrov", "Leon Barrett", "Romain Thibaux", "Dan Klein."],
+    "venue": "Proc. COLINGACL.",
+    "year": 2006
+  }, {
+    "title": "Dropout improves Recurrent Neural Networks for Handwriting Recognition",
+    "authors": ["Vu Pham", "Théodore Bluche", "Christopher Kermorvant", "Jérôme Louradour."],
+    "venue": "Proc. ICFHR.",
+    "year": 2014
+  }, {
+    "title": "The Kaldi Speech Recognition",
+    "authors": ["Daniel Povey", "Arnab Ghoshal", "Gilles Boulianne", "Lukas Burget", "Ondrej Glembek", "Nagendra Goel", "Mirko Hannemann", "Petr Motlicek", "Yanmin Qian", "Petr Schwarz", "Jan Silovsky", "Georg Stemmer", "Karel Vesely"],
+    "year": 2011
+  }, {
+    "title": "The Use of Prosody in Syntactic Disambiguation",
+    "authors": ["Patti Price", "Mari Ostendorf", "Stefanie ShattuckHufnagel", "Cynthia Fong."],
+    "venue": "Proc. Workshop on Speech and Natural Language.",
+    "year": 1991
+  }, {
+    "title": "Joint Parsing and Disfluency Detection in Linear Time",
+    "authors": ["Mohammad Sadegh Rasooli", "Joel Tetreault."],
+    "venue": "Proc. EMNLP.",
+    "year": 2013
+  }, {
+    "title": "Preliminaries to a theory of speech disfluencies",
+    "authors": ["Elizabeth Shriberg."],
+    "venue": "Ph.D. thesis, Department of Psychology, University of California, Berkeley, CA.",
+    "year": 1994
+  }, {
+    "title": "Grammar as a Foreign Language",
+    "authors": ["Oriol Vinyals", "Lukasz Kaiser", "Terry Koo", "Slav Petrov", "Ilya Sutskever", "Geoffrey Hinton."],
+    "venue": "Proc. NIPS.",
+    "year": 2015
+  }, {
+    "title": "Transition-based Disfluency Detection using LSTMs",
+    "authors": ["Shaolei Wang", "Wanxiang Che", "Yue Zhang", "Meishan Zhang", "Ting Liu."],
+    "venue": "Proc. EMNLP.",
+    "year": 2017
+  }, {
+    "title": "Transitionbased Neural Constituent Parsing",
+    "authors": ["Taro Watanabe", "Eiichiro Sumita."],
+    "venue": "Proc. ACL.",
+    "year": 2015
+  }, {
+    "title": "Segmental durations in the vicinity of prosodic phrase boundaries",
+    "authors": ["Colin W. Wightman", "Stefanie Shattuck-Hufnagel", "Mari Ostendorf", "Patti J. Price."],
+    "venue": "Journal of the Acoustical Society of America 91(3).",
+    "year": 1992
+  }, {
+    "title": "Joint Transition-based Dependency Parsing and Disfluency Detection for Automatic Speech Recognition Texts",
+    "authors": ["Masashi Yoshikawa", "Hiroyuki Shindo", "Yuji Matsumoto."],
+    "venue": "Proc. EMNLP.",
+    "year": 2016
+  }, {
+    "title": "Recurrent Neural Network Regularization",
+    "authors": ["Wojciech Zaremba", "Ilya Sutskever", "Oriol Vinyals."],
+    "venue": "CoRR abs/1409.2329.",
+    "year": 2014
+  }],
+  "id": "SP:e2644430c396228ecc6a6a8017625dd3d0b6aba6",
+  "authors": [{
+    "name": "Trang Tran",
+    "affiliations": []
+  }, {
+    "name": "Shubham Toshniwal",
+    "affiliations": []
+  }, {
+    "name": "Mohit Bansal",
+    "affiliations": []
+  }, {
+    "name": "Kevin Gimpel",
+    "affiliations": []
+  }, {
+    "name": "Karen Livescu",
+    "affiliations": []
+  }, {
+    "name": "Mari Ostendorf",
+    "affiliations": []
+  }],
+  "abstractText": "In conversational speech, the acoustic signal provides cues that help listeners disambiguate difficult parses. For automatically parsing spoken utterances, we introduce a model that integrates transcribed text and acoustic-prosodic features using a convolutional neural network over energy and pitch trajectories coupled with an attention-based recurrent neural network that accepts text and prosodic features. We find that different types of acoustic-prosodic features are individually helpful, and together give statistically significant improvements in parse and disfluency detection F1 scores over a strong text-only baseline. For this study with known sentence boundaries, error analyses show that the main benefit of acousticprosodic features is in sentences with disfluencies, attachment decisions are most improved, and transcription errors obscure gains from prosody.",
+  "title": "Parsing Speech: A Neural Approach to Integrating Lexical and Acoustic-Prosodic Information"
+}

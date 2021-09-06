@@ -1,0 +1,107 @@
+{
+  "sections": [{
+    "text": "ar X\niv :2\n00 2.\n12 79\n8v 1\n[ cs\n.P F]\n2 7\nFe b\n20 20\nDeep learning (DL) workloads are moving towards accelerators for faster processing and lower cost. ModernDL accelerators are good at handling the large-scalemultiply-accumulate operations that dominate DL workloads; however, it is challenging to make full use of the compute power of an accelerator since the data must be properly staged in a softwaremanaged scratchpad memory. Failing to do so can result in significant performance loss. This paper proposes a systematic approach which leverages the polyhedral model to analyze all operators of a DL model together to minimize the number of memory accesses. Experiments show that our approach can substantially reduce the impact of memory accesses required by common neural-network models on a homegrown AWS machine-learning inference chip named Inferentia, which is available through Amazon EC2 Inf1 instances.\nKEYWORDS\nCompiler, Deep Learning Accelerator"
+  }, {
+    "heading": "1 INTRODUCTION",
+    "text": "As deep learning (DL) models grow in sophistication and computational load, the traditional approach of executing DL workloads, i.e., neural networks, on CPUs and GPUs is becoming more time consuming and expensive. There is a trend to move DL workloads to custom accelerators [2, 6]. By designing domain-specific architectures, these processors are able to accelerate DL workloads and reduce energy requirements by orders of magnitude.\nA typical DL model can be represented as a graph, where nodes are operators and directed edges denote the dependences between nodes. Modern accelerators mostly focus on compute-bound operators such as convolution (CONV) and general matrix multiplication (GEMM) via specially designed compute units like systolic arrays. These units are able to process multiply-accumulate operations in a highly efficientmanner. On the other hand, the accelerators depend on complex software-managed scratchpads. End-to-end performance will be limited if memory references of a neural network are not well organized. Current solutions, e.g., the XLA compiler forGoogle’s TPU [11], handlememory-access\noptimization within an operator, but ignore opportunities to reduce the number of memory accesses across multiple operators. There is some global optimization work for DL models [5, 7], but no one seems to have attacked global optimization of memory-access patterns for DL accelerators.\nWe propose a systematic way to optimize the memoryaccess patterns of DL models for efficient execution on DL accelerators. Specifically, our approach takes a DL model as input, does a number of global optimizations to remove unnecessary memory copies and intelligently schedule necessary memory accesses on the accelerators to maximize the memory-bandwidth usage. Experiments show that we are able to significantly reduce the impact of memory references running on a homegrown AWS machine-learning inference chip named Inferentia. The chip is available to public through Amazon EC2 Inf1 instances 1."
+  }, {
+    "heading": "2 OPTIMIZATIONMETHOD",
+    "text": "Ourwork is part of the compiler toolchain for Inferentia. The toolchain reads in the computation graph of a DL model, defines the operators via TVM [1] to build an intermediate representation (IR) that represents the whole neural network, applies analyses and optimizations to the IR, and eventually produces a low-level IR for machine-code generation.\nThis paper focuses on a small portion of the compiler: optimizing the memory-access patterns. A DL workload manipulates high dimensional tensors with loop nests. Without loss of generality, we define the tensor accesses with element-wise load and store instructions inside a loop nest based on the polyhedral model [10]:\nvl = tm[ ®f (®i)] (load) tm[ ®f (®i))] = vs (store)\nIn these definitions, ®i = i0, i1, ..., in−1 represents a loop nest with n loops, where i j is the loop at level j , tm represents the m-dimensional tensor which is being read/written by the load/store instructions, and ®f (®i) = C®i + ®b. Since the matrix C and the vector b are compile-time constants, C®i + ®b is an affine expression. Finally, vl in (load) represents the result of the load instruction and vs in (store) represents the data being written to tm[ ®f (®i))] in the store instruction.\n1https://aws.amazon.com/ec2/instance-types/inf1/\nOur approach tries to eliminate unnecessary data movements in the workload (Section 2.1), and for the remainder, maximizing the utilization of the on-chip memory by maintaining data locality in the scratchpad (Section 2.2). Our approachwas designed forDL accelerators equippedwith powerful compute units and limited on-chip memory."
+  }, {
+    "heading": "2.1 Data-Movement Elimination",
+    "text": "Data-movement elimination tries to eliminate the pair of instructions (v = tl [ ®fl (®i)], ts [ ®fs (®i))] = v), where the result of the load instruction, v , directly feeds the input of the store instruction. Such patterns are found in DL workloads by analyzing the loop nests of pairs of memory-bound operators like repeat, tile, split, transpose, strided_slice, etc. Existing solutions cannot thoroughly eliminate them without optimizing globally.\nTo eliminate such pairs, we first generate the reverse of ®fs as ®f ′ s : ®idxts 7→ ®i . Using ®f ′s , we build a function:\n®дl s = ®fl ◦ ®f ′ s = ®fl ( ®f ′ s ( ®idxts )) : ®idxts 7→ ®idxtl (1)\nto map the index space of tensor ts to the index space of tensor tl . Using ®дl s , we rewrite the accesses that read ts so they directly read tl which in turn allows us to eliminate the stores that defined ts . Specifically, for each load instruction that reads ts , v ′ = ts [ ®f\n′ l (®i ′)], we build a function:\n®д′ = ®дl s ◦ ®f ′ l = ®дl s ( ®f ′ l (®i ′)) = ®fl ( ®f ′ s ( ®f ′ l (®i ′))) : ®i ′ 7→ ®idxtl (2)\nto map the loop indices ®i ′ to the index space of tl and rewrite the load instruction v ′ = tl [ ®д′(®i ′)]. Once we apply such transformations to all load instructions that read tensor ts , ts can be eliminated along with all instructions defining it.\nWe repeat this process until we cannot eliminate anymore load/store pairs. The affine function reverse and composition are implemented using the Integer Set Library [9]."
+  }, {
+    "heading": "2.2 Global Memory-Bank Mapping",
+    "text": "Not all data movement in a DL workload can be removed. For compulsory references, we try to fully exploit the available memory bandwidth. In order to maximize the internal memory bandwidth, accelerators typically organize on-chip memories into multiple banks with disjoint address spaces, each of which connects to one portion of the compute units (e.g., a specific row of the systolic array). Data movement between different banks is very slow through themainmemory; therefore, tensor data needs to be carefully spread across the banks for computation. For example, in a Conv2D operator, data from different channels of the feature map and weights must be mapped to different memory banks so that the internal compute units can read and process the data in parallel. At the same time, the result of the Conv2D needs\nto be spread across several banks, guided by the different output channels.\nIn prior work [3], bank mapping focused on a single loop nest with a goal of maximizing the memory-access parallelism for that nest. We call this local bank mapping.\nOur goal is to minimize inter-bank data movement betweenmultiple operators (represented bymultiple loop nests in our compiler). To achieve this goal, we first derive bank mappings for the operators with bank-mapping restrictions, e.g., conv2D, matmul, pooling, etc., then propagate thesemappings across the network based on the data dependencies between operators. We perform a fixed-point iteration to propagate the mappings to cover all operators in the neural network and make sure that the output of an operator maps to the memory banks required by the next operator. If a tensor t has conflicting mapping requirements during the propagation, i.e., the data layout changes between consecutive operators in the network, we will introduce a tensor t ′ and a memcopy between t and t ′ to represent data movement between memory banks. Typically, for a high-dimensional tensor, we map its outer dimensions to different banks and use its inner dimensions to address different elements in the same bank to support sequential data access."
+  }, {
+    "heading": "3 EVALUATION",
+    "text": "We conducted our experiments on a homegrown AWS chip called Inferentia, specifically, AmazonEC2 Inf1.xlarge instance. For the sake of space, we present results of a single model for each algorithm.\nWe tested the effectiveness of data-movement elimination on Parallel WaveNet [8]. Our optimization was able to eliminate 123 out of 124 load-store pairs. As a result, we eliminated 145 MB (out of 146 MB) of tensors that were used for intermediate storage. We saved 10% of the on-chip memory copies and 11% of the off-chip memory copies (measured in bytes).\nWe tested the effectiveness of global memory-bank mapping by running our compiler on ResNet-50 [4], comparing two different mapping algorithms:\nLocal mapping which generatesmappingswithin each\noperator, without propagation, but keeps the output of an operator in on-chip memory if it will be directly used as the input of the next operator.\nGlobal mapping as described in Section 2.2.\nTaking results from local mapping as a baseline, we saw globalmapping eliminate 76% of the on-chip data copies and 37% of the copies off chip (measured in bytes)."
+  }, {
+    "heading": "4 CONCLUSION",
+    "text": "To conclude, this paper proposes a systematic approach to globally optimize the memory-access patterns of DL workloads on accelerators. Experimental results show that we are able to significantly reduce memory references for state-ofthe-art networks on Inferentia, a homegrownAWSmachinelearning inference chip."
+  }],
+  "year": 2020,
+  "references": [{
+    "title": "TVM: An Automated End-to-End Optimizing Compiler for Deep Learning",
+    "authors": ["Tianqi Chen", "Thierry Moreau", "Ziheng Jiang", "Lianmin Zheng", "Eddie Yan", "Haichen Shen", "Meghan Cowan", "Leyuan Wang", "Yuwei Hu", "Luis Ceze"],
+    "venue": "In USENIX Symposium on Operating Systems Design and Implementation,",
+    "year": 2018
+  }, {
+    "title": "DianNao Family: Energy-Efficient Hardware Accelerators for Machine Learning",
+    "authors": ["Yunji Chen", "Tianshi Chen", "Zhiwei Xu", "Ninghui Sun", "Olivier Temam"],
+    "venue": "Commun. ACM 59,",
+    "year": 2016
+  }, {
+    "title": "Compiler Support for Optimizing Memory Bank-Level Parallelism",
+    "authors": ["Wei Ding", "Diana Guttman", "Mahmut Kandemir"],
+    "venue": "In IEEE/ACM International Symposium onMicroarchitecture,",
+    "year": 2014
+  }, {
+    "title": "Deep Residual Learning for Image Recognition",
+    "authors": ["Kaiming He", "Xiangyu Zhang", "Shaoqing Ren", "Jian Sun"],
+    "venue": "In Proceedings of the IEEE  Conference on Computer Vision and Pattern Recognition",
+    "year": 2016
+  }, {
+    "title": "Optimizing DNN Computation with Relaxed Graph Substitutions",
+    "authors": ["Zhihao Jia", "James Thomas", "Todd Warszawski", "Mingyu Gao", "Matei Zaharia", "Alex Aiken"],
+    "venue": "In Proceedings of the Conference on Systems and Machine Learning,",
+    "year": 2019
+  }, {
+    "title": "A Domain-Specific Architecture for Deep Neural Networks",
+    "authors": ["Norman P. Jouppi", "Cliff Young", "Nishant Patil", "David Patterson"],
+    "venue": "Commun. ACM 61,",
+    "year": 2018
+  }, {
+    "title": "Optimizing CNN Model Inference on CPUs",
+    "authors": ["Yizhi Liu", "Yao Wang", "Ruofei Yu", "Mu Li", "Vin Sharma", "Yida Wang"],
+    "venue": "In USENIX Annual Technical Conference,",
+    "year": 2019
+  }, {
+    "title": "Parallel Wavenet: Fast High-Fidelity Speech Synthesis",
+    "authors": ["Aaron van den Oord", "Yazhe Li", "Igor Babuschkin", "Karen Simonyan", "Oriol Vinyals", "Koray Kavukcuoglu", "George van den Driessche", "Edward Lockhart", "Luis C Cobo", "Florian Stimberg"],
+    "year": 2017
+  }, {
+    "title": "isl: An Integer Set Library for the Polyhedral Model",
+    "authors": ["Sven Verdoolaege"],
+    "venue": "In International Congress on Mathematical Software",
+    "year": 2010
+  }, {
+    "title": "Presburger Formulas and Polyhedral Compilation",
+    "authors": ["Sven Verdoolaege"],
+    "year": 2016
+  }],
+  "id": "SP:a908b2f369d96d0da1db33b6c952eb74f0eda6d7",
+  "authors": [{
+    "name": "Hongbin Zheng",
+    "affiliations": []
+  }, {
+    "name": "Sejong Oh",
+    "affiliations": []
+  }, {
+    "name": "Huiqing Wang",
+    "affiliations": []
+  }, {
+    "name": "Preston Briggs",
+    "affiliations": []
+  }, {
+    "name": "Jiading Gai",
+    "affiliations": []
+  }, {
+    "name": "Animesh Jain",
+    "affiliations": []
+  }, {
+    "name": "Yizhi Liu",
+    "affiliations": []
+  }, {
+    "name": "Rich Heaton",
+    "affiliations": []
+  }, {
+    "name": "Randy Huang",
+    "affiliations": []
+  }, {
+    "name": "Yida Wang",
+    "affiliations": []
+  }],
+  "abstractText": "Deep learning (DL) workloads are moving towards accelerators for faster processing and lower cost. ModernDL accelerators are good at handling the large-scalemultiply-accumulate operations that dominate DL workloads; however, it is challenging to make full use of the compute power of an accelerator since the data must be properly staged in a softwaremanaged scratchpad memory. Failing to do so can result in significant performance loss. This paper proposes a systematic approach which leverages the polyhedral model to analyze all operators of a DL model together to minimize the number of memory accesses. Experiments show that our approach can substantially reduce the impact of memory accesses required by common neural-network models on a homegrown AWS machine-learning inference chip named Inferentia, which is available through Amazon EC2 Inf1 instances.",
+  "title": "Optimizing Memory-Access Pa erns for Deep Learning Accelerators"
+}
