@@ -163,5 +163,5 @@ with open("./talksumm_papers_titles_url.txt", "r") as input_txt:
       logging.error(f'Failed to retrieve PDF: {e}')
 
 logging.info('Finished processing paper titles')
-logging.info(f'Failed to retrieve {len(failed_titles)} PDFs')
-logging.info(f'Failed titles and urls: {failed_titles}')
+logging.warning(f'Failed to retrieve {len(failed_titles)} PDFs')
+logging.warning(f'Failed titles and urls: {failed_titles}')
