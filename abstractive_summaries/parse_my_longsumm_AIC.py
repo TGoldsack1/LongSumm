@@ -9,7 +9,7 @@ from nltk.tokenize import sent_tokenize
 
 mode = "test"
 
-longsumm_file = open(f"./my_longsumm_{mode}_abs_full.json")
+longsumm_file = open(f"./my_longsumm_{mode}_abs_full_science_parse.json")
 longsumm_dict = json.load(longsumm_file)
 longsumm_file.close()
 

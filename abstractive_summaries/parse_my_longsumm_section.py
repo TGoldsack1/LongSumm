@@ -10,7 +10,7 @@ from rouge_score import rouge_scorer
 
 mode = "train"
 
-longsumm_file = open(f"./my_longsumm_{mode}_abs_full.json")
+longsumm_file = open(f"./my_longsumm_{mode}_abs_full_science_parse.json")
 longsumm_dict = json.load(longsumm_file)
 longsumm_file.close()
 
@@ -83,6 +83,7 @@ for (paper_id, paper_dict) in longsumm_dict.items():
       if 'text' in section.keys():
         section_data = {}
         article_lines = sent_tokenize(section["text"])
+        article_lines = [line.encode("ascii", "ignore").decode() for line in article_lines]
 
         if len(article_lines) > 0:
           section_data["summary_lines"] = summary_sents

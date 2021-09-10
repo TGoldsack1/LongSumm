@@ -67,7 +67,7 @@ with open("missing_data_instances.json", "w") as output_file: # none of these ha
   output_file.write(json.dumps(not_full, indent=4, sort_keys=False))
 
 
-# with open("all_longsumm_abs_full.json", "w") as output_file:
+# with open("all_longsumm_abs_full_science_parse.json", "w") as output_file:
 #   output_file.write(json.dumps(my_train, indent=4, sort_keys=False))
 
 random.seed(0)
@@ -82,8 +82,8 @@ my_train = { k : v for k, v in papers_dict_full.items() if k not in my_test_dict
 print("My training set length: ", len(my_train.keys()))
 print("My test set length: ", len(my_test.keys()))
 
-# with open("my_longsumm_train_abs.json", "w") as output_file:
+# with open("my_longsumm_train_abs_full_science_parse.json", "w") as output_file:
 #   output_file.write(json.dumps(my_train, indent=4, sort_keys=False))
 
-# with open("my_longsumm_test_abs.json", "w") as output_file:
+# with open("my_longsumm_test_abs_full_science_parse.json", "w") as output_file:
 #   output_file.write(json.dumps(my_test, indent=4, sort_keys=False))
