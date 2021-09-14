@@ -79,5 +79,5 @@ if __name__ == "__main__":
     # execute only if run as a script
     # 1st arg: ground truth test file, 2nd arg: predicted test file summaries
     evaluate('./annotations/my_test_ground_truth.json', \
-             './annotations/my_longsumm_test_abs_SEC_news_pretrained_BART_ft_output.jsonl', \
+             './annotations/my_longsumm_test_abs_doc_alt_arxiv_pretrained_BigBird_output.jsonl', \
              "test")

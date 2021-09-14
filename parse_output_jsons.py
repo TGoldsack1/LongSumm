@@ -22,9 +22,11 @@ input_json_dir = "./predicted_summaries/"
 
 # input_json_file = "my_longsumm_test_abs_AIC_news_pretrained_BART_output.jsonl"
 # input_json_file = "my_longsumm_test_abs_AIC_news_pretrained_BART_ft_output.jsonl"
-# input_json_file = "my_longsumm_test_abs_doc_arxiv_pretrained_BigBird_output.jsonl"
+input_json_file = "my_longsumm_test_abs_doc_alt_arxiv_pretrained_BigBird_output.jsonl"
+# input_json_file = "my_longsumm_test_abs_AIC_alt_arxiv_pretrained_BigBird_output.jsonl"
+
 # input_json_file = "my_longsumm_test_abs_AIC_arxiv_pretrained_BigBird_output.jsonl"
-input_json_file = "my_longsumm_test_abs_SEC_news_pretrained_BART_ft_output.jsonl"
+# input_json_file = "my_longsumm_test_abs_SEC_news_pretrained_BART_ft_output.jsonl"
 
 
 input_json_filepath = input_json_dir + input_json_file

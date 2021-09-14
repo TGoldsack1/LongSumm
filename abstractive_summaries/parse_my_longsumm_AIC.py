@@ -7,7 +7,7 @@ Author: Tomas Goldsack
 import os, json, re
 from nltk.tokenize import sent_tokenize
 
-mode = "test"
+mode = "train" # train/test
 
 is_alt_format = True # arXiv dataset format
 
@@ -27,7 +27,6 @@ is_alt_format = True # arXiv dataset format
 longsumm_file = open(f"./my_longsumm_{mode}_abs_full_science_parse.json")
 longsumm_dict = json.load(longsumm_file)
 longsumm_file.close()
-
 
 output_fname = f"./my_longsumm_{mode}_abs_AIC.jsonl" if not is_alt_format else \
   f"./my_longsumm_{mode}_abs_AIC_alt.jsonl"
@@ -81,7 +80,7 @@ for paper_id, paper_dict in longsumm_dict.items():
           print(f'MUTLIPLE INTRO MATCHES: {input_dict["id"]}')
       else: 
         intro = input_dict['sections'][0]['text']
-        intro_sec_name = input_dict['sections'][0]['headimg'] if 'heading' in input_dict['sections'][0].keys() else ""
+        intro_sec_name = input_dict['sections'][0]['heading'] if 'heading' in input_dict['sections'][0].keys() else ""
 
 
       intro_add = (intro.replace("\n", " ") + "\n") if is_alt_format else sent_tokenize(intro) 
