@@ -22,11 +22,16 @@ input_json_dir = "./predicted_summaries/"
 
 # input_json_file = "my_longsumm_test_abs_AIC_news_pretrained_BART_output.jsonl"
 # input_json_file = "my_longsumm_test_abs_AIC_news_pretrained_BART_ft_output.jsonl"
-input_json_file = "my_longsumm_test_abs_doc_alt_arxiv_pretrained_BigBird_output.jsonl"
+# input_json_file = "my_longsumm_test_abs_doc_alt_arxiv_pretrained_BigBird_output.jsonl"
 # input_json_file = "my_longsumm_test_abs_AIC_alt_arxiv_pretrained_BigBird_output.jsonl"
-
 # input_json_file = "my_longsumm_test_abs_AIC_arxiv_pretrained_BigBird_output.jsonl"
 # input_json_file = "my_longsumm_test_abs_SEC_news_pretrained_BART_ft_output.jsonl"
+
+# input_json_file = "simplified_my_longsumm_test_abs_AIC_alt_arxiv_pretrained_BigBird_output.jsonl"
+# input_json_file = "simplified_my_longsumm_test_abs_AIC_news_pretrained_BART_ft_output.jsonl"
+# input_json_file = "simplified_my_longsumm_test_abs_AIC_news_pretrained_BART_output.jsonl"
+# input_json_file = "simplified_my_longsumm_test_abs_doc_alt_arxiv_pretrained_BigBird_output.jsonl"
+input_json_file = "simplified_my_longsumm_test_abs_SEC_news_pretrained_BART_ft_output.jsonl"
 
 
 input_json_filepath = input_json_dir + input_json_file
@@ -52,7 +57,7 @@ for i, line in enumerate(input_json_lines):
   input_dict = json.loads(line) # { "ground_truth": str, "prediction": str, "simplified_prediction": str }
   
   output_dict_ground_truth[i] = input_dict["ground_truth"]
-  # output_dict_simple_pred[i] = input_dict["simplified_prediction"]
+  output_dict_simple_pred[i] = input_dict["simplified_prediction"]
   output_dict_pred[i] = input_dict["prediction"]
 
 # output ground truth 
@@ -64,8 +69,8 @@ with open(annotations_dir + "/" + input_json_file.replace("simplified_", ""), "w
   gt_out.write(json.dumps(output_dict_pred, indent=4, sort_keys=False))
 
 # output predicted simplified summary
-# with open(annotations_dir + "/" + input_json_file, "w") as gt_out:
-#   gt_out.write(json.dumps(output_dict_simple_pred, indent=4, sort_keys=False))
+with open(annotations_dir + "/" + input_json_file, "w") as gt_out:
+  gt_out.write(json.dumps(output_dict_simple_pred, indent=4, sort_keys=False))
 
 
 # test_annotations_testsplit.json
